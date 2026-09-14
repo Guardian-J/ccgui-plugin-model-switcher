@@ -1,0 +1,37 @@
+# Dependencies and package-manager caches
+node_modules/
+.pnpm-store/
+
+# Generated plugin bundles
+/dist/
+/main.js
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.local
+
+# Logs, caches, and test output
+*.log
+*.tsbuildinfo
+.vite/
+.cache/
+coverage/
+playwright-report/
+test-results/
+/preview
+
+# Local editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+
+# Local code index and editor sessions
+.codegraph/
+.claude/

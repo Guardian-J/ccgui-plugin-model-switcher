@@ -1,0 +1,36 @@
+{
+  "name": "ccgui-plugin-model-switcher",
+  "version": "1.0.0",
+  "description": "针对 cc-gui（https://github.com/zhukunpenglinyutong/desktop-cc-gui）的扩展插件：模型与 CLI 选择、独立渠道管理、全局主题、文件模糊搜索和链接跳转",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "preview:ui": "vite --host 127.0.0.1",
+    "check:compatibility": "node scripts/check-compatibility.mjs && node scripts/check-scrub.cjs"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.3",
+    "vite": "^6.2.0"
+  },
+  "peerDependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "fuzzysort": "^4.0.2",
+    "linkify-it": "^6.1.0"
+  }
+}

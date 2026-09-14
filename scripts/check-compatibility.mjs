@@ -1,0 +1,705 @@
+import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
+import { build } from "vite";
+import { runInNewContext } from "node:vm";
+
+async function loadModule(path) {
+  const result = await build({
+    configFile: false,
+    logLevel: "silent",
+    build: {
+      write: false,
+      target: "es2022",
+      lib: { entry: fileURLToPath(new URL(path, import.meta.url)), formats: ["es"] },
+    },
+  });
+  const { code } = result[0].output[0];
+  return import(
+    `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
+  );
+}
+
+const bridge = await loadModule("../src/system-bridge.ts");
+const scrub = await loadModule("../src/prompt-scrubber.ts");
+const policy = await loadModule("../src/selection-policy.ts");
+const links = await loadModule("../src/chat-links.ts");
+const { browserCommand } = (await import('./open-browser.cjs')).default;
+for (const invalid of ['javascript:alert(1)', 'file:///tmp/a', '//example.com', 'https://user:pass@example.com', 'http://']) {
+  assert.equal(links.httpUrl(invalid), null);
+}
+const url = 'http://localhost:5173/path?q=%22&x=1#section';
+assert.equal(links.httpUrl(url), url);
+assert.equal(browserCommand(url, 'win32').env.CCGUI_BROWSER_URL, url);
+assert.ok(!browserCommand(url, 'win32').args.join(' ').includes(url));
+assert.deepEqual(browserCommand(url, 'darwin'), { bin: 'open', args: [url] });
+assert.deepEqual(browserCommand(url, 'linux'), { bin: 'xdg-open', args: [url] });
+assert.throws(() => browserCommand('file:///tmp/a', 'linux'));
+const linkTree = { type: 'root', children: [
+  { type: 'text', value: `地址：${url}。` },
+  { type: 'inlineCode', value: 'https://example.com/docs' },
+  { type: 'link', url: 'https://example.com', children: [{ type: 'text', value: 'https://example.com' }] },
+  { type: 'code', value: 'curl https://example.com' },
+] };
+links.remarkHttpLinks()(linkTree);
+assert.equal(linkTree.children.filter(node => node.type === 'link').length, 3);
+assert.equal(linkTree.children.find(node => node.type === 'link').url, url);
+const once = JSON.stringify(linkTree);
+links.remarkHttpLinks()(linkTree);
+assert.equal(JSON.stringify(linkTree), once, 'streaming reparse must not nest links');
+let browserArgs;
+await links.openBrowser({ host: { isWeb: false }, bridge: { invoke: async (command, args) => { browserArgs = { command, args }; return { code: 0 }; } } }, url);
+assert.equal(browserArgs.command, 'plugin_exec_run');
+assert.equal(browserArgs.args.args[3], url);
+for (const platform of ['win32', 'darwin', 'linux']) {
+  let launched;
+  runInNewContext(browserArgs.args.args[1], {
+    module: { id: '[eval]', exports: {} },
+    require: () => ({ execFileSync: (...args) => { launched = args; } }),
+    process: { platform, argv: ['node', url], env: {}, stderr: { write: message => assert.fail(message) } },
+    URL,
+  });
+  assert.equal(launched[0], browserCommand(url, platform).bin, 'embedded Node entry invokes platform opener');
+  assert.equal(launched[2].windowsHide, true);
+}
+await assert.rejects(() => links.openBrowser({ bridge: { invoke: async () => ({ code: 1 }) } }, url));
+console.log('Chat HTTP links, URL validation and Windows/macOS/Linux browser arguments passed.');
+const calls = [];
+let current = null;
+globalThis.window = {
+  dispatchEvent() {},
+  __TAURI_INTERNALS__: {
+    async invoke(command, args) {
+      calls.push({ command, args });
+      if (command === "get_app_settings") return {};
+      if (command === "get_cli_config")
+        return {
+          claude: {
+            current,
+            providers: {
+              relay: {
+                name: "Relay",
+                baseUrl: "https://example.com",
+                model: "relay-model",
+              },
+            },
+          },
+        };
+      if (command === "provider_file_paths")
+        return ["C:/preview/.claude/settings.json"];
+      if (["set_current_provider", "upsert_provider", "delete_provider"].includes(command))
+        return {};
+      if (command === "list_engine_models")
+        return {
+          models: [{ id: `${args.engine}-model` }],
+          authoritative: true,
+        };
+      if (command === "fetch_provider_models")
+        return {
+          models: [`api:${args.baseUrl}`],
+          data: [],
+        };
+      if (command === "list_engines")
+        return [
+          { id: "claude", available: true, enabled: true },
+          { id: "codex", available: false, enabled: true },
+          { id: "kimi", available: true, enabled: false },
+          { id: "grok", available: true, enabled: true },
+        ];
+      if (command === "official_config_read") {
+        if (args.engine === "claude")
+          return [{
+            path: "C:/preview/.claude/settings.json",
+            format: "json",
+            exists: true,
+            content: JSON.stringify({
+              env: {
+                ANTHROPIC_BASE_URL: "https://api.anthropic.com",
+                ANTHROPIC_AUTH_TOKEN: "sk-native",
+                ANTHROPIC_MODEL: "claude-sonnet",
+              },
+            }),
+          }];
+        if (args.engine === "codex")
+          return [
+            {
+              path: "C:/preview/.codex/config.toml",
+              format: "toml",
+              exists: true,
+              content: 'model = "gpt-5"\n[model_providers.ccgui]\nbase_url = "https://api.openai.com/v1"\n',
+            },
+            {
+              path: "C:/preview/.codex/auth.json",
+              format: "json",
+              exists: true,
+              content: JSON.stringify({ OPENAI_API_KEY: "sk-codex" }),
+            },
+          ];
+        if (args.engine === "kimi")
+          return [{
+            path: "C:/preview/.kimi-code/config.toml",
+            format: "toml",
+            exists: true,
+            content: 'default_model = "kimi-k2"\n[providers.ccgui]\nbase_url = "https://api.moonshot.cn/v1"\napi_key = "sk-kimi"\n',
+          }];
+        if (args.engine === "grok")
+          return [{
+            path: "C:/preview/.grok/config.toml",
+            format: "toml",
+            exists: true,
+            content: '[endpoints]\nmodels_base_url = "https://api.x.ai"\n[model.grok-4]\napi_key = "sk-grok"\n[models]\ndefault = "grok-4"\n',
+          }];
+        return [];
+      }
+      if (command === "pi_family_models_config_read") {
+        if (args.engine === "omp") {
+          return {
+            file: { format: "yaml", path: "C:/preview/.omp/agent/models.yml", exists: true },
+            text: 'providers:\n  custom-omp:\n    baseUrl: "https://omp-relay.example.com"\n    apiKey: "sk-omp"\n    models:\n      - id: "omp-model-1"\n        name: "OMP Model 1"\n',
+          };
+        }
+        if (args.engine === "pi") {
+          return {
+            file: { format: "json", path: "C:/preview/.pi/agent/models.json", exists: true },
+            text: '{\n  "providers": {\n    "custom-pi": {\n      "baseUrl": "https://pi-relay.example.com",\n      "apiKey": "sk-pi",\n      "models": [{ "id": "pi-model-1", "name": "PI Model 1" }]\n    }\n  }\n}',
+          };
+        }
+        return { file: { format: "yaml", path: "", exists: false }, text: "" };
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    },
+  },
+};
+
+for (const value of [
+  null,
+  "",
+  "__local_settings_json__",
+  "__local_config_toml__",
+]) {
+  current = value;
+  const result = await bridge.getSystemProviderChannels("claude");
+  assert.equal(result.current, bridge.NATIVE_PROVIDER_ID);
+  assert.equal(result.channels[0].isNative, true);
+  assert.equal(result.channels.filter((item) => item.isCurrent).length, 1);
+}
+current = "relay";
+assert.equal(
+  (await bridge.getSystemProviderChannels("claude")).current,
+  "relay",
+);
+current = "__disabled__";
+assert.equal(
+  (await bridge.getSystemProviderChannels("claude")).channels.some(
+    (item) => item.isCurrent,
+  ),
+  false,
+);
+for (const engine of ["codex", "kimi", "grok"]) {
+  const result = await bridge.getSystemProviderChannels(engine);
+  assert.equal(
+    result.channels[0].isNative,
+    true,
+    `${engine} must expose native configuration even without saved providers`,
+  );
+}
+const ompChannels = (await bridge.getSystemProviderChannels("omp")).channels;
+assert.ok(ompChannels.some((c) => c.id === "custom-omp" && c.baseUrl === "https://omp-relay.example.com"), "omp must load custom-omp provider channel from models.yml");
+assert.equal(ompChannels.some((c) => c.isNative), false, "omp with custom providers must not add redundant native channel");
+const piChannels = (await bridge.getSystemProviderChannels("pi")).channels;
+assert.ok(piChannels.some((c) => c.id === "custom-pi" && c.baseUrl === "https://pi-relay.example.com"), "pi must load custom-pi provider channel from models.json");
+assert.equal(piChannels.some((c) => c.isNative), false, "pi with custom providers must not add redundant native channel");
+assert.equal(
+  (await bridge.getSystemProviderChannels("dsh")).channels.length,
+  0,
+);
+const nativeClaude = (await bridge.getSystemProviderChannels("claude")).channels[0];
+assert.equal(nativeClaude.baseUrl, "https://api.anthropic.com");
+assert.equal(nativeClaude.apiKey, "sk-native");
+assert.equal(nativeClaude.model, "claude-sonnet");
+const nativeCodex = (await bridge.getSystemProviderChannels("codex")).channels[0];
+assert.equal(nativeCodex.baseUrl, "https://api.openai.com/v1");
+assert.equal(nativeCodex.apiKey, "sk-codex");
+assert.equal(nativeCodex.model, "gpt-5");
+const nativeKimi = (await bridge.getSystemProviderChannels("kimi")).channels[0];
+assert.equal(nativeKimi.baseUrl, "https://api.moonshot.cn/v1");
+assert.equal(nativeKimi.apiKey, "sk-kimi");
+assert.equal(nativeKimi.model, "kimi-k2");
+const nativeGrok = (await bridge.getSystemProviderChannels("grok")).channels[0];
+assert.equal(nativeGrok.baseUrl, "https://api.x.ai");
+assert.equal(nativeGrok.apiKey, "sk-grok");
+assert.equal(nativeGrok.model, "grok-4");
+assert.deepEqual(
+  bridge.parseNativeOfficialFields("claude", [{
+    path: "C:/x/settings.json",
+    content: '{"env":{"ANTHROPIC_BASE_URL":"https://example.com","ANTHROPIC_API_KEY":"sk-alt"}}',
+  }]),
+  { baseUrl: "https://example.com", apiKey: "sk-alt", model: "" },
+);
+assert.deepEqual(
+  bridge.parseNativeOfficialFields("pi", []),
+  { baseUrl: "", apiKey: "", model: "" },
+);
+assert.notEqual(
+  bridge.channelModelKey("claude", bridge.NATIVE_PROVIDER_ID),
+  bridge.channelModelKey("codex", bridge.NATIVE_PROVIDER_ID),
+);
+assert.deepEqual(await bridge.getNativeModels("codex"), [
+  { id: "codex-model" },
+]);
+const api = await loadModule("../src/api.ts");
+const unusedBridgeCtx = { bridge: { invoke: async () => { throw new Error("unused"); } } };
+const catalogCalls = () => calls.filter((item) => item.command === "list_engine_models");
+const catalogCount = catalogCalls().length;
+const nativeFromApi = await api.loadNativeChannelModels(unusedBridgeCtx, "claude", {
+  baseUrl: "https://api.anthropic.com",
+  apiKey: "sk-native",
+});
+assert.deepEqual(nativeFromApi.models, [{ id: "api:https://api.anthropic.com" }]);
+assert.equal(nativeFromApi.authoritative, false);
+assert.equal(catalogCalls().length, catalogCount, "native channel with Base URL must not use CLI catalog");
+assert.ok(calls.some((item) => item.command === "fetch_provider_models"));
+const nativeFromCatalog = await api.loadNativeChannelModels(unusedBridgeCtx, "grok", {
+  baseUrl: "",
+  apiKey: "",
+});
+assert.deepEqual(nativeFromCatalog.models, [{ id: "grok-model" }]);
+assert.equal(nativeFromCatalog.authoritative, true);
+assert.equal(catalogCalls().length, catalogCount + 1, "native channel without Base URL falls back to CLI catalog");
+
+// Test native catalog caching & deduplication for slow CLIs (omp / pi)
+const [ompCatalogA, ompCatalogB] = await Promise.all([
+  bridge.getNativeCatalog("omp"),
+  bridge.getNativeCatalog("omp"),
+]);
+assert.equal(ompCatalogA, ompCatalogB, "concurrent getNativeCatalog must share one inflight probe");
+assert.equal(await bridge.getNativeCatalog("omp"), ompCatalogA, "warm native catalog must hit memory cache");
+assert.equal(bridge.peekNativeCatalog("omp"), ompCatalogA, "peekNativeCatalog must return cached catalog synchronously");
+assert.equal(bridge.peekSystemEngines(), null);
+const optimistic = bridge.optimisticSystemEngines("claude");
+assert.equal(optimistic.find((item) => item.id === "claude")?.disabled, false);
+assert.equal(optimistic.find((item) => item.id === "codex")?.disabled, true);
+const engineCalls = () => calls.filter((item) => item.command === "list_engines");
+const [enginesA, enginesB] = await Promise.all([
+  bridge.getSystemEngines(),
+  bridge.getSystemEngines(),
+]);
+assert.equal(engineCalls().length, 1, "concurrent engine reads share one PATH probe");
+assert.equal(enginesA, enginesB);
+assert.equal(enginesA.some((item) => item.id === "kimi"), false);
+assert.equal(enginesA.find((item) => item.id === "codex")?.disabled, true);
+assert.equal(enginesA.find((item) => item.id === "claude")?.available, true);
+assert.equal(await bridge.getSystemEngines(), enginesA);
+assert.equal(engineCalls().length, 1, "warm engine cache must skip list_engines");
+assert.equal(bridge.peekSystemEngines(), enginesA);
+
+// Test force refresh for CLI upgrade/install detection
+const forcedEngines = await bridge.getSystemEngines(true);
+assert.equal(engineCalls().length, 2, "force getSystemEngines must bypass cache and re-probe PATH");
+assert.deepEqual(forcedEngines, enginesA);
+
+// Test catalog cache invalidation
+bridge.invalidateNativeCatalogCache("omp");
+assert.equal(bridge.peekNativeCatalog("omp"), null, "invalidateNativeCatalogCache must clear peek cache");
+await bridge.getNativeCatalog("omp");
+assert.ok(bridge.peekNativeCatalog("omp") !== null, "re-fetching after invalidate must repopulate cache");
+
+const configCalls = () => calls.filter((item) => item.command === "get_cli_config");
+const configCount = configCalls().length;
+await Promise.all([
+  bridge.getSystemProviderChannels("claude"),
+  bridge.getSystemProviderChannels("codex"),
+]);
+assert.equal(configCalls().length, configCount + 1, "concurrent channel reads share one get_cli_config");
+const engineCallsBeforePrefetch = engineCalls().length;
+bridge.prefetchSystemSnapshot();
+await Promise.resolve();
+assert.equal(engineCalls().length, engineCallsBeforePrefetch, "prefetch must reuse warm engine cache");
+assert.equal(
+  calls.some(
+    ({ command }) =>
+      command.includes("write") || command === "set_current_provider",
+  ),
+  false,
+  "Reading providers must not modify native configuration",
+);
+const writeCountBeforeSwitch = calls.length;
+await bridge.setSystemCurrentProvider("codex", bridge.NATIVE_PROVIDER_ID);
+await bridge.setSystemCurrentProvider("claude", "relay");
+await bridge.setSystemCurrentProvider("claude", bridge.NATIVE_PROVIDER_ID);
+const switchWrites = calls.slice(writeCountBeforeSwitch);
+assert.deepEqual(
+  switchWrites.map((item) => item.command),
+  ["set_current_provider", "set_current_provider", "set_current_provider"],
+  "plugin channel switch must call host set_current_provider",
+);
+assert.deepEqual(switchWrites[0].args, {
+  engine: "codex",
+  id: bridge.NATIVE_PROVIDER_ID,
+});
+assert.deepEqual(switchWrites[1].args, { engine: "claude", id: "relay" });
+assert.deepEqual(switchWrites[2].args, {
+  engine: "claude",
+  id: bridge.NATIVE_PROVIDER_ID,
+});
+const configAfterSwitch = configCalls().length;
+await bridge.getSystemProviderChannels("claude");
+assert.equal(
+  configCalls().length,
+  configAfterSwitch + 1,
+  "channel switch must invalidate get_cli_config cache",
+);
+
+let result = {
+  code: 0,
+  stdout: '{"status":"clean","files":[{"path":"fixture","status":"clean","rawMatches":0,"cleanMatches":1}]}\n',
+  stderr: "diagnostic warning\n",
+};
+const ctx = { bridge: { invoke: async (command, args) => {
+  assert.equal(command, "plugin_exec_run");
+  assert.equal(args.bin, "node");
+  assert.equal(args.args[0], "-e");
+  assert.equal(args.args[2], "--");
+  assert.match(args.args[1], /os\.homedir/);
+  return result;
+} } };
+assert.equal((await scrub.checkScrubStatus(ctx)).status, "clean");
+result = { code: 0, stdout: "", stderr: "" };
+assert.equal(
+  (await scrub.applyScrubPrompt(ctx)).success,
+  false,
+  "Empty output must never be reported as cleaned",
+);
+assert.equal((await scrub.restoreOfficialPrompt(ctx)).success, false);
+result = { code: 1, stdout: '{"success":true,"patchedCount":2}', stderr: "" };
+assert.equal(
+  (await scrub.applyScrubPrompt(ctx)).success,
+  false,
+  "Failed process must never report success",
+);
+result = { code: 0, stdout: '{"status":"not_found"}', stderr: "" };
+assert.equal((await scrub.checkScrubStatus(ctx)).status, "not_found");
+assert.equal((await scrub.applyScrubPrompt(ctx)).success, false);
+result = { code: 0, stdout: '{"success":true,"patchedCount":2}', stderr: "" };
+assert.equal((await scrub.applyScrubPrompt(ctx)).success, false, "Counts alone do not verify a successful patch");
+result = { code: 0, stdout: '{"success":true,"patchedCount":2,"status":"clean","files":[{"path":"fixture","status":"clean","rawMatches":0,"cleanMatches":2}]}', stderr: "" };
+assert.equal((await scrub.applyScrubPrompt(ctx)).success, true);
+const originalInvoke = window.__TAURI_INTERNALS__.invoke;
+window.__TAURI_INTERNALS__.invoke = async command => {
+  assert.equal(command, "get_app_settings");
+  return { claudeBin: "/custom installation/claude" };
+};
+let forwardedTarget;
+await scrub.applyScrubPrompt({ bridge: { invoke: async (_command, args) => {
+  forwardedTarget = args.args[4];
+  return result;
+} } });
+assert.equal(forwardedTarget, "/custom installation/claude", "Honor the host's executable override");
+window.__TAURI_INTERNALS__.invoke = originalInvoke;
+console.log("Native provider compatibility and scrub status checks passed.");
+
+for (const engine of ["claude", "codex", "kimi", "grok", "pi", "omp"]) {
+  for (const model of ["relay/custom", "claude-via-responses", "gpt-via-messages", "模型别名"]) {
+    assert.equal(policy.modelSelectionError(engine, model), null, "Names cannot prove a wire protocol mismatch");
+    assert.equal(policy.modelSelectionError(engine, model, { nativeIds: [], authoritative: false }), null);
+    assert.notEqual(policy.modelSelectionError(engine, model, { nativeIds: [], authoritative: true }), null);
+    assert.equal(policy.modelSelectionError(engine, model, { nativeIds: [model], authoritative: true }), null);
+  }
+  const channel = { id: "test", name: "Relay", baseUrl: "https://example.invalid", apiKey: "test-only", model: "alias" };
+  const writeCount = calls.length;
+  await bridge.applyCustomPluginChannelToEngine(ctx, engine, channel);
+  await bridge.deleteCustomPluginChannel(engine, channel.id);
+  const writes = calls.slice(writeCount);
+  const hostId = bridge.pluginProviderId(channel.id);
+  assert.deepEqual(
+    writes.map((item) => item.command),
+    ["upsert_provider", "set_current_provider", "delete_provider"],
+    `${engine} plugin channel ops must sync host providers`,
+  );
+  assert.deepEqual(writes[0].args, {
+    engine,
+    id: hostId,
+    json: {
+      name: "Relay",
+      baseUrl: "https://example.invalid",
+      apiKey: "test-only",
+      model: "alias",
+    },
+  });
+  assert.deepEqual(writes[1].args, { engine, id: hostId });
+  assert.deepEqual(writes[2].args, { engine, id: hostId });
+}
+console.log("Provider switching syncs host channels and the current provider.");
+assert.notEqual(policy.modelSelectionError("codex", "alias", {
+  modelProtocols: ["anthropic-messages"], engineProtocols: ["openai-responses"],
+}), null);
+assert.equal(policy.modelSelectionError("codex", "alias", {
+  modelProtocols: ["openai-responses"], engineProtocols: ["openai-responses"],
+}), null);
+assert.notEqual(policy.modelSelectionError("codex", "default"), null);
+// Exercise the actual embedded Node entrypoint without scanning or changing CLI files.
+const executableCtx = { bridge: { invoke: async (_command, args) => {
+  const stdout = execFileSync(process.execPath, [...args.args.slice(0, -1), "selftest"], {
+    encoding: "utf8", windowsHide: true,
+  });
+  assert.equal(JSON.parse(stdout).ok, true);
+  return { code: 0, stdout: '{"status":"clean","files":[{"path":"fixture","status":"clean","rawMatches":0,"cleanMatches":1}]}', stderr: "" };
+} } };
+assert.equal((await scrub.checkScrubStatus(executableCtx)).status, "clean");
+console.log("Portable execution, host channel adapters and metadata-based model validation passed.");
+
+const display = await loadModule("../src/session-display.ts");
+const saved = { selectedCli: "codex", selectedModel: "global-model", effort: "high", enable1MContext: true };
+let active = { engine: "claude", sessionId: "a", workspacePath: "/project", model: "session-a", effort: "low" };
+globalThis.localStorage = { getItem: () => active ? JSON.stringify(active) : null };
+let selection = display.readSessionDisplay();
+assert.equal(selection.selectedCli, "claude");
+assert.equal(selection.selectedModel, "session-a");
+assert.equal(selection.effort, "low");
+assert.equal(display.withSessionDisplay(saved, selection).enable1MContext, false);
+const firstKey = selection.sessionKey;
+active = { ...active, sessionId: "b", model: "session-b[1m]", effort: "max" };
+selection = display.readSessionDisplay();
+assert.notEqual(selection.sessionKey, firstKey);
+assert.equal(selection.selectedModel, "session-b");
+assert.equal(selection.enable1MContext, true);
+assert.equal(selection.effort, "max");
+active = { engine: "claude", sessionId: "c", workspacePath: "/project" };
+assert.equal(display.withSessionDisplay(saved, display.readSessionDisplay()).selectedModel, "",
+  "An unknown session model must never use the plugin's global selection");
+
+// Simulate the DOM's retained Fiber pointer after React commits its alternate.
+const oldRoot = { return: null, stateNode: {} };
+const newRoot = { return: null, stateNode: oldRoot.stateNode };
+oldRoot.stateNode.current = newRoot;
+const currentProps = { value: "claude", models: { claude: "history-c" }, efforts: { claude: "ultra" }, onModelChange() {} };
+const oldMenu = { memoizedProps: { ...currentProps, models: { claude: "stale-a" } }, return: oldRoot };
+const newMenu = { memoizedProps: currentProps, return: newRoot };
+const button = { __reactFiber$test: { return: oldMenu, alternate: { return: newMenu } } };
+globalThis.document = { querySelector: () => button };
+selection = display.readSessionDisplay();
+assert.equal(selection.selectedModel, "history-c", "Read the committed host model, including history fallback");
+assert.equal(selection.effort, "ultra");
+const conversation = { memoizedProps: { active: { ...active, model: "live-tab" } }, return: newRoot };
+newMenu.return = conversation;
+active = { ...active, model: "stale-storage" };
+assert.equal(display.readSessionDisplay().selectedModel, "live-tab", "Mounted session wins over delayed persistence");
+conversation.memoizedProps.active = null;
+active = null;
+assert.equal(display.readSessionDisplay().selectedModel, "history-c", "New chats use the host's engine default");
+
+// Test session message history & activeModel/activeEffort resolution
+const historySessionFiber = {
+  memoizedProps: {
+    active: {
+      engine: "claude",
+      sessionId: "s-1",
+      workspacePath: "/p",
+      model: "gpt-4o[1m]",
+      effort: "xhigh",
+    },
+    session: {
+      model: "gpt-4o[1m]",
+      effort: "xhigh",
+      messages: [{ role: "assistant", model: "gpt-4o-mini", effort: "medium" }],
+    },
+  },
+  return: newRoot,
+};
+newMenu.return = historySessionFiber;
+assert.equal(display.readSessionDisplay().selectedModel, "gpt-4o", "model from session wins over engine default");
+assert.equal(display.readSessionDisplay().enable1MContext, true, "1M context detected from [1m] suffix");
+assert.equal(display.readSessionDisplay().effort, "xhigh", "effort from session wins over engine default");
+
+newMenu.memoizedProps.models = {};
+const messageHistoryFiber = {
+  memoizedProps: {
+    messages: [
+      { role: "assistant", model: "claude-3-5-sonnet", effort: "low" },
+      { role: "assistant", model: "claude-3-7-sonnet[1m]", effort: "high" },
+    ],
+  },
+  return: newRoot,
+};
+newMenu.return = messageHistoryFiber;
+assert.equal(display.readSessionDisplay().selectedModel, "claude-3-7-sonnet", "Last used model in messages fallback wins");
+assert.equal(display.readSessionDisplay().enable1MContext, true, "1M context detected in history message");
+assert.equal(display.readSessionDisplay().effort, "high", "Last used effort in messages fallback wins");
+
+delete globalThis.document;
+assert.equal(display.readSessionDisplay(), null);
+delete globalThis.localStorage;
+console.log("Session display isolation, history/default resolution and committed React Fiber checks passed.");
+
+const sync = await loadModule("../src/sync-host.ts");
+const activeKey = "ccgui-next.activeSession:v1";
+const tabsKey = "ccgui-next.openTabs:v1";
+const pending = { engine: "codex", sessionId: null, workspacePath: "/project" };
+const history = { ...pending, sessionId: "history", model: "keep-model" };
+const storage = new Map([[activeKey, JSON.stringify(pending)], [tabsKey, JSON.stringify([pending, history])]]);
+globalThis.localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) };
+assert.equal(policy.sessionSelectionError("claude"), null, "A pending tab's engine is a preference, not a lock");
+assert.notEqual(policy.sessionSelectionError("claude", history), null, "Existing sessions remain locked");
+assert.notEqual(policy.sessionSelectionError("claude", pending, true), null, "First turn locks CLI before native ID arrives");
+for (const raw of ["broken-json", JSON.stringify({ engine: "codex" })]) {
+  storage.set(activeKey, raw);
+  assert.notEqual(policy.sessionSelectionError("claude"), null, "Malformed state must not unlock switching");
+}
+storage.set(activeKey, "null");
+assert.equal(policy.sessionSelectionError("claude"), null, "A persisted null means no active conversation");
+storage.set(activeKey, JSON.stringify(history));
+const footer = { memoizedProps: { active: pending, streaming: false }, return: null };
+const hostCalls = [];
+const menu = { memoizedProps: {
+  value: "codex",
+  onChange(engine) {
+    hostCalls.push(["engine", engine]);
+    const next = { ...pending, engine };
+    storage.set(activeKey, JSON.stringify(next));
+    storage.set(tabsKey, JSON.stringify([next, history]));
+    footer.memoizedProps.active = next;
+  },
+  onModelChange: (engine, model) => hostCalls.push(["model", engine, model]),
+  onEffortChange: (engine, effort) => hostCalls.push(["effort", engine, effort]),
+}, return: footer };
+globalThis.document = { querySelector: () => ({ __reactFiber$test: { return: menu } }) };
+assert.equal(sync.hostSessionSelectionError("claude"), null, "Live new tab wins over stale stored history");
+footer.memoizedProps.streaming = true;
+await assert.rejects(() => sync.applyModelSelectionToHost({ engine: "claude", model: "claude-test" }), /当前会话/);
+assert.equal(hostCalls.length, 0, "Streaming guard runs before any host callback");
+footer.memoizedProps.streaming = false;
+const invokeBeforeSwitch = window.__TAURI_INTERNALS__.invoke;
+window.__TAURI_INTERNALS__.invoke = async command => {
+  assert(["get_app_settings", "update_app_settings"].includes(command));
+  return {};
+};
+await sync.applyModelSelectionToHost({ engine: "claude", model: "claude-test", effort: "high" });
+assert.deepEqual(hostCalls, [["engine", "claude"], ["model", "claude", "claude-test"], ["effort", "claude", "high"]]);
+assert.equal(JSON.parse(storage.get(activeKey)).engine, "claude");
+assert.equal(JSON.parse(storage.get(activeKey)).model, "claude-test");
+assert.deepEqual(JSON.parse(storage.get(tabsKey))[1], history, "Switching a pending tab leaves history untouched");
+footer.memoizedProps.active = history;
+await assert.rejects(() => sync.applyModelSelectionToHost({ engine: "claude", model: "claude-test" }), /当前会话/);
+window.__TAURI_INTERNALS__.invoke = invokeBeforeSwitch;
+delete globalThis.document;
+delete globalThis.localStorage;
+console.log("Pending CLI selection, live session guards, streaming locks and host retargeting passed.");
+
+const themes = await loadModule("../src/theme-manager.ts");
+const { THEME_PALETTES } = await loadModule("../src/theme-palette.ts");
+const luminance = hex => {
+  const rgb = hex.slice(1).match(/../g).map(channel => parseInt(channel, 16) / 255)
+    .map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+};
+const contrast = (a, b) => (Math.max(luminance(a), luminance(b)) + 0.05) / (Math.min(luminance(a), luminance(b)) + 0.05);
+for (const [name, variants] of Object.entries(THEME_PALETTES)) {
+  for (const [mode, colors] of Object.entries(variants)) {
+    assert(contrast(colors.text, colors.canvas) >= 4.5, `${name}/${mode}: timeline text contrast`);
+    assert(contrast(colors.muted, colors.surface) >= 4.5, `${name}/${mode}: secondary text contrast`);
+    assert(contrast("#ffffff", colors.accent) >= 4.5, `${name}/${mode}: user bubble text contrast`);
+  }
+}
+let savedTheme = { preset: "nordic", canvasStyle: "diagonal", enableGlassmorphism: false, customCss: ".user-rule { color: red; }" };
+let activeStyles = 0;
+const themeCtx = {
+  storage: { get: async () => savedTheme, set: async (_key, value) => { savedTheme = value; } },
+  theme: { injectCss: () => { activeStyles++; return () => { activeStyles--; }; } },
+};
+const manager = new themes.GuiThemeManager(themeCtx);
+await manager.init();
+assert.equal(manager.getConfig().canvasStyle, "plain", "Migrate old theme settings with new defaults");
+assert.equal(manager.getConfig().enableGlassmorphism, false, "Preserve old effect preferences");
+await manager.updateConfig({ preset: "graphite", backdropOpacity: 60, canvasStyle: "grid" });
+assert.equal(activeStyles, 1, "Live theme replacement must not accumulate stylesheets");
+assert.equal(savedTheme.preset, "graphite");
+assert.equal(savedTheme.backdropOpacity, 60);
+assert.equal(savedTheme.canvasStyle, 'plain', 'Legacy texture values must normalize on save');
+assert.equal(savedTheme.customCss, ".user-rule { color: red; }");
+manager.dispose();
+assert.equal(activeStyles, 0);
+console.log("Theme contrast, legacy settings migration, persistence and stylesheet cleanup passed.");
+
+const customization = await loadModule("../src/theme-customization.ts");
+assert.equal(customization.customThemeColor(undefined, { light: { accent: '#24685a' } }, 'ocean'), '#24685a', 'Reuse legacy custom accent');
+for (const seed of ['#ffffff', '#000000', '#ffff00', '#00ff00', '#123456']) {
+  const palette = customization.paletteFromColor(seed);
+  for (const colors of Object.values(palette)) {
+    assert(contrast('#ffffff', colors.accent) >= 4.5, `${seed}: button labels must remain readable`);
+    assert(contrast(colors.text, colors.canvas) >= 4.5, `${seed}: canvas text must remain readable`);
+  }
+}
+const basePalette = customization.customPaletteBase("ocean");
+const sanitized = customization.normalizePalette({ light: { accent: "red; } body { display:none" }, dark: { accent: "#884455" } }, basePalette);
+assert.equal(sanitized.light.accent, basePalette.light.accent);
+assert.equal(sanitized.dark.accent, "#884455");
+assert.equal(customization.isBackgroundImage('https://example.com/image.png'), false);
+assert.equal(customization.isBackgroundImage('data:image/svg+xml;base64,PHN2Zz4='), false);
+assert.equal(customization.isBackgroundImage('data:image/png;base64,AAAA");}body{display:none}'), false);
+const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aE1sAAAAASUVORK5CYII=';
+const themeStore = new Map();
+const mediaWrites = [];
+let sheets = 0;
+const mediaCtx = {
+  storage: {
+    get: async key => themeStore.get(key) ?? null,
+    set: async (key, value) => { mediaWrites.push(key); themeStore.set(key, value); },
+  },
+  theme: { injectCss: () => { sheets++; return () => { sheets--; }; } },
+};
+const mediaManager = new themes.GuiThemeManager(mediaCtx);
+await mediaManager.init();
+await mediaManager.updateConfig({ paletteMode: 'custom', customAccent: '#24685a' });
+await mediaManager.updateConfig({ backgroundImage: tinyPng, backgroundEnabled: true, backgroundName: 'test.png' });
+await Promise.all([mediaManager.updateConfig({ backgroundDim: 30 }), mediaManager.updateConfig({ backgroundDim: 45 })]);
+assert.equal(mediaWrites.filter(key => key === 'theme_background').length, 1, 'Sliders must not rewrite media');
+assert.equal(themeStore.get('theme_config').backgroundImage, undefined);
+assert.equal(themeStore.get('theme_config').backgroundDim, 45, 'Rapid writes must preserve the latest value');
+assert.equal(sheets, 2, 'Keep one media stylesheet and one theme stylesheet');
+mediaManager.dispose();
+assert.equal(sheets, 0);
+const restoredManager = new themes.GuiThemeManager(mediaCtx);
+await restoredManager.init();
+assert.equal(restoredManager.getConfig().customAccent, '#24685a', 'Restore the single custom theme color');
+assert.equal(restoredManager.getConfig().backgroundImage, tinyPng, 'Restore background after reactivation');
+await restoredManager.updateConfig({ backgroundImage: '', backgroundEnabled: false });
+assert.equal(themeStore.get('theme_background'), null, 'Removing image must clear persisted bytes');
+restoredManager.dispose();
+assert.equal(sheets, 0);
+console.log('Custom palette sanitization, portable background persistence, ordered saves and media cleanup passed.');
+
+const fileFs = await import('node:fs');
+const filePath = await import('node:path');
+const fileOs = await import('node:os');
+const { createRequire } = await import('node:module');
+const { indexWorkspace, encodeIndex } = createRequire(import.meta.url)('./file-index.cjs');
+const fileSearch = await loadModule('../src/file-search.ts');
+const scratch = fileFs.mkdtempSync(filePath.join(fileOs.tmpdir(), 'ccgui-file-search-'));
+try {
+  for (const folder of ['src/components', 'docs', 'node_modules/example', '.git', 'dist']) fileFs.mkdirSync(filePath.join(scratch, folder), { recursive: true });
+  for (const name of ['src/components/ThemeSettingsPanel.tsx', 'docs/模型配置.md', 'README.md', 'node_modules/example/index.js', '.git/config', 'dist/main.js']) {
+    fileFs.writeFileSync(filePath.join(scratch, name), 'fixture');
+  }
+  const indexed = indexWorkspace(scratch);
+  assert(indexed.files.includes('docs/模型配置.md'));
+  assert(!indexed.files.some(name => name.startsWith('node_modules/') || name.startsWith('dist/') || name.startsWith('.git/')));
+  const all = indexWorkspace(scratch, true);
+  assert(all.files.includes('node_modules/example/index.js'));
+  assert(!all.files.includes('.git/config'));
+  assert.equal(fileSearch.searchFiles(indexed.files, 'THMSET')[0].path, 'src/components/ThemeSettingsPanel.tsx');
+  assert.equal(fileSearch.searchFiles(indexed.files, '模型')[0].path, 'docs/模型配置.md');
+  assert(fileSearch.searchFiles(indexed.files, 'src\\comp')[0].indexes.length > 0);
+  assert.equal(fileSearch.searchFiles(indexed.files, 'zzzzzzzzzzz').length, 0);
+  for (const value of ['../secret', '/etc/passwd', 'C:\\secret', 'folder/../secret']) assert.equal(fileSearch.safeRelativePath(value), false);
+  assert.equal(fileSearch.absoluteFilePath('D:\\workspace', 'src/index.ts'), 'D:\\workspace\\src\\index.ts');
+  assert.equal(fileSearch.absoluteFilePath('/workspace', 'src/index.ts'), '/workspace/src/index.ts');
+  const loadedIndex = await fileSearch.loadFileIndex({ bridge: { invoke: async (_command, args) => ({ code: 0, stderr: '', stdout: execFileSync(process.execPath, args.args, { encoding: 'utf8', windowsHide: true }) }) } }, scratch, false);
+  assert.deepEqual(loadedIndex.files, indexed.files, 'Embedded scanner must round-trip through compressed host output');
+  const { randomBytes } = await import('node:crypto');
+  const huge = { root: scratch, files: Array.from({ length: 10000 }, () => `${randomBytes(40).toString('hex')}.ts`), truncated: false, unreadable: 0 };
+  assert(Buffer.byteLength(encodeIndex(huge)) < 64 * 1024, 'Index must fit the host output cap');
+  assert.equal(huge.truncated, true);
+  fileFs.symlinkSync(filePath.join(scratch, 'src'), filePath.join(scratch, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert(!indexWorkspace(scratch).files.some(name => name.startsWith('linked/')), 'Skip symlinks and junctions');
+} finally { fileFs.rmSync(scratch, { recursive: true, force: true }); }
+console.log('File indexing, generated-directory filtering, fuzzy paths, workspace confinement and compressed transport passed.');

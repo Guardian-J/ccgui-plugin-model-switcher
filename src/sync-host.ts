@@ -1,0 +1,427 @@
+import type { CliEngineId, EffortLevel } from "./types";
+import { getHostSession, sessionSelectionError, modelSelectionError } from "./selection-policy";
+import type { HostSession, ModelCompatibility } from "./selection-policy";
+
+interface HostCliMenuCallbacks {
+  onModelChange?: (engine: string, model: string) => void;
+  onChange?: (engine: string) => void;
+  onEffortChange?: (engine: string, effort: string) => void;
+}
+
+interface HostCliMenuProps extends HostCliMenuCallbacks {
+  value?: string;
+  models?: Record<string, string>;
+  efforts?: Record<string, string>;
+  session?: HostSession | null;
+  streaming?: boolean;
+  lastUsedModel?: string;
+  lastUsedEffort?: EffortLevel;
+}
+
+export function normalizeEffort(val: unknown): EffortLevel | undefined {
+  if (typeof val !== "string") return undefined;
+  const s = val.trim().toLowerCase();
+  const valid: EffortLevel[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
+  if (valid.includes(s as EffortLevel)) {
+    return s as EffortLevel;
+  }
+  for (const level of ["ultra", "xhigh", "high", "medium", "low", "max"] as const) {
+    if (s.includes(level)) return level;
+  }
+  return undefined;
+}
+
+function extractSessionLastUsed(rootFiber: unknown): {
+  lastUsedModel?: string;
+  lastUsedEffort?: EffortLevel;
+} | null {
+  if (!rootFiber || typeof rootFiber !== "object") return null;
+
+  const queue: unknown[] = [rootFiber];
+  const visited = new Set<unknown>();
+  let lastUsedModel: string | undefined;
+  let lastUsedEffort: EffortLevel | undefined;
+
+  while (queue.length > 0 && visited.size < 160) {
+    const node = queue.shift() as {
+      child?: unknown;
+      sibling?: unknown;
+      memoizedProps?: Record<string, unknown>;
+      alternate?: unknown;
+    } | undefined;
+    if (!node || visited.has(node)) continue;
+    visited.add(node);
+
+    const props = node.memoizedProps;
+    if (props && typeof props === "object") {
+      // 1. SessionState 对象 (包含 activeModel, activeEffort, messages 数组)
+      const sess = (props.session && typeof props.session === "object" ? props.session : null) as {
+        activeModel?: string | null;
+        activeEffort?: string | null;
+        messages?: Array<{ model?: string; effort?: string; role?: string }>;
+      } | null;
+
+      if (sess) {
+        if (!lastUsedModel && sess.activeModel) {
+          lastUsedModel = sess.activeModel.trim();
+        }
+        if (!lastUsedEffort && sess.activeEffort) {
+          lastUsedEffort = normalizeEffort(sess.activeEffort);
+        }
+        if (Array.isArray(sess.messages)) {
+          for (let i = sess.messages.length - 1; i >= 0; i--) {
+            const m = sess.messages[i];
+            if (!lastUsedModel && m?.model) {
+              lastUsedModel = m.model.trim();
+            }
+            if (!lastUsedEffort && m?.effort) {
+              lastUsedEffort = normalizeEffort(m.effort);
+            }
+            if (lastUsedModel && lastUsedEffort) break;
+          }
+        }
+      }
+
+      // 2. 直接接收 messages 数组的组件 (如 MessageTimeline)
+      if (Array.isArray(props.messages)) {
+        const msgs = props.messages as Array<{ model?: string; effort?: string }>;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i];
+          if (!lastUsedModel && m?.model) {
+            lastUsedModel = m.model.trim();
+          }
+          if (!lastUsedEffort && m?.effort) {
+            lastUsedEffort = normalizeEffort(m.effort);
+          }
+          if (lastUsedModel && lastUsedEffort) break;
+        }
+      }
+
+      // 3. AgentThinking / TurnStatus 思考指示器属性
+      if (typeof props.label === "string" || props.variant === "wave" || props.variant === "spin") {
+        if (!lastUsedModel && typeof props.model === "string") {
+          const match = props.model.match(/模型\s+([^\s·]+)/) || [null, props.model];
+          if (match[1]) lastUsedModel = match[1].trim();
+        }
+        if (!lastUsedEffort && typeof props.effort === "string") {
+          lastUsedEffort = normalizeEffort(props.effort);
+        }
+      }
+
+      if (lastUsedModel && lastUsedEffort) {
+        return { lastUsedModel, lastUsedEffort };
+      }
+    }
+
+    if (node.child) queue.push(node.child);
+    if (node.sibling) queue.push(node.sibling);
+  }
+
+  return lastUsedModel || lastUsedEffort ? { lastUsedModel, lastUsedEffort } : null;
+}
+
+function findTimelineFiber(): unknown {
+  if (typeof document === "undefined") return null;
+  const selectors = [
+    "[data-virtual-inner]",
+    "div.overflow-y-auto.overflow-x-hidden",
+    ".group.flex.flex-col.text-left",
+    "[data-sentinel]",
+  ];
+  for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    if (el) {
+      const fiberKey = Object.keys(el).find(
+        (k) => k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$"),
+      );
+      if (fiberKey) {
+        return (el as unknown as Record<string, unknown>)[fiberKey];
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * 从 DOM 中定位原生被隐藏的 CliMenu 按钮
+ */
+export function findBuiltinTriggerButton(anchor?: HTMLElement | null): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+
+  const toolbar = anchor?.closest("div.select-none");
+  if (toolbar) {
+    return toolbar.querySelector<HTMLElement>('button[aria-haspopup="dialog"]:not([data-ccgui-plugin-btn])');
+  }
+
+  // 1. 通过选择器直接查找紧随在插件按钮前面的同级原生按钮
+  const selectorCandidates = [
+    'div.select-none > button.group:not([data-ccgui-plugin-btn])[aria-label*=" · "]',
+    'div.select-none > button[aria-haspopup="dialog"]:not([data-ccgui-plugin-btn])',
+    'button.group:not([data-ccgui-plugin-btn])[aria-label*="Claude Code"]',
+    'button.group:not([data-ccgui-plugin-btn])[aria-label*="Codex CLI"]',
+    'button.group:not([data-ccgui-plugin-btn])[aria-label*="Grok CLI"]',
+    'button.group:not([data-ccgui-plugin-btn])[aria-label*="Kimi CLI"]',
+    'button.group:not([data-ccgui-plugin-btn])[aria-label*="PI CLI"]',
+    'button.group:not([data-ccgui-plugin-btn])[aria-label*="OMP CLI"]',
+    'button.group:not([data-ccgui-plugin-btn])[aria-label*="DeepSeek"]',
+  ];
+
+  for (const sel of selectorCandidates) {
+    const el = document.querySelector<HTMLElement>(sel);
+    if (el) return el;
+  }
+
+  // 2. 从插件根元素同级向前查找
+  const pluginRoot = document.querySelector('[data-ccgui-plugin-model-switcher="true"]');
+  if (pluginRoot) {
+    let curr: HTMLElement | null = pluginRoot as HTMLElement;
+    while (curr && curr.parentElement && !curr.parentElement.classList.contains("select-none")) {
+      curr = curr.parentElement;
+    }
+    if (curr && curr.previousElementSibling instanceof HTMLElement) {
+      return curr.previousElementSibling;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 遍历 React Fiber 树获取 CliMenu 组件的真实回调函数
+ */
+export function getHostCliMenuProps(anchor?: HTMLElement | null): HostCliMenuProps | null {
+  const btn = findBuiltinTriggerButton(anchor);
+  if (!btn) return null;
+
+  const fiberKey = Object.keys(btn).find(
+    (k) => k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$")
+  );
+  if (!fiberKey) return null;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let fiber = (btn as any)[fiberKey];
+  // DOM nodes retain their original Fiber while React alternates committed trees.
+  let root = fiber;
+  while (root?.return) root = root.return;
+  if (root?.stateNode?.current && root.stateNode.current !== root) {
+    fiber = fiber.alternate;
+  }
+  let depth = 0;
+  let result: HostCliMenuProps | null = null;
+  let lastUsedModel: string | undefined;
+  let lastUsedEffort: EffortLevel | undefined;
+
+  while (fiber && depth < 60) {
+    const props = fiber.memoizedProps;
+    if (!result && props && typeof props.onModelChange === "function") {
+      result = {
+        onModelChange: props.onModelChange,
+        onChange: props.onChange,
+        onEffortChange: props.onEffortChange,
+        value: props.value,
+        models: props.models,
+        efforts: props.efforts,
+      };
+    }
+    if (result && props && Object.prototype.hasOwnProperty.call(props, "active") &&
+        (props.active === null || typeof props.active?.engine === "string")) {
+      result.session = props.active;
+      result.streaming = props.streaming === true;
+    }
+
+    if ((!lastUsedModel || !lastUsedEffort) && props) {
+      const extracted = extractSessionLastUsed(fiber);
+      if (extracted?.lastUsedModel && !lastUsedModel) {
+        lastUsedModel = extracted.lastUsedModel;
+      }
+      if (extracted?.lastUsedEffort && !lastUsedEffort) {
+        lastUsedEffort = extracted.lastUsedEffort;
+      }
+    }
+
+    if (result?.session && lastUsedModel && lastUsedEffort) {
+      break;
+    }
+
+    fiber = fiber.return;
+    depth++;
+  }
+
+  // 若向上遍历未找齐，尝试从 Timeline 的 DOM Fiber 补充提取
+  if (!lastUsedModel || !lastUsedEffort) {
+    const timelineFiber = findTimelineFiber();
+    if (timelineFiber) {
+      const timelineExtracted = extractSessionLastUsed(timelineFiber);
+      if (timelineExtracted?.lastUsedModel && !lastUsedModel) {
+        lastUsedModel = timelineExtracted.lastUsedModel;
+      }
+      if (timelineExtracted?.lastUsedEffort && !lastUsedEffort) {
+        lastUsedEffort = timelineExtracted.lastUsedEffort;
+      }
+    }
+  }
+
+  if (result) {
+    if (lastUsedModel) result.lastUsedModel = lastUsedModel;
+    if (lastUsedEffort) result.lastUsedEffort = lastUsedEffort;
+  }
+
+  return result;
+}
+
+export function hostSessionSelectionError(engine: string): string | null {
+  const host = getHostCliMenuProps();
+  return sessionSelectionError(engine,
+    host?.session !== undefined ? host.session : getHostSession(), host?.streaming);
+}
+
+/**
+ * 同步更新本地存储中的 activeSession 与 openTabs 中的模型/推理强度
+ */
+function syncLocalStorage(engine: string, model: string, effort: string) {
+  if (typeof localStorage === "undefined") return;
+
+  const ACTIVE_KEY = "ccgui-next.activeSession:v1";
+  const TABS_KEY = "ccgui-next.openTabs:v1";
+  const ENGINE_KEY = "ccgui-next.enginePref";
+
+  try {
+    localStorage.setItem(ENGINE_KEY, JSON.stringify(engine));
+
+    const activeRaw = localStorage.getItem(ACTIVE_KEY);
+    if (activeRaw) {
+      const active = JSON.parse(activeRaw);
+      if (active && typeof active === "object") {
+        if (active.engine !== engine) return;
+        active.model = model || undefined;
+        active.effort = effort || undefined;
+        localStorage.setItem(ACTIVE_KEY, JSON.stringify(active));
+      }
+    }
+
+    const tabsRaw = localStorage.getItem(TABS_KEY);
+    if (tabsRaw) {
+      const tabs = JSON.parse(tabsRaw);
+      if (Array.isArray(tabs)) {
+        for (const tab of tabs) {
+          const active = getHostSession();
+          if (active && tab && tab.engine === engine &&
+              tab.sessionId === active.sessionId && tab.workspacePath === active.workspacePath) {
+            tab.model = model || undefined;
+            tab.effort = effort || undefined;
+          }
+        }
+        localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+      }
+    }
+  } catch (err) {
+    console.warn("[model-switcher] 同步 localStorage 失败:", err);
+  }
+}
+
+/**
+ * 同步到系统底层 AppSettings（defaultModels、defaultEfforts）
+ */
+async function syncAppSettings(engine: string, model: string, effort: string) {
+  try {
+    const internals = (window as unknown as { __TAURI_INTERNALS__?: { invoke?: (cmd: string, args?: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    if (!internals?.invoke) return;
+
+    // 获取当前设置
+    const settings = (await internals.invoke("get_app_settings")) as {
+      defaultModels?: Record<string, string>;
+      defaultEfforts?: Record<string, string>;
+      [key: string]: unknown;
+    };
+
+    if (settings && typeof settings === "object") {
+      const defaultModels = { ...(settings.defaultModels || {}) };
+      const defaultEfforts = { ...(settings.defaultEfforts || {}) };
+
+      if (model) {
+        defaultModels[engine] = model;
+      } else {
+        delete defaultModels[engine];
+      }
+      if (effort) {
+        defaultEfforts[engine] = effort;
+      }
+
+      settings.defaultModels = defaultModels;
+      settings.defaultEfforts = defaultEfforts;
+
+      await internals.invoke("update_app_settings", { settings });
+    }
+  } catch (err) {
+    console.warn("[model-switcher] 同步 app_settings 失败:", err);
+  }
+}
+
+/**
+ * 将插件中选中的 CLI、模型及推理强度直接应用并生效到主项目工程：
+ * 1. 触发宿主组件在内存中的 setModel/setActiveEngine/setEffort；
+ * 2. 同步底层持久化配置（AppSettings + localStorage）；
+ * 3. 派发全局通知事件。
+ */
+export async function applyModelSelectionToHost(params: {
+  engine: CliEngineId;
+  model: string;
+  effort?: EffortLevel;
+  enable1M?: boolean;
+  compatibility?: ModelCompatibility;
+}): Promise<void> {
+  const error = hostSessionSelectionError(params.engine) ||
+    (params.model ? modelSelectionError(params.engine, params.model, params.compatibility) : null);
+  if (error) throw new Error(error);
+  const { engine, effort = "high", enable1M = false } = params;
+  let finalModel = params.model.trim();
+  if (finalModel === "default") {
+    finalModel = "";
+  }
+  if (finalModel) {
+    finalModel = finalModel.replace(/\[1m\]$/i, "");
+    if (enable1M) {
+      finalModel = `${finalModel}[1m]`;
+    }
+  }
+
+  // 1. 通过 React Fiber 触发宿主 ChatConversation 的 setModel/setEffort/setActiveEngine
+  const callbacks = getHostCliMenuProps();
+  if (callbacks) {
+    try {
+      if (callbacks.onChange) {
+        callbacks.onChange(engine);
+      }
+      // The host may refuse to retarget a pending tab whose first turn just started.
+      const active = getHostSession();
+      if (callbacks.value !== engine && active && active.engine !== engine) {
+        throw new Error("当前会话未切换到目标 CLI，请等待当前请求结束后重试");
+      }
+      if (callbacks.onModelChange) {
+        callbacks.onModelChange(engine, finalModel);
+      }
+      if (callbacks.onEffortChange) {
+        callbacks.onEffortChange(engine, effort);
+      }
+    } catch (err) {
+      console.warn("[model-switcher] 触发宿主 Fiber 回调失败:", err);
+      throw err;
+    }
+  } else {
+    const active = getHostSession();
+    if (active && active.engine !== engine) {
+      throw new Error("无法连接宿主 CLI 切换入口，请重载插件后重试");
+    }
+  }
+
+  // 2. 同步更新宿主 localStorage（确保会话与 Tab 状态准确生效）
+  syncLocalStorage(engine, finalModel, effort);
+
+  // 3. 同步写入系统后端 AppSettings（确保新会话与默认配置生效）
+  await syncAppSettings(engine, finalModel, effort);
+
+  // 4. 派发通知事件
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("ccgui:model-changed", { detail: { engine, model: finalModel, effort } }));
+  }
+}

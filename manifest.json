@@ -1,0 +1,42 @@
+{
+  "id": "model-switcher",
+  "name": "模型与供应商助手",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "sdkVersion": "^0.3.1",
+  "author": "ccgui-developer",
+  "description": "针对 cc-gui（https://github.com/zhukunpenglinyutong/desktop-cc-gui）的扩展插件：模型与 CLI 选择、独立渠道管理、全局主题、文件模糊搜索和链接跳转",
+  "tier": "js",
+  "permissions": [
+    "storage",
+    "ui:composer",
+    "ui:panel-tab",
+    "ui:markdown",
+    "ui:settings-section",
+    "ui:status-bar",
+    "ui:command",
+    "theme",
+    "i18n",
+    "events",
+    "exec:node",
+    "network:api.deepseek.com",
+    "network:openrouter.ai",
+    "network:api.openai.com",
+    "network:api.anthropic.com",
+    "network:api.siliconflow.cn",
+    "network:dashscope.aliyuncs.com",
+    "network:ark.cn-beijing.volces.com",
+    "network:api.minimax.chat",
+    "network:api.groq.com",
+    "network:127.0.0.1:1-65535",
+    "network:localhost:1-65535"
+  ],
+  "contributes": {
+    "statusBarItems": [
+      {
+        "key": "active-model",
+        "text": "模型切换"
+      }
+    ]
+  }
+}
