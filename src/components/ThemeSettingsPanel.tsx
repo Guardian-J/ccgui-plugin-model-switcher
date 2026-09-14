@@ -40,7 +40,7 @@ export function ThemeSettingsPanel({ manager, onClose }: Props) {
 
   const toggles: { key: keyof GuiThemeConfig; label: string }[] = [
     { key: "enableTimelinePolish", label: "时间线精修" },
-    { key: "enableGlassmorphism", label: "毛玻璃" },
+    { key: "enableTabPolish", label: "页签精修" },
     { key: "enableComposerGlow", label: "全局聚焦光晕" },
     { key: "enableSleekScrollbars", label: "细滚动条" },
     { key: "enableCardPolish", label: "代码块精修" },

@@ -1,4 +1,4 @@
-import type { CliEngineId, CustomPluginChannel, SystemProviderChannel } from "./types";
+import type { CliEngineId, CustomPluginChannel, SystemProviderChannel, PiFamilyApiProtocol } from "./types";
 import { DEFAULT_PI_FAMILY_API, isPiFamilyApiProtocol } from "./types";
 import type { PluginContext } from "./ccgui-plugin";
 import {
@@ -607,8 +607,7 @@ export function notifyCliConfigChanged(): void {
 }
 
 /**
- * 把宿主当前供应商切到指定渠道。Claude/Codex/Kimi/Grok 会经 provider_files::apply
- * 改写 settings.json / config.toml / auth.json，与宿主设置页渠道切换相同。
+ * 把宿主当前供应商切到指定渠道。只改应用内默认渠道，不改写 CLI 自身配置文件。
  */
 export async function setSystemCurrentProvider(
   engine: CliEngineId,
@@ -628,6 +627,52 @@ export function pluginProviderId(channelId: string): string {
 
 export function isPluginProviderId(providerId: string): boolean {
   return providerId.startsWith(PLUGIN_PROVIDER_PREFIX);
+}
+
+function piFamilyProviderId(
+  channel: { id: string; isPlugin?: boolean; isNative?: boolean } | null,
+): string | null {
+  if (!channel || channel.isNative || channel.id === NATIVE_PROVIDER_ID) return null;
+  return channel.isPlugin ? pluginProviderId(channel.id) : channel.id;
+}
+
+function stripPiFamilyPrefix(
+  id: string,
+  channel: { id: string; isPlugin?: boolean; isNative?: boolean } | null,
+): string {
+  const provider = piFamilyProviderId(channel);
+  if (provider && id.startsWith(`${provider}/`)) return id.slice(provider.length + 1);
+  if (channel?.id && id.startsWith(`${channel.id}/`)) return id.slice(channel.id.length + 1);
+  return id;
+}
+
+/**
+ * omp / pi 的 --model 必须是 `供应商/模型`。独立渠道若只传裸模型 ID，
+ * CLI 会落到内置 google 并报 No API key found for google。
+ */
+export function qualifyEngineModel(
+  engine: CliEngineId,
+  channel: { id: string; isPlugin?: boolean; isNative?: boolean } | null,
+  model: string,
+): string {
+  const raw = model.trim().replace(/\[1m\]$/i, "");
+  if (!raw || (engine !== "pi" && engine !== "omp")) return raw;
+  const provider = piFamilyProviderId(channel);
+  if (!provider) return raw;
+  if (raw === provider || raw.startsWith(`${provider}/`)) return raw;
+  const id = stripPiFamilyPrefix(raw, channel);
+  return id ? `${provider}/${id}` : raw;
+}
+
+/** 列表展示用：去掉 omp / pi 供应商前缀，避免和目录里的裸模型 ID 对不上。 */
+export function displayEngineModel(
+  engine: CliEngineId,
+  channel: { id: string; isPlugin?: boolean; isNative?: boolean } | null,
+  model: string,
+): string {
+  const id = model.trim().replace(/\[1m\]$/i, "");
+  if (!id || (engine !== "pi" && engine !== "omp")) return id;
+  return stripPiFamilyPrefix(id, channel);
 }
 
 function isPiFamilyEngine(engine: CliEngineId): engine is "pi" | "omp" {
@@ -682,7 +727,7 @@ async function readPiFamilyModelsConfig(engine: "pi" | "omp"): Promise<{
   };
 }
 
-/** omp / pi 独立渠道必须写入 models.yml / models.json，并带上 api 协议，否则 CLI 会报错。 */
+/** omp / pi 独立渠道必须写入 models.yml / models.json，并带上 api 协议与 auth: apiKey（禁止 OAuth 塑形）。 */
 async function applyPiFamilyPluginChannel(
   engine: "pi" | "omp",
   channel: CustomPluginChannel,
@@ -699,6 +744,52 @@ async function applyPiFamilyPluginChannel(
   invalidateNativeCatalogCache(engine);
 }
 
+/**
+ * 当用户在 OMP / PI 选中某模型或拉取到模型列表时，确保模型记录在 models.yml / models.json 对应 provider 的 models 列表中，
+ * 否则 CLI 会报 Model "provider/model" not found。
+ */
+export async function ensurePiFamilyModelConfigured(
+  engine: CliEngineId,
+  channel: { id: string; isPlugin?: boolean; baseUrl?: string; apiKey?: string; name?: string; api?: string } | null,
+  modelOrModels: string | string[],
+): Promise<void> {
+  if (engine !== "pi" && engine !== "omp") return;
+  if (!channel || !channel.id || channel.id === NATIVE_PROVIDER_ID) return;
+  const inputList = Array.isArray(modelOrModels) ? modelOrModels : [modelOrModels];
+  const bareModels = inputList
+    .map((m) => displayEngineModel(engine, channel, m).trim())
+    .filter(Boolean);
+  if (bareModels.length === 0) return;
+
+  const id = channel.isPlugin ? pluginProviderId(channel.id) : channel.id;
+  try {
+    const { text, format } = await readPiFamilyModelsConfig(engine);
+    const providers = parsePiFamilyProviders(text, format);
+    const existing = providers[id];
+    const existingIds = new Set(existing?.models.map((m) => m.id) || []);
+    const missing = bareModels.filter((m) => !existingIds.has(m));
+    if (existing && missing.length === 0) {
+      return;
+    }
+    const patch = {
+      name: existing?.name || channel.name || channel.id,
+      baseUrl: existing?.baseUrl || channel.baseUrl || "",
+      apiKey: existing?.apiKey || channel.apiKey || "",
+      api: isPiFamilyApiProtocol(existing?.api || channel.api || "")
+        ? ((existing?.api || channel.api) as PiFamilyApiProtocol)
+        : DEFAULT_PI_FAMILY_API,
+      models: [...bareModels, ...(existing?.models || [])],
+    };
+    const next = upsertPiFamilyProviderText(text, format, id, patch);
+    if (next !== text) {
+      await invokeTauri("pi_family_models_config_write", { engine, text: next });
+      invalidateNativeCatalogCache(engine);
+    }
+  } catch (err) {
+    console.warn("[model-switcher] ensurePiFamilyModelConfigured 失败:", err);
+  }
+}
+
 async function deletePiFamilyPluginChannel(
   engine: "pi" | "omp",
   channelId: string,
@@ -711,7 +802,7 @@ async function deletePiFamilyPluginChannel(
 }
 
 /**
- * 把独立渠道 upsert 到宿主供应商列表并设为当前项，随后对话使用该渠道的 URL/Key。
+ * 把独立渠道 upsert 到宿主供应商列表；会话绑定由调用方执行，不改写全局默认渠道。
  * Codex 附带 settingsConfig（auth.json + requires_openai_auth），omp / pi 写入 models.yml / models.json。
  */
 export async function applyCustomPluginChannelToEngine(
@@ -735,13 +826,12 @@ export async function applyCustomPluginChannelToEngine(
     await applyPiFamilyPluginChannel(engine, { ...channel, api: json.api as CustomPluginChannel["api"] });
   }
   await invokeTauri("upsert_provider", { engine, id, json });
-  await invokeTauri("set_current_provider", { engine, id });
   invalidateCliConfig();
   notifyCliConfigChanged();
 }
 
 /**
- * 从宿主供应商列表删除独立渠道。若该渠道是当前项，宿主会把 CLI 文件恢复成官方备份。
+ * 从宿主供应商列表删除独立渠道。当前项被删时回落到官方配置；CLI 自身文件不动。
  */
 export async function deleteCustomPluginChannel(
   engine: CliEngineId,

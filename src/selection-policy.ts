@@ -6,6 +6,7 @@ export interface HostSession {
   workspacePath: string;
   model?: string;
   effort?: string;
+  provider?: string;
 }
 
 export function getHostSession(): HostSession | null {

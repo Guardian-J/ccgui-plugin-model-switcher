@@ -70,9 +70,10 @@ export const flyoutStyles = `
 .ms-channel-row { display: flex; align-items: center; min-width: 0; flex-shrink: 0; border: 1px solid transparent; border-radius: 6px; }
 .ms-channel-row > .ms-row { flex: 1; border: 0; }
 .ms-row-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 2px; }
-.ms-row-title, .ms-row-detail { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ms-row-title { font-size: 13px; font-weight: 550; }
+.ms-row-title { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 550; min-width: 0; }
+.ms-row-name, .ms-row-detail { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ms-row-detail { font-size: 11px; color: var(--ms-muted); }
+.ms-custom-badge { display: inline-flex; align-items: center; padding: 1px 5px; border-radius: 4px; font-size: 10px; font-weight: 500; line-height: 1.3; color: var(--ms-accent); background: color-mix(in srgb, var(--ms-accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--ms-accent) 25%, transparent); flex-shrink: 0; }
 .ms-check { margin-left: auto; color: var(--ms-accent); }
 .ms-delete, .ms-view-channel, .ms-edit-channel { width: 26px; height: 28px; margin-right: 3px; opacity: 0; }
 .ms-channel-row:hover .ms-delete, .ms-channel-row:focus-within .ms-delete,

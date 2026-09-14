@@ -18,9 +18,12 @@ import {
   optimisticSystemEngines,
   getSystemProviderChannels,
   isPluginProviderId,
-  setSystemCurrentProvider,
   applyCustomPluginChannelToEngine,
   deleteCustomPluginChannel,
+  pluginProviderId,
+  qualifyEngineModel,
+  displayEngineModel,
+  ensurePiFamilyModelConfigured,
   peekNativeCatalog,
   invalidateNativeCatalogCache,
   type EngineItemRule,
@@ -40,7 +43,11 @@ import {
 import { flyoutStyles } from "./flyout-styles";
 import { ThemeSettingsPanel } from "./ThemeSettingsPanel";
 import type { GuiThemeManager } from "../theme-manager";
-import { applyModelSelectionToHost, hostSessionSelectionError as sessionSelectionError } from "../sync-host";
+import {
+  applyModelSelectionToHost,
+  applyChannelSelectionToHost,
+  hostSessionSelectionError as sessionSelectionError,
+} from "../sync-host";
 import { useSessionDisplay, withSessionDisplay } from "../session-display";
 import { getHostSession, modelSelectionError, isConcreteModel } from "../selection-policy";
 import { ScrubSection } from "./ScrubSection";
@@ -286,8 +293,8 @@ export function CliModelFlyoutMenu({
 
   const nativeActive = activeChannel?.id === NATIVE_PROVIDER_ID;
 
+  // 缓存 CLI 原生元数据用于后台协议校验，不直接展示在可用模型列表中
   useEffect(() => {
-    const request = ++modelRequest.current;
     const cachedCatalog = peekNativeCatalog(activeEngine);
     if (cachedCatalog) {
       setNativeModels(cachedCatalog.models);
@@ -296,23 +303,55 @@ export function CliModelFlyoutMenu({
       setNativeModels([]);
       setNativeAuthoritative(false);
     }
-    setFetchingModels(false);
-    if (nativeActive && !loadingChannels) {
-      if (!cachedCatalog || cachedCatalog.models.length === 0) setFetchingModels(true);
-      void loadNativeChannelModels(ctx, activeEngine, activeChannel)
-        .then((catalog) => {
-          if (request === modelRequest.current) {
-            setNativeModels(catalog.models);
-            setNativeAuthoritative(catalog.authoritative);
-          }
-        })
-        .catch(() => {
-          if (request === modelRequest.current) setStatusMsg("系统渠道模型读取失败，请检查当前 Base URL 和 API Key");
-        })
-        .finally(() => { if (request === modelRequest.current) setFetchingModels(false); });
-    }
-    return () => { modelRequest.current++; };
-  }, [activeEngine, activeChannel, nativeActive, loadingChannels]);
+  }, [activeEngine]);
+
+  // 当渠道切换或打开弹窗时：若当前渠道配置了 Base URL 且尚未拉取过模型，自动调用接口拉取
+  useEffect(() => {
+    if (!activeChannel || loadingChannels) return;
+    const baseUrl = activeChannel.baseUrl?.trim();
+    if (!baseUrl) return;
+
+    const pId = channelModelKey(activeEngine, activeChannel.id);
+    const existing = state.fetchedModels?.[pId];
+    if (existing && existing.length > 0) return;
+
+    let cancelled = false;
+    const request = ++modelRequest.current;
+    setFetchingModels(true);
+    setStatusMsg("正在通过接口获取模型列表…");
+
+    fetchModelsFromProvider(ctx, baseUrl, activeChannel.apiKey || "")
+      .then(async (models) => {
+        if (cancelled || request !== modelRequest.current) return;
+        if (models.length === 0) {
+          setStatusMsg("接口返回的模型列表为空");
+          return;
+        }
+        const nextState: PluginState = {
+          ...state,
+          fetchedModels: { ...state.fetchedModels, [pId]: models },
+        };
+        if (activeChannel?.isPlugin) {
+          void ensurePiFamilyModelConfigured(activeEngine, activeChannel, models);
+        }
+        setState(nextState);
+        await onSave(nextState);
+        setStatusMsg(`已通过接口获取 ${models.length} 个模型`);
+      })
+      .catch((err) => {
+        if (cancelled || request !== modelRequest.current) return;
+        setStatusMsg(err instanceof Error ? err.message : "接口获取模型失败");
+      })
+      .finally(() => {
+        if (!cancelled && request === modelRequest.current) {
+          setFetchingModels(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeEngine, activeChannel?.id, activeChannel?.baseUrl, activeChannel?.apiKey, loadingChannels]);
 
   const sortedSystemChannels = useMemo(() => {
     if (systemChannels.length <= 1) return systemChannels;
@@ -347,73 +386,84 @@ export function CliModelFlyoutMenu({
     const legacyKey = activeEngine === legacyEngine.current ? activeChannel.id : "";
     const fetched = state.fetchedModels?.[pId] || state.fetchedModels?.[legacyKey] || [];
     const custom = state.customModels?.[pId] || state.customModels?.[legacyKey] || [];
-    const baseDefault = activeChannel.model ? [activeChannel.model] : [];
-
-    const rawObj = activeChannel.raw as { models?: Array<{ id: string; name?: string }> } | undefined;
-    const cfgObj = activeChannel.settingsConfig as { models?: Array<{ id: string; name?: string }> } | undefined;
-    const channelPredefinedModels = (cfgObj?.models || rawObj?.models || []).filter(
-      (m) => m && typeof m.id === "string" && isConcreteModel(m.id),
-    );
-
-    const channelModelIds = channelPredefinedModels.map((m) => m.id);
-    const channelModelIdsSet = new Set(channelModelIds);
-    const channelPrefix = `${activeChannel.id}/`;
-    const stripChannelPrefix = (id: string): string =>
-      id.startsWith(channelPrefix) ? id.slice(channelPrefix.length) : id;
-
-    const matchingNativeModels = nativeModels.filter((m) => {
-      if (nativeActive) return true;
-      if (m.provider && m.provider === activeChannel.id) return true;
-      return channelModelIdsSet.has(m.id) || channelModelIdsSet.has(stripChannelPrefix(m.id));
-    });
 
     const normalizeId = (id: string): string =>
-      nativeActive ? id : stripChannelPrefix(id);
+      nativeActive ? id : displayEngineModel(activeEngine, activeChannel, id);
 
-    const fetchedIds = new Set([
-      ...fetched.map(normalizeId),
-      ...baseDefault.map(normalizeId),
-      ...channelModelIds.map(normalizeId),
-      ...(nativeActive || matchingNativeModels.length > 0
-        ? matchingNativeModels.map((m) => normalizeId(m.id))
-        : []),
-    ]);
-    const rawList = Array.from(new Set([...custom.map(normalizeId), ...fetchedIds])).filter(isConcreteModel);
-    const customSet = new Set(custom);
+    // 可用模型只包含接口获取到的模型以及用户添加的自定义模型，坚决不混入原生模型 ID
+    const normalizedCustom = custom.map(normalizeId).filter(isConcreteModel);
+    const normalizedFetched = fetched.map(normalizeId).filter(isConcreteModel);
+
+    // 构成当前渠道可用模型全集（自定义 + 接口获取）
+    const allChannelModelIds = new Set<string>();
+    for (const id of normalizedCustom) allChannelModelIds.add(id);
+    for (const id of normalizedFetched) allChannelModelIds.add(id);
+
+    const selectedBare = displayEngineModel(
+      activeEngine,
+      activeChannel,
+      (state.selectedModel || "").replace(/\[1m\]$/i, "").trim(),
+    );
+
+    // 当前选中的模型只有在模型列表（自定义或接口拉取）中确实存在时才在列表中保持选中项
+    const isSelectedInList = isConcreteModel(selectedBare) && (
+      allChannelModelIds.has(selectedBare) ||
+      allChannelModelIds.has(normalizeId(selectedBare))
+    );
+    const selectedList = isSelectedInList ? [selectedBare] : [];
+
+    // 顺序：选中的模型 id（若在列表中） -> 自定义模型 id -> 接口拉取到的模型 id 列表
+    const seen = new Set<string>();
+    const rawList: string[] = [];
+    for (const id of selectedList) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        rawList.push(id);
+      }
+    }
+    for (const id of normalizedCustom) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        rawList.push(id);
+      }
+    }
+    for (const id of normalizedFetched) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        rawList.push(id);
+      }
+    }
+
+    const customSet = new Set(custom.map(normalizeId));
+    for (const id of custom) customSet.add(id);
 
     if (rawList.length > 0) {
       return rawList.map((m) => {
-        const native = matchingNativeModels.find(
-          (entry) => normalizeId(entry.id) === m || entry.id === m || entry.id === `${activeChannel.id}/${m}`,
-        ) || (nativeActive
-          ? nativeModels.find((entry) => normalizeId(entry.id) === m || entry.id === m || entry.id === `${activeChannel.id}/${m}`)
-          : undefined);
-        const predefined = channelPredefinedModels.find((entry) => normalizeId(entry.id) === m || entry.id === m);
-
-        if (native || predefined) {
-          return {
-            id: m,
-            label: predefined?.name || native?.name || m,
-            description: native?.description || (activeChannel.name ? `${activeChannel.name}` : "CLI 原生配置"),
-            custom: false,
-          };
-        }
+        const isCustom = customSet.has(m) || customSet.has(normalizeId(m));
         let desc: string | undefined;
         const lower = m.toLowerCase();
         if (lower.includes("gemini")) desc = "Google Gemini";
-        else if (lower.includes("opus")) desc = "Custom Opus model";
-        else if (lower.includes("fable")) desc = "Custom Fable model";
-        else if (lower.includes("sonnet")) desc = "Custom Sonnet model";
-        else if (lower.includes("haiku")) desc = "Custom Haiku model";
-        else if (lower.includes("gpt") || lower.includes("codex") || lower.includes("o1") || lower.includes("o3")) desc = "OpenAI model";
+        else if (lower.includes("opus")) desc = "Claude Opus";
+        else if (lower.includes("fable")) desc = "Claude Fable";
+        else if (lower.includes("sonnet")) desc = "Claude Sonnet";
+        else if (lower.includes("haiku")) desc = "Claude Haiku";
+        else if (lower.includes("gpt") || lower.includes("codex") || lower.includes("o1") || lower.includes("o3") || lower.includes("o4")) desc = "OpenAI model";
         else if (lower.includes("deepseek")) desc = "DeepSeek model";
         else if (lower.includes("qwen")) desc = "Qwen model";
-        return { id: m, label: m, description: desc, custom: customSet.has(m) && !fetchedIds.has(m) };
+        else if (lower.includes("kimi") || lower.includes("moonshot")) desc = "Moonshot Kimi";
+        else if (lower.includes("grok")) desc = "xAI Grok";
+        else if (activeChannel.name) desc = activeChannel.name;
+        return {
+          id: m,
+          label: m,
+          description: desc,
+          custom: isCustom,
+        };
       });
     }
 
     return [];
-  }, [activeChannel, activeEngine, nativeActive, nativeModels, state.fetchedModels, state.customModels]);
+  }, [activeChannel, activeEngine, nativeActive, state.fetchedModels, state.customModels, state.selectedModel]);
 
   const filteredModelOptions = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -421,13 +471,18 @@ export function CliModelFlyoutMenu({
     return modelOptions.filter((m) => m.label.toLowerCase().includes(q) || (m.description && m.description.toLowerCase().includes(q)));
   }, [modelOptions, searchQuery]);
 
-  const bareSelectedModel = state.selectedModel.replace(/\[1m\]$/, "");
+  const bareSelectedModel = displayEngineModel(
+    activeEngine,
+    activeChannel,
+    state.selectedModel.replace(/\[1m\]$/i, ""),
+  );
   const nativeIds = nativeActive ? nativeModels.map((model) => model.id) : undefined;
   const compatibilityFor = (model: string) => {
-    const protocols = nativeModels.find((entry) => entry.id === model.replace(/\[1m\]$/i, ""))?.protocols;
+    const cleanId = model.replace(/\[1m\]$/i, "");
+    const protocols = nativeModels.find((entry) => entry.id === cleanId)?.protocols;
     return nativeActive ? {
       nativeIds,
-      authoritative: nativeAuthoritative && nativeIds?.includes(model.replace(/\[1m\]$/i, "")),
+      authoritative: false, // 允许选择从接口拉取到的任意有效模型，不被本地静态目录限制
       modelProtocols: Array.isArray(protocols) ? protocols : undefined,
       engineProtocols: engines.find((engine) => engine.id === activeEngine)?.supportedProtocols,
     } : undefined;
@@ -438,21 +493,25 @@ export function CliModelFlyoutMenu({
   const commitSelection = async (nextState: PluginState) => {
     if (busy || fetchingModels || selectionPending.current) return false;
     const targetModel = (nextState.selectedModel || activeChannel?.model || "").trim();
-    const error = selectionError(targetModel);
+    const hostModel = qualifyEngineModel(activeEngine, activeChannel, targetModel);
+    const error = selectionError(targetModel) || (hostModel ? selectionError(hostModel) : null);
     if (error) { setStatusMsg(error); return false; }
     selectionPending.current = true;
     setSwitching(true);
     try {
+      if (activeChannel?.isPlugin && targetModel) {
+        await ensurePiFamilyModelConfigured(activeEngine, activeChannel, targetModel);
+      }
       await applyModelSelectionToHost({
         engine: activeEngine,
-        model: targetModel,
+        model: hostModel,
         effort: nextState.effort,
         enable1M: nextState.enable1MContext,
-        compatibility: compatibilityFor(targetModel),
+        compatibility: compatibilityFor(targetModel) || compatibilityFor(hostModel),
       });
       const sessionError = sessionSelectionError(activeEngine);
       if (sessionError) throw new Error(sessionError);
-      const cleanModel = targetModel.replace(/\[1m\]$/i, "");
+      const cleanModel = displayEngineModel(activeEngine, activeChannel, hostModel);
       const saved = { ...nextState, selectedCli: activeEngine, selectedModel: cleanModel };
       await onSave(saved);
       setState(saved);
@@ -481,48 +540,42 @@ export function CliModelFlyoutMenu({
 
   const handleFetchModels = async () => {
     if (busy || fetchingModels) return;
-    if (!activeChannel || (!nativeActive && !activeChannel.baseUrl)) {
-      setStatusMsg("当前渠道未配置 Base URL");
+    if (!activeChannel) return;
+    const baseUrl = activeChannel.baseUrl?.trim();
+    if (!baseUrl) {
+      setStatusMsg("当前渠道未配置 Base URL，无法通过接口获取模型");
       return;
     }
     setFetchingModels(true);
     const request = ++modelRequest.current;
-    setStatusMsg("正在探测 CLI 与拉取模型...");
+    setStatusMsg("正在通过接口获取模型列表…");
     try {
       const freshEnginesPromise = getSystemEngines(true).catch(() => null);
-      if (nativeActive) {
-        invalidateNativeCatalogCache(activeEngine);
-        const [catalog, freshEngines] = await Promise.all([
-          loadNativeChannelModels(ctx, activeEngine, activeChannel, true),
-          freshEnginesPromise,
-        ]);
-        if (freshEngines && freshEngines.length > 0) setEngines(freshEngines);
-        if (request !== modelRequest.current) return;
-        setNativeModels(catalog.models);
-        setNativeAuthoritative(catalog.authoritative);
-        setStatusMsg(`已更新 CLI 状态并读取 ${catalog.models.length} 个系统渠道模型`);
-        return;
-      }
       const [models, freshEngines] = await Promise.all([
-        fetchModelsFromProvider(ctx, activeChannel.baseUrl, activeChannel.apiKey),
+        fetchModelsFromProvider(ctx, baseUrl, activeChannel.apiKey || ""),
         freshEnginesPromise,
       ]);
       if (freshEngines && freshEngines.length > 0) setEngines(freshEngines);
       if (request !== modelRequest.current) return;
       if (models.length === 0) {
-        setStatusMsg("返回模型列表为空");
+        setStatusMsg("接口返回的模型列表为空");
       } else {
         const pId = channelModelKey(activeEngine, activeChannel.id);
         const nextState: PluginState = {
           ...state,
           fetchedModels: { ...state.fetchedModels, [pId]: models },
         };
+        if (activeChannel?.isPlugin) {
+          void ensurePiFamilyModelConfigured(activeEngine, activeChannel, models);
+        }
         setState(nextState);
         await onSave(nextState);
-        setStatusMsg(`已拉取 ${models.length} 个模型`);
+        setStatusMsg(`已通过接口获取 ${models.length} 个模型`);
       }
     } catch (e) {
-      if (request === modelRequest.current) setStatusMsg(e instanceof Error ? e.message : "拉取失败");
+      if (request === modelRequest.current) {
+        setStatusMsg(e instanceof Error ? e.message : "接口获取模型失败");
+      }
     } finally {
       if (request === modelRequest.current) setFetchingModels(false);
     }
@@ -564,29 +617,32 @@ export function CliModelFlyoutMenu({
   const handleSelectSystemProvider = async (channel: { id: string; name: string; model?: string }) => {
     if (busy || fetchingModels || selectionPending.current) return;
     if (state.activeChannelType !== "plugin" && channel.id === (state.selectedProviderId || currentChannelId)) return;
-    const error = sessionSelectionError(activeEngine) || (channel.model ? modelSelectionError(activeEngine, channel.model) : null);
+    const hostModel = qualifyEngineModel(activeEngine, channel, channel.model || "");
+    const error = sessionSelectionError(activeEngine) || (hostModel ? modelSelectionError(activeEngine, hostModel) : null);
     if (error) { setStatusMsg(error); return; }
     selectionPending.current = true;
     setSwitching(true);
     const nextState: PluginState = {
       ...state,
       selectedProviderId: channel.id,
-      selectedModel: "",
+      selectedModel: displayEngineModel(activeEngine, channel, hostModel),
       activeChannelType: "system",
       activePluginChannelId: undefined,
     };
     try {
-      await setSystemCurrentProvider(activeEngine, channel.id);
+      await applyChannelSelectionToHost({ engine: activeEngine, providerId: channel.id });
       setCurrentChannelId(channel.id);
       setState(nextState);
       await onSave(nextState);
-      await applyModelSelectionToHost({
-        engine: activeEngine,
-        model: "",
-        effort: state.effort,
-        enable1M: state.enable1MContext,
-      });
-      setStatusMsg(`已生效: ${channel.name}`);
+      if (hostModel) {
+        await applyModelSelectionToHost({
+          engine: activeEngine,
+          model: hostModel,
+          effort: state.effort,
+          enable1M: state.enable1MContext,
+        });
+      }
+      setStatusMsg(hostModel ? `已生效: ${channel.name}` : "渠道已切换，请选择模型");
       setTimeout(() => setStatusMsg(null), 2000);
     } catch (e) {
       setStatusMsg(e instanceof Error ? e.message : "切换失败");
@@ -598,7 +654,9 @@ export function CliModelFlyoutMenu({
 
   const handleSelectPluginChannel = async (channel: CustomPluginChannel) => {
     if (busy || fetchingModels || selectionPending.current) return;
-    const error = sessionSelectionError(activeEngine) || (channel.model ? modelSelectionError(activeEngine, channel.model) : null);
+    const pluginChannel = { ...channel, isPlugin: true as const };
+    const hostModel = qualifyEngineModel(activeEngine, pluginChannel, channel.model || "");
+    const error = sessionSelectionError(activeEngine) || (hostModel ? modelSelectionError(activeEngine, hostModel) : null);
     if (error) { setStatusMsg(error); return; }
     selectionPending.current = true;
     setSwitching(true);
@@ -607,14 +665,17 @@ export function CliModelFlyoutMenu({
       activeChannelType: "plugin",
       activePluginChannelId: channel.id,
       selectedProviderId: channel.id,
-      selectedModel: "",
+      selectedModel: displayEngineModel(activeEngine, pluginChannel, hostModel),
     };
     try {
       await applyCustomPluginChannelToEngine(ctx, activeEngine, channel);
-      await applyModelSelectionToHost({ engine: activeEngine, model: "" });
+      await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(channel.id) });
+      if (hostModel) {
+        await applyModelSelectionToHost({ engine: activeEngine, model: hostModel, effort: state.effort, enable1M: state.enable1MContext });
+      }
       setState(nextState);
       await onSave(nextState);
-      setStatusMsg(`已生效: ${channel.name}`);
+      setStatusMsg(hostModel ? `已生效: ${channel.name}` : "渠道已切换，请选择模型");
       setTimeout(() => setStatusMsg(null), 2000);
     } catch (e) {
       setStatusMsg(`应用失败: ${e instanceof Error ? e.message : String(e)}`);
@@ -626,7 +687,8 @@ export function CliModelFlyoutMenu({
 
   const handleSaveNewChannel = async () => {
     if (viewingChannelId || busy || fetchingModels || selectionPending.current) return;
-    const error = sessionSelectionError(activeEngine) || (channelForm.model ? modelSelectionError(activeEngine, channelForm.model) : null);
+    const formModel = channelForm.model.trim();
+    const error = sessionSelectionError(activeEngine) || (formModel ? modelSelectionError(activeEngine, formModel) : null);
     if (error) { setStatusMsg(error); return; }
     if (!channelForm.name.trim()) { setStatusMsg("请输入渠道名称"); return; }
     if (!channelForm.baseUrl.trim()) { setStatusMsg("请输入 Base URL"); return; }
@@ -649,13 +711,15 @@ export function CliModelFlyoutMenu({
       createdAt: Date.now(),
     };
 
+    const pluginChannel = { ...newChan, isPlugin: true as const };
+    const hostModel = qualifyEngineModel(activeEngine, pluginChannel, newChan.model || "");
     const currentList = state.pluginChannels?.[activeEngine] || [];
     const nextState: PluginState = {
       ...state,
       activeChannelType: "plugin",
       activePluginChannelId: newChan.id,
       selectedProviderId: newChan.id,
-      selectedModel: "",
+      selectedModel: displayEngineModel(activeEngine, pluginChannel, hostModel),
       pluginChannels: {
         ...state.pluginChannels,
         [activeEngine]: editingChannelId ? currentList.map((c) => (c.id === editingChannelId ? newChan : c)) : [newChan, ...currentList],
@@ -666,6 +730,10 @@ export function CliModelFlyoutMenu({
     setSwitching(true);
     try {
       await applyCustomPluginChannelToEngine(ctx, activeEngine, newChan);
+      await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(newChan.id) });
+      if (hostModel) {
+        await applyModelSelectionToHost({ engine: activeEngine, model: hostModel, effort: state.effort, enable1M: state.enable1MContext });
+      }
       await onSave(nextState);
       setState(nextState);
       setChannelTab("plugin");
@@ -705,7 +773,7 @@ export function CliModelFlyoutMenu({
       };
       await deleteCustomPluginChannel(activeEngine, channelId);
       if (isDeletingCurrent) {
-        await setSystemCurrentProvider(activeEngine, fallbackId);
+        await applyChannelSelectionToHost({ engine: activeEngine, providerId: fallbackId });
         setCurrentChannelId(fallbackId);
       }
       await onSave(nextState);

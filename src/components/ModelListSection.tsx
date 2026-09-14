@@ -148,7 +148,10 @@ export function ModelListSection({
                 >
                   <ProjectEngineIcon engine={modelBrand} size={18} />
                   <span className="ms-row-copy">
-                    <span className="ms-row-title">{opt.label}</span>
+                    <span className="ms-row-title">
+                      <span className="ms-row-name">{opt.label}</span>
+                      {opt.custom ? <span className="ms-custom-badge">自定义</span> : null}
+                    </span>
                     {opt.description ? (
                       <span className="ms-row-detail">{opt.description}</span>
                     ) : null}

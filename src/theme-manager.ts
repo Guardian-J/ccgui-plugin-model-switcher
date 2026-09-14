@@ -1,6 +1,6 @@
 import type { PluginContext } from "./ccgui-plugin";
 import { paletteCss, THEME_PALETTES } from "./theme-palette";
-import { toolTimelineCss, toolTimelineGlassCss } from "./tool-timeline-theme";
+import { toolTimelineCss } from "./tool-timeline-theme";
 import { customThemeColor, paletteFromColor, isBackgroundImage, type CustomPalette } from "./theme-customization";
 
 export interface GuiThemeConfig {
@@ -20,8 +20,10 @@ export interface GuiThemeConfig {
   backdropOpacity: number;
   backdropBlur: number;
   enableTimelinePolish: boolean;
-  /** 启用亚克力/毛玻璃效果 */
-  enableGlassmorphism: boolean;
+  /** 会话页签精修（当前会话纯净卡片高亮浮起） */
+  enableTabPolish: boolean;
+  /** Legacy: 毛玻璃设置，保留字段以兼容旧配置 */
+  enableGlassmorphism?: boolean;
   /** 全局聚焦光晕，保留旧字段名以兼容已保存的设置 */
   enableComposerGlow: boolean;
   /** 启用极简胶囊滚动条 */
@@ -45,7 +47,8 @@ export const DEFAULT_THEME_CONFIG: GuiThemeConfig = {
   backdropOpacity: 45,
   backdropBlur: 6,
   enableTimelinePolish: true,
-  enableGlassmorphism: true,
+  enableTabPolish: true,
+  enableGlassmorphism: false,
   enableComposerGlow: true,
   enableSleekScrollbars: true,
   enableCardPolish: true,
@@ -71,8 +74,8 @@ export const THEME_PRESETS: ThemePresetOption[] = [
   },
   {
     id: "acrylic",
-    name: "深空毛玻璃 (Acrylic Glass)",
-    desc: "优雅的背景微透毛玻璃虚化与发光边框质感",
+    name: "深空雅致 (Deep Slate)",
+    desc: "通透沉稳的深空色调与克制层次感",
     accent: "#6366f1",
     badge: "推荐",
   },
@@ -122,34 +125,12 @@ export function generateThemeCss(config: GuiThemeConfig): string {
       paletteCss(palette.light, false),
       paletteCss(palette.dark, true),
     );
-  if (config.enableGlassmorphism) parts.push(`
-    :root {
-      --ms-glass-surface: color-mix(in srgb, var(--color-background-primary-default, #fff) 88%, transparent);
-      --ms-glass-raised: color-mix(in srgb, var(--color-background-primary-default, #fff) 95%, transparent);
-      --ms-glass-edge: #ffffffb8;
-      --ms-glass-border: color-mix(in srgb, var(--color-separator-border, #ccd2d8) 78%, transparent);
-      --ms-glass-highlight: linear-gradient(135deg, #ffffff24, #ffffff00 52%);
-      --ms-glass-shadow: 0 3px 10px #1323310b;
-    }
-    :root.dark, .dark {
-      --ms-glass-surface: color-mix(in srgb, var(--color-background-primary-default, #242629) 92%, transparent);
-      --ms-glass-raised: color-mix(in srgb, var(--color-background-primary-default, #242629) 97%, transparent);
-      --ms-glass-edge: #ffffff24;
-      --ms-glass-border: color-mix(in srgb, var(--color-separator-border, #495057) 88%, #ffffff18);
-      --ms-glass-highlight: linear-gradient(135deg, #ffffff09, #ffffff00 52%);
-      --ms-glass-shadow: 0 3px 10px #00000026;
-    }
-  `);
   if (config.enableBackdropPolish) {
     const opacity = Number.isFinite(config.backdropOpacity) ? Math.min(80, Math.max(20, config.backdropOpacity)) : 45;
     const blur = Number.isFinite(config.backdropBlur) ? Math.min(16, Math.max(0, config.backdropBlur)) : 6;
     parts.push(`
       :root { --color-overlay-backdrop: color-mix(in srgb, var(--ms-backdrop-ink, #18202a) ${opacity}%, transparent); }
       .bg-overlay-backdrop { background-color: var(--color-overlay-backdrop); }
-      ${config.enableGlassmorphism ? `.bg-overlay-backdrop {
-        background-image: linear-gradient(180deg, #ffffff08, #00000014);
-        box-shadow: inset 0 1px var(--ms-glass-edge);
-      }` : ''}
       @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
         .bg-overlay-backdrop { backdrop-filter: blur(${blur}px); -webkit-backdrop-filter: blur(${blur}px); }
       }
@@ -192,7 +173,6 @@ export function generateThemeCss(config: GuiThemeConfig): string {
       }
     `);
     parts.push(toolTimelineCss);
-    if (config.enableGlassmorphism) parts.push(toolTimelineGlassCss);
   }
   if (config.enableFontSmoothing) {
     parts.push(
@@ -206,36 +186,6 @@ export function generateThemeCss(config: GuiThemeConfig): string {
       ::-webkit-scrollbar-track { background: transparent; }
       ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--color-text-secondary, #888) 35%, transparent); border-radius: 6px; }
       ::-webkit-scrollbar-thumb:hover { background: var(--color-text-secondary, #888); }
-    `);
-  }
-  if (config.enableGlassmorphism) {
-    const framed = ':is(body, #root) :is(.shadow-dropdown, .ms-flyout, [role="dialog"].bg-background-primary-default, div.rounded-2xl.border.p-2.shadow-xs)';
-    parts.push(`
-      ${framed} {
-        background-color: var(--color-background-primary-default, #fff);
-        background-image: var(--ms-glass-highlight);
-        background-attachment: scroll;
-        border-color: var(--ms-glass-border);
-        box-shadow: inset 0 1px var(--ms-glass-edge), var(--shadow-dropdown, 0 12px 32px #00000020);
-      }
-      ${config.enableTimelinePolish ? `.overflow-y-auto:has(> [data-virtual-inner]) {
-        box-shadow: inset 0 1px var(--ms-glass-edge);
-      }` : ''}
-      @supports ((backdrop-filter: blur(12px)) or (-webkit-backdrop-filter: blur(12px))) {
-        ${framed} {
-          background-color: var(--ms-glass-surface);
-          backdrop-filter: blur(16px) saturate(115%);
-          -webkit-backdrop-filter: blur(16px) saturate(115%);
-        }
-      }
-      @media (prefers-reduced-transparency: reduce) {
-        ${framed} {
-          background-color: var(--color-background-primary-default, #fff);
-          background-image: none;
-          backdrop-filter: none;
-          -webkit-backdrop-filter: none;
-        }
-      }
     `);
   }
   if (config.enableComposerGlow) {
@@ -262,6 +212,32 @@ export function generateThemeCss(config: GuiThemeConfig): string {
       .prose-chat table { border-color: var(--color-border-table, #ddd); }
     `);
   }
+
+  if (config.enableTabPolish) {
+    // 顶栏会话页签（SessionTabStrip）微调：采用 Linear/macOS 分段卡片质感，克制清晰
+    parts.push(`
+      /* 当前激活会话页签：纯白/高对比立体浮起卡片，清晰但克制 */
+      [role="tablist"] > div[data-tab-key]:has([role="tab"][aria-selected="true"]),
+      [role="tablist"] > div[data-tab-key].bg-background-secondary-default {
+        background-color: #ffffff !important;
+        color: var(--color-text-primary, #111827) !important;
+        font-weight: 500 !important;
+        border: 1px solid color-mix(in srgb, var(--color-separator-border, #d1d5db) 75%, transparent) !important;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 1px rgba(0, 0, 0, 0.04) !important;
+      }
+
+      :root.dark [role="tablist"] > div[data-tab-key]:has([role="tab"][aria-selected="true"]),
+      :root.dark [role="tablist"] > div[data-tab-key].bg-background-secondary-default,
+      .dark [role="tablist"] > div[data-tab-key]:has([role="tab"][aria-selected="true"]),
+      .dark [role="tablist"] > div[data-tab-key].bg-background-secondary-default {
+        background-color: var(--color-background-primary-default, #1e2023) !important;
+        color: var(--color-text-primary, #f3f4f6) !important;
+        border: 1px solid color-mix(in srgb, var(--color-separator-border, #4b5563) 60%, transparent) !important;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+      }
+    `);
+  }
+
   const hasImage = config.backgroundEnabled && isBackgroundImage(config.backgroundImage);
   if (palette || hasImage) {
     // Fixed attachment aligns the same image across opaque host surfaces, including portals.
@@ -269,7 +245,7 @@ export function generateThemeCss(config: GuiThemeConfig): string {
     const surfaces = `:is(body, #root,
       :is(div, main, section, aside, header, footer, nav)[class~="bg-background-full"]:not([data-virtual-inner] *),
       :is(div, main, section, aside, header, footer, nav)[class~="bg-background-primary-default"]:not([data-virtual-inner] *),
-      :is(div, main, section, aside, header, footer, nav)[class~="bg-background-secondary-default"]:not([data-virtual-inner] *),
+      :is(div, main, section, aside, header, footer, nav)[class~="bg-background-secondary-default"]:not([data-virtual-inner] *):not([data-tab-key]),
       .overflow-y-auto:has(> [data-virtual-inner]), .ms-flyout, .ms-channels,
       [role="dialog"], .shadow-dropdown)`;
     const canvas = 'var(--ms-canvas, var(--color-background-full, #f2f2f2))';

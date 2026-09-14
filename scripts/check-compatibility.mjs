@@ -339,7 +339,7 @@ const switchWrites = calls.slice(writeCountBeforeSwitch);
 assert.deepEqual(
   switchWrites.map((item) => item.command),
   ["set_current_provider", "set_current_provider", "set_current_provider"],
-  "plugin channel switch must call host set_current_provider",
+  "explicit global default updates must call host set_current_provider",
 );
 assert.deepEqual(switchWrites[0].args, {
   engine: "codex",
@@ -425,12 +425,11 @@ for (const engine of ["claude", "codex", "kimi", "grok", "pi", "omp"]) {
         "pi_family_models_config_read",
         "pi_family_models_config_write",
         "upsert_provider",
-        "set_current_provider",
         "pi_family_models_config_read",
         "pi_family_models_config_write",
         "delete_provider",
       ]
-    : ["upsert_provider", "set_current_provider", "delete_provider"];
+    : ["upsert_provider", "delete_provider"];
   assert.deepEqual(
     writes.map((item) => item.command),
     expectedCommands,
@@ -464,10 +463,39 @@ for (const engine of ["claude", "codex", "kimi", "grok", "pi", "omp"]) {
     assert.match(written.args.text, /openai-completions/);
     assert.match(written.args.text, new RegExp(hostId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
-  assert.deepEqual(writes.find((item) => item.command === "set_current_provider").args, { engine, id: hostId });
+  assert.equal(writes.some((item) => item.command === "set_current_provider"), false, "Plugin channel operations must not write the global default");
   assert.deepEqual(writes.find((item) => item.command === "delete_provider").args, { engine, id: hostId });
 }
-console.log("Provider switching syncs host channels and the current provider.");
+const pluginOmpChannel = { id: "custom_1", isPlugin: true };
+assert.equal(
+  bridge.qualifyEngineModel("omp", pluginOmpChannel, "gemini-3.1-pro-preview"),
+  "plugin_model-switcher_custom_1/gemini-3.1-pro-preview",
+);
+assert.equal(
+  bridge.qualifyEngineModel("omp", pluginOmpChannel, "plugin_model-switcher_custom_1/gemini-3.1-pro-preview"),
+  "plugin_model-switcher_custom_1/gemini-3.1-pro-preview",
+);
+assert.equal(
+  bridge.qualifyEngineModel("omp", pluginOmpChannel, "custom_1/gemini-3.1-pro-preview"),
+  "plugin_model-switcher_custom_1/gemini-3.1-pro-preview",
+);
+assert.equal(
+  bridge.displayEngineModel("omp", pluginOmpChannel, "plugin_model-switcher_custom_1/gemini-3.1-pro-preview"),
+  "gemini-3.1-pro-preview",
+);
+assert.equal(
+  bridge.qualifyEngineModel("omp", { id: "custom-omp" }, "omp-model-1"),
+  "custom-omp/omp-model-1",
+);
+assert.equal(
+  bridge.qualifyEngineModel("claude", pluginOmpChannel, "claude-sonnet"),
+  "claude-sonnet",
+);
+assert.equal(
+  bridge.qualifyEngineModel("omp", { id: bridge.NATIVE_PROVIDER_ID, isNative: true }, "google/gemini"),
+  "google/gemini",
+);
+console.log("Plugin channel operations sync host providers without changing the global default.");
 const parser = await loadModule("../src/pi-family-parser.ts");
 const yaml = `providers:
   custom-omp:
@@ -488,6 +516,21 @@ assert.match(upserted, /api: anthropic-messages/);
 assert.match(upserted, /custom-omp:/);
 assert.match(upserted, /plugin_model-switcher_test:/);
 assert.match(upserted, /omp-model-1/);
+const appendedModelsYaml = parser.upsertPiFamilyProviderText(
+  upserted,
+  "yaml",
+  "plugin_model-switcher_test",
+  {
+    name: "Relay",
+    baseUrl: "https://example.invalid",
+    apiKey: "test-only",
+    api: "anthropic-messages",
+    model: "gemini-3.8-flash",
+  },
+);
+assert.match(appendedModelsYaml, /- id: "alias"/);
+assert.match(appendedModelsYaml, /- id: "gemini-3.8-flash"/);
+
 const patchedMissingApi = parser.upsertPiFamilyProviderText(
   `providers:
   plugin_model-switcher_test:
@@ -662,7 +705,28 @@ assert.deepEqual(JSON.parse(storage.get(tabsKey))[1], history, "Switching a pend
 footer.memoizedProps.active = history;
 await assert.rejects(() => sync.applyModelSelectionToHost({ engine: "claude", model: "claude-test" }), /当前会话/);
 window.__TAURI_INTERNALS__.invoke = invokeBeforeSwitch;
+const channelCalls = [];
+menu.memoizedProps.onChannelChange = (engine, providerId) => channelCalls.push([engine, providerId]);
+for (const session of [pending, history, null]) {
+  footer.memoizedProps.active = session;
+  storage.set(activeKey, JSON.stringify(session));
+  storage.set(tabsKey, JSON.stringify([pending, history]));
+  const before = calls.length;
+  const providerId = bridge.pluginProviderId("test");
+  await sync.applyChannelSelectionToHost({ engine: "codex", providerId });
+  assert.deepEqual(channelCalls.at(-1), ["codex", providerId]);
+  assert.equal(calls.length, before, "Channel selection must not write global defaults, including blank or absent sessions");
+  const stored = JSON.parse(storage.get(activeKey));
+  assert.deepEqual(stored, session ? { ...session, provider: providerId } : null);
+  assert.deepEqual(JSON.parse(storage.get(tabsKey)), [pending, history].map(tab =>
+    session && tab.sessionId === session.sessionId ? { ...tab, provider: providerId } : tab));
+}
 delete globalThis.document;
+const beforeFallback = calls.length;
+storage.set(activeKey, JSON.stringify(pending));
+await sync.applyChannelSelectionToHost({ engine: "codex", providerId: "relay" });
+assert.equal(JSON.parse(storage.get(activeKey)).provider, "relay");
+assert.equal(calls.length, beforeFallback, "Missing host callbacks must not fall back to writing global defaults");
 delete globalThis.localStorage;
 console.log("Pending CLI selection, live session guards, streaming locks and host retargeting passed.");
 
@@ -681,6 +745,9 @@ for (const [name, variants] of Object.entries(THEME_PALETTES)) {
     assert(contrast("#ffffff", colors.accent) >= 4.5, `${name}/${mode}: user bubble text contrast`);
   }
 }
+const tabCss = themes.generateThemeCss(themes.DEFAULT_THEME_CONFIG);
+assert.match(tabCss, /\[role="tablist"\] > div\[data-tab-key\]:has\(\[role="tab"\]\[aria-selected="true"\]\)/);
+
 let savedTheme = { preset: "nordic", canvasStyle: "diagonal", enableGlassmorphism: false, customCss: ".user-rule { color: red; }" };
 let activeStyles = 0;
 const themeCtx = {
@@ -690,7 +757,7 @@ const themeCtx = {
 const manager = new themes.GuiThemeManager(themeCtx);
 await manager.init();
 assert.equal(manager.getConfig().canvasStyle, "plain", "Migrate old theme settings with new defaults");
-assert.equal(manager.getConfig().enableGlassmorphism, false, "Preserve old effect preferences");
+assert.equal(manager.getConfig().enableTabPolish, true, "Default tab polish to enabled");
 await manager.updateConfig({ preset: "graphite", backdropOpacity: 60, canvasStyle: "grid" });
 assert.equal(activeStyles, 1, "Live theme replacement must not accumulate stylesheets");
 assert.equal(savedTheme.preset, "graphite");

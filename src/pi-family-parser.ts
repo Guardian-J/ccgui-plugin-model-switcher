@@ -149,6 +149,35 @@ export interface PiFamilyProviderPatch {
   apiKey: string;
   api: PiFamilyApiProtocol;
   model?: string;
+  models?: Array<{ id: string; name?: string } | string>;
+}
+
+function mergePiFamilyModels(
+  existing: Array<{ id: string; name?: string }>,
+  patch: PiFamilyProviderPatch,
+): Array<{ id: string; name?: string }> {
+  const result: Array<{ id: string; name?: string }> = [];
+  const seen = new Set<string>();
+
+  const add = (item?: { id?: string; name?: string } | string) => {
+    if (!item) return;
+    const id = typeof item === "string" ? item.trim() : item.id?.trim();
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    const name = typeof item === "object" && item.name?.trim() ? item.name.trim() : undefined;
+    result.push(name ? { id, name } : { id });
+  };
+
+  if (patch.model?.trim()) {
+    add(patch.model.trim());
+  }
+  if (Array.isArray(patch.models)) {
+    for (const m of patch.models) add(m);
+  }
+  for (const m of existing) {
+    add(m);
+  }
+  return result;
 }
 
 function yamlProviderKey(line: string): string | null {
@@ -207,17 +236,31 @@ function findYamlProviderLineRange(lines: string[], id: string): YamlProviderLin
   return { providersIndex, keyIndent, startLine, endLine };
 }
 
-function renderYamlProviderLines(id: string, patch: PiFamilyProviderPatch): string[] {
+function renderYamlProviderLines(
+  id: string,
+  patch: PiFamilyProviderPatch,
+  models: Array<{ id: string; name?: string }>,
+): string[] {
+  // omp: anthropic-messages 且未写 auth 时会强制 isOAuth，请求被塑成 Claude Code
+  // OAuth（Accept: json、?beta=true），中转站按 SSE/API Key 走就会卡 1–2 分钟。
+  // 独立渠道一律走 baseUrl + apiKey，显式关掉 OAuth。
   const lines = [
     `  ${id}:`,
     `    name: ${JSON.stringify(patch.name)}`,
     `    baseUrl: ${JSON.stringify(patch.baseUrl)}`,
     `    api: ${patch.api}`,
+    `    auth: apiKey`,
     `    apiKey: ${JSON.stringify(patch.apiKey)}`,
   ];
-  const model = patch.model?.trim();
-  if (model) {
-    lines.push("    models:", `      - id: ${JSON.stringify(model)}`);
+  if (models.length > 0) {
+    lines.push("    models:");
+    for (const m of models) {
+      if (m.name && m.name !== m.id) {
+        lines.push(`      - id: ${JSON.stringify(m.id)}`, `        name: ${JSON.stringify(m.name)}`);
+      } else {
+        lines.push(`      - id: ${JSON.stringify(m.id)}`);
+      }
+    }
   } else {
     lines.push("    models: []");
   }
@@ -242,8 +285,12 @@ export function upsertPiFamilyProviderText(
     if (lines.length === 0 || !lines.some((l) => /^providers\s*:/.test(l.trim()))) {
       lines = ["providers:"];
     }
+    const existingProviders = parsePiFamilyProviders(text, "yaml");
+    const existingModels = existingProviders[id]?.models || [];
+    const mergedModels = mergePiFamilyModels(existingModels, nextPatch);
+
     const range = findYamlProviderLineRange(lines, id);
-    const newBlockLines = renderYamlProviderLines(id, nextPatch);
+    const newBlockLines = renderYamlProviderLines(id, nextPatch, mergedModels);
 
     if (!range || range.startLine < 0) {
       const pIdx = range?.providersIndex ?? lines.findIndex((l) => /^providers\s*:/.test(l.trim()));
@@ -258,18 +305,19 @@ export function upsertPiFamilyProviderText(
   const obj = JSON.parse(stripped) as { providers?: Record<string, Record<string, unknown>> };
   const providers = obj.providers && typeof obj.providers === "object" ? obj.providers : {};
   const prev = providers[id] && typeof providers[id] === "object" ? providers[id] : {};
-  const models = Array.isArray(prev.models) ? [...prev.models] : [];
-  const model = nextPatch.model?.trim();
-  if (model && !models.some((item) => item && typeof item === "object" && (item as { id?: string }).id === model)) {
-    models.unshift({ id: model });
-  }
+  const existingModels = Array.isArray(prev.models)
+    ? prev.models.map((m: any) => typeof m === "string" ? { id: m } : { id: m.id, name: m.name })
+    : [];
+  const mergedModels = mergePiFamilyModels(existingModels, nextPatch);
+
   providers[id] = {
     ...prev,
     name: nextPatch.name,
     baseUrl: nextPatch.baseUrl,
     api: nextPatch.api,
+    auth: "apiKey",
     apiKey: nextPatch.apiKey,
-    models,
+    models: mergedModels,
   };
   return `${JSON.stringify({ ...obj, providers }, null, 2)}\n`;
 }

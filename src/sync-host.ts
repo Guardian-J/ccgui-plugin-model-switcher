@@ -6,12 +6,14 @@ interface HostCliMenuCallbacks {
   onModelChange?: (engine: string, model: string) => void;
   onChange?: (engine: string) => void;
   onEffortChange?: (engine: string, effort: string) => void;
+  onChannelChange?: (engine: string, channelId: string) => void;
 }
 
 interface HostCliMenuProps extends HostCliMenuCallbacks {
   value?: string;
   models?: Record<string, string>;
   efforts?: Record<string, string>;
+  selectedChannels?: Record<string, string>;
   session?: HostSession | null;
   streaming?: boolean;
   lastUsedModel?: string;
@@ -218,9 +220,11 @@ export function getHostCliMenuProps(anchor?: HTMLElement | null): HostCliMenuPro
         onModelChange: props.onModelChange,
         onChange: props.onChange,
         onEffortChange: props.onEffortChange,
+        onChannelChange: props.onChannelChange,
         value: props.value,
         models: props.models,
         efforts: props.efforts,
+        selectedChannels: props.selectedChannels,
       };
     }
     if (result && props && Object.prototype.hasOwnProperty.call(props, "active") &&
@@ -423,5 +427,79 @@ export async function applyModelSelectionToHost(params: {
   // 4. 派发通知事件
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("ccgui:model-changed", { detail: { engine, model: finalModel, effort } }));
+  }
+}
+
+/**
+ * 同步更新本地存储中的 activeSession 与 openTabs 中的会话渠道
+ */
+export function syncSessionProviderToLocalStorage(engine: string, providerId: string): void {
+  if (typeof localStorage === "undefined") return;
+
+  const ACTIVE_KEY = "ccgui-next.activeSession:v1";
+  const TABS_KEY = "ccgui-next.openTabs:v1";
+
+  try {
+    const activeRaw = localStorage.getItem(ACTIVE_KEY);
+    if (activeRaw) {
+      const active = JSON.parse(activeRaw);
+      if (active && typeof active === "object" && active.engine === engine) {
+        active.provider = providerId || undefined;
+        localStorage.setItem(ACTIVE_KEY, JSON.stringify(active));
+      }
+    }
+
+    const tabsRaw = localStorage.getItem(TABS_KEY);
+    if (tabsRaw) {
+      const tabs = JSON.parse(tabsRaw);
+      if (Array.isArray(tabs)) {
+        const active = getHostSession();
+        for (const tab of tabs) {
+          if (
+            active &&
+            tab &&
+            tab.engine === engine &&
+            tab.sessionId === active.sessionId &&
+            tab.workspacePath === active.workspacePath
+          ) {
+            tab.provider = providerId || undefined;
+          }
+        }
+        localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+      }
+    }
+  } catch (err) {
+    console.warn("[model-switcher] 同步会话渠道到 localStorage 失败:", err);
+  }
+}
+
+/**
+ * 将渠道选择应用到宿主：
+ * 1. 优先调用宿主 CliMenu 的 onChannelChange，由宿主执行会话级绑定（rememberSessionProvider / patchSession）；
+ * 2. 同步更新本地 storage 的 openTabs / activeSession 中的 provider 字段；
+ * 3. 所有会话（包括空白新会话）均不改写全局默认渠道；
+ * 4. 派发 ccgui:channel-changed 事件通知 UI 响应。
+ */
+export async function applyChannelSelectionToHost(params: {
+  engine: CliEngineId;
+  providerId: string;
+}): Promise<void> {
+  const { engine, providerId } = params;
+  const callbacks = getHostCliMenuProps();
+
+  if (callbacks && typeof callbacks.onChannelChange === "function") {
+    try {
+      callbacks.onChannelChange(engine, providerId);
+    } catch (err) {
+      console.warn("[model-switcher] 触发宿主 onChannelChange 失败:", err);
+    }
+  }
+
+  syncSessionProviderToLocalStorage(engine, providerId);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("ccgui:channel-changed", { detail: { engine, providerId } }),
+    );
   }
 }
