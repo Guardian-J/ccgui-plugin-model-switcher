@@ -1,0 +1,63 @@
+# 发版流水线（CC GUI 插件市场约定：tag = manifest version，无 v 前缀）。
+# 推送 tag 触发：校验 manifest → 校验 tag 与版本一致 → 构建产物 → 发 Release。
+# Release 附件固定为 main.js / manifest.json /（可选 styles.css）+ checksums.txt，
+# 市场按索引仓钉住的 SHA-256 逐个下载校验。
+name: release
+
+on:
+  push:
+    tags:
+      - "[0-9]*"
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check tag matches manifest version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION="$(node -p "require('./manifest.json').version")"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "tag ${GITHUB_REF_NAME} != manifest version $VERSION"
+            exit 1
+          fi
+
+      - run: pnpm typecheck
+      - run: pnpm check:compatibility
+      - run: pnpm build
+
+      - name: Generate checksums and asset list
+        id: assets
+        run: |
+          # vite 构建后 main.js 已拷到仓库根；manifest.json 本就在根目录。
+          FILES="main.js manifest.json"
+          [ -f styles.css ] && FILES="$FILES styles.css"
+          sha256sum $FILES > checksums.txt
+          cat checksums.txt
+          {
+            echo "files<<EOF"
+            for f in $FILES checksums.txt; do echo "$f"; done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release with plugin artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.assets.outputs.files }}

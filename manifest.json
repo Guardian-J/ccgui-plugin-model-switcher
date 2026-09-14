@@ -4,9 +4,11 @@
   "version": "1.0.0",
   "minAppVersion": "1.0.0",
   "sdkVersion": "^0.3.1",
-  "author": "ccgui-developer",
+  "author": "Guardian-J",
   "description": "针对 cc-gui（https://github.com/zhukunpenglinyutong/desktop-cc-gui）的扩展插件：模型与 CLI 选择、独立渠道管理、全局主题、文件模糊搜索和链接跳转",
   "tier": "js",
+  "repo": "Guardian-J/ccgui-plugin-model-switcher",
+  "license": "MIT",
   "permissions": [
     "storage",
     "ui:composer",
