@@ -21,6 +21,18 @@ async function loadModule(path) {
 }
 
 const bridge = await loadModule("../src/system-bridge.ts");
+// The delete button receives the displayed ID, while older entries retain suffixes/prefixes.
+for (const engine of ['omp', 'pi']) {
+  const channel = { id: 'custom_test', isPlugin: true };
+  const entries = ['grok-4.6[1m]', 'plugin_model-switcher_custom_test/grok-4.6',
+    'custom_test/grok-4.6[1M]', 'grok-4.5', 'other-provider/grok-4.6'];
+  const remaining = bridge.withoutCustomModel(engine, channel, entries, 'grok-4.6');
+  assert.deepEqual(remaining, ['grok-4.5', 'other-provider/grok-4.6'], 'Delete all aliases of the displayed model, preserving other IDs');
+  assert.equal(entries.length, 5, 'Do not mutate persisted state before saving');
+  assert.deepEqual(bridge.withoutCustomModel(engine, channel, remaining, 'grok-4.6'), remaining);
+}
+assert.deepEqual(bridge.withoutCustomModel('omp', { id: 'relay' }, ['relay/model[1m]', 'keep'], 'model'), ['keep']);
+assert.deepEqual(bridge.withoutCustomModel('claude', null, ['sonnet[1m]', 'opus'], 'sonnet'), ['opus']);
 const scrub = await loadModule("../src/prompt-scrubber.ts");
 const policy = await loadModule("../src/selection-policy.ts");
 const links = await loadModule("../src/chat-links.ts");

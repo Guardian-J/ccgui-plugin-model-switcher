@@ -23,6 +23,7 @@ import {
   pluginProviderId,
   qualifyEngineModel,
   displayEngineModel,
+  withoutCustomModel,
   ensurePiFamilyModelConfigured,
   peekNativeCatalog,
   invalidateNativeCatalogCache,
@@ -598,20 +599,32 @@ export function CliModelFlyoutMenu({
 
   const confirmDeleteCustomModel = async () => {
     const modelId = pendingDeleteModel;
-    if (!modelId || !activeChannel || busy || fetchingModels) return;
-    setPendingDeleteModel(null);
+    if (!modelId || !activeChannel || busy || fetchingModels || selectionPending.current) return;
     const pId = channelModelKey(activeEngine, activeChannel.id);
     const legacyKey = activeEngine === legacyEngine.current ? activeChannel.id : "";
     const key = state.customModels?.[pId] ? pId : legacyKey;
-    const nextCustom = (state.customModels?.[key] || []).filter((id) => id !== modelId);
+    const nextCustom = withoutCustomModel(activeEngine, activeChannel, state.customModels?.[key] || [], modelId);
     const nextState: PluginState = {
       ...state,
       customModels: { ...state.customModels, [key]: nextCustom },
       selectedModel: bareSelectedModel === modelId ? "" : state.selectedModel,
     };
-    await onSave(nextState);
-    setState(nextState);
-    if (bareSelectedModel === modelId) setStatusMsg("已删除自定义模型，请重新选择模型");
+    selectionPending.current = true;
+    setSwitching(true);
+    try {
+      await onSave(nextState);
+      setState(nextState);
+      setPendingDeleteModel(null);
+      const fetched = state.fetchedModels?.[pId] || state.fetchedModels?.[legacyKey] || [];
+      const remainsFromApi = fetched.some(id => displayEngineModel(activeEngine, activeChannel, id) === modelId);
+      setStatusMsg(remainsFromApi ? "已删除自定义记录；同名模型仍由供应商接口提供" : "已删除自定义模型");
+    } catch (e) {
+      setPendingDeleteModel(null);
+      setStatusMsg(e instanceof Error ? e.message : "删除自定义模型失败，请重试");
+    } finally {
+      selectionPending.current = false;
+      setSwitching(false);
+    }
   };
 
   const handleSelectSystemProvider = async (channel: { id: string; name: string; model?: string }) => {

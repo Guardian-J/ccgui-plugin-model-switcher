@@ -675,6 +675,17 @@ export function displayEngineModel(
   return stripPiFamilyPrefix(id, channel);
 }
 
+/** Delete by the same identity used for display, including legacy saved selectors. */
+export function withoutCustomModel(
+  engine: CliEngineId,
+  channel: { id: string; isPlugin?: boolean; isNative?: boolean } | null,
+  models: string[],
+  modelId: string,
+): string[] {
+  const target = displayEngineModel(engine, channel, modelId);
+  return models.filter(id => displayEngineModel(engine, channel, id) !== target);
+}
+
 function isPiFamilyEngine(engine: CliEngineId): engine is "pi" | "omp" {
   return engine === "pi" || engine === "omp";
 }
