@@ -1,6 +1,6 @@
 import { useEffect, useState } from "./react-context";
 import { getHostSession, isConcreteModel } from "./selection-policy";
-import { findBuiltinTriggerButton, getHostCliMenuProps } from "./sync-host";
+import { findBuiltinTriggerButton, getHostCliMenuProps, repairLegacyHostModel } from "./sync-host";
 import type { CliEngineId, EffortLevel, PluginState } from "./types";
 
 export interface SessionDisplay {
@@ -28,13 +28,13 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
     selectedCli: engine as CliEngineId,
     selectedModel: isConcreteModel(model) ? model.replace(/\[1m\]$/i, "").trim() : "",
     effort: effort as EffortLevel,
-    enable1MContext: /\[1m\]$/i.test(model),
+    enable1MContext: engine === "claude" && /\[1m\]$/i.test(model),
     selectedProviderId,
   };
 }
 
 export function withSessionDisplay(state: PluginState, display: SessionDisplay | null): PluginState {
-  if (!display) return state;
+  if (!display) return state.selectedCli === "claude" ? state : { ...state, enable1MContext: false };
   const { sessionKey: _key, selectedProviderId, ...selection } = display;
   return {
     ...state,
@@ -52,6 +52,7 @@ export function useSessionDisplay(anchor?: { current: HTMLElement | null }): Ses
     let observed: HTMLElement | null = null;
     const observer = new MutationObserver(() => refresh());
     const refresh = () => {
+      repairLegacyHostModel(anchor?.current);
       const trigger = findBuiltinTriggerButton(anchor?.current);
       if (trigger !== observed) {
         observer.disconnect();

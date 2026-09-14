@@ -10,12 +10,16 @@ import { useSessionDisplay, withSessionDisplay } from "./session-display";
 import { FileSearchPanel } from "./components/FileSearchPanel";
 import { SearchIcon } from "./icons";
 import { installChatLinks } from "./chat-links";
+import { repairLegacyContextSelections } from "./sync-host";
 
 /**
  * CC GUI 插件入口：模型与供应商切换助手 (原生样式对齐 + GUI 美化扩展)
  */
 export default function activate(ctx: PluginContext): Disposer {
   initReact(ctx.react);
+  void repairLegacyContextSelections().catch(() => {
+    console.warn("[model-switcher] 修复旧版上下文模型选择失败，请重新选择模型");
+  });
   // 尽早启动 list_engines PATH 探测，避免用户点开弹窗才开始扫盘。
   prefetchSystemSnapshot();
 
@@ -56,9 +60,9 @@ export default function activate(ctx: PluginContext): Disposer {
     });
 
   const saveState = async (nextState: PluginState) => {
-    currentState = nextState;
+    currentState = nextState.selectedCli === "claude" ? nextState : { ...nextState, enable1MContext: false };
     notify();
-    await ctx.storage.set("state", nextState);
+    await ctx.storage.set("state", currentState);
   };
 
   function useCurrentState(): PluginState {

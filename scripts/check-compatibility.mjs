@@ -588,6 +588,9 @@ assert.notEqual(selection.sessionKey, firstKey);
 assert.equal(selection.selectedModel, "session-b");
 assert.equal(selection.enable1MContext, true);
 assert.equal(selection.effort, "max");
+active = { ...active, engine: "omp", model: "provider/grok-4.6[1m]" };
+assert.equal(display.readSessionDisplay().enable1MContext, false, "An old OMP suffix must not claim 1M support");
+assert.equal(display.withSessionDisplay({ ...saved, selectedCli: 'omp' }, null).enable1MContext, false);
 active = { engine: "claude", sessionId: "c", workspacePath: "/project" };
 assert.equal(display.withSessionDisplay(saved, display.readSessionDisplay()).selectedModel, "",
   "An unknown session model must never use the plugin's global selection");
@@ -702,8 +705,70 @@ assert.deepEqual(hostCalls, [["engine", "claude"], ["model", "claude", "claude-t
 assert.equal(JSON.parse(storage.get(activeKey)).engine, "claude");
 assert.equal(JSON.parse(storage.get(activeKey)).model, "claude-test");
 assert.deepEqual(JSON.parse(storage.get(tabsKey))[1], history, "Switching a pending tab leaves history untouched");
+for (const engine of ['omp', 'pi', 'codex', 'grok', 'kimi', 'dsh', 'agy', 'claude']) {
+  for (const enabled of [true, false]) {
+    const model = engine === 'claude' ? 'sonnet' : 'plugin_model-switcher_custom_1789396676885/grok-4.6';
+    footer.memoizedProps.active = { ...pending, engine };
+    hostCalls.length = 0;
+    let writtenSettings;
+    window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      assert(['get_app_settings', 'update_app_settings'].includes(command), 'Context selection must not write CLI native config');
+      if (command === 'update_app_settings') writtenSettings = args.settings;
+      return {};
+    };
+    await sync.applyModelSelectionToHost({ engine, model: `${model}[1m]`, enable1M: enabled });
+    const expected = engine === 'claude' && enabled ? `${model}[1m]` : model;
+    assert.equal(hostCalls.find(call => call[0] === 'model')[2], expected, `${engine} must use its own model selector syntax`);
+    assert.equal(JSON.parse(storage.get(activeKey)).model, expected);
+    assert.equal(writtenSettings.defaultModels[engine], expected);
+  }
+}
 footer.memoizedProps.active = history;
 await assert.rejects(() => sync.applyModelSelectionToHost({ engine: "claude", model: "claude-test" }), /当前会话/);
+const legacyOmp = { ...history, engine: 'omp', model: 'provider/grok-4.6[1m]', effort: 'low', provider: 'relay' };
+const claude1M = { ...history, engine: 'claude', model: 'sonnet[1m]' };
+storage.set(activeKey, JSON.stringify(legacyOmp));
+storage.set(tabsKey, JSON.stringify([legacyOmp, claude1M, history]));
+let settings = { defaultModels: { omp: legacyOmp.model, claude: claude1M.model }, theme: 'keep' };
+let writes = 0;
+window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+  assert(['get_app_settings', 'update_app_settings'].includes(command));
+  if (command === 'update_app_settings') { settings = args.settings; writes++; }
+  return settings;
+};
+await sync.repairLegacyContextSelections();
+assert.deepEqual(JSON.parse(storage.get(activeKey)), { ...legacyOmp, model: 'provider/grok-4.6' });
+assert.deepEqual(JSON.parse(storage.get(tabsKey)), [{ ...legacyOmp, model: 'provider/grok-4.6' }, claude1M, history]);
+assert.deepEqual(settings, { defaultModels: { omp: 'provider/grok-4.6', claude: 'sonnet[1m]' }, theme: 'keep' });
+await sync.repairLegacyContextSelections();
+assert.equal(writes, 1, 'Migration is idempotent');
+menu.memoizedProps.value = 'omp';
+footer.memoizedProps.active = legacyOmp;
+footer.memoizedProps.streaming = true;
+hostCalls.length = 0;
+sync.repairLegacyHostModel();
+assert.equal(hostCalls.length, 0, 'Never retarget a streaming request');
+footer.memoizedProps.streaming = false;
+sync.repairLegacyHostModel();
+assert.deepEqual(hostCalls, [['model', 'omp', 'provider/grok-4.6']], 'Repair only the mounted model, preserving engine, effort and channel');
+footer.memoizedProps.active = claude1M;
+menu.memoizedProps.value = 'claude';
+hostCalls.length = 0;
+sync.repairLegacyHostModel();
+assert.equal(hostCalls.length, 0, 'Claude keeps its supported suffix');
+console.log('Engine-specific context selectors, persisted recovery and streaming-safe mounted recovery passed.');
+const React = await import('react');
+const { renderToStaticMarkup } = await import('react-dom/server');
+window.React = React;
+const { EffortSection } = await loadModule('../src/components/EffortSection.tsx');
+for (const engine of ['omp', 'pi', 'codex', 'claude']) {
+  const html = renderToStaticMarkup(React.createElement(EffortSection, {
+    engine, effort: 'high', enable1M: true, onChange() {}, onToggle1M() {},
+  }));
+  assert.equal(html.includes('disabled=""'), engine !== 'claude');
+  assert.equal(html.includes('aria-checked="true"'), engine === 'claude');
+}
+delete window.React;
 window.__TAURI_INTERNALS__.invoke = invokeBeforeSwitch;
 const channelCalls = [];
 menu.memoizedProps.onChannelChange = (engine, providerId) => channelCalls.push([engine, providerId]);

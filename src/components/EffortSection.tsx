@@ -1,5 +1,5 @@
 import { React } from "../react-context";
-import type { EffortLevel } from "../types";
+import type { CliEngineId, EffortLevel } from "../types";
 
 export const EFFORT_LEVELS: readonly EffortLevel[] = [
   "low",
@@ -11,6 +11,7 @@ export const EFFORT_LEVELS: readonly EffortLevel[] = [
 ];
 
 interface Props {
+  engine: CliEngineId;
   effort: EffortLevel;
   onChange: (level: EffortLevel) => void;
   enable1M: boolean;
@@ -18,6 +19,7 @@ interface Props {
 }
 
 export function EffortSection({
+  engine,
   effort,
   onChange,
   enable1M,
@@ -36,12 +38,13 @@ export function EffortSection({
           type="button"
           role="switch"
           aria-label="1M 上下文"
-          aria-checked={enable1M}
-          title="1M 上下文"
+          aria-checked={engine === "claude" && enable1M}
+          disabled={engine !== "claude"}
+          title={engine === "claude" ? "1M 上下文（需要模型支持）" : "上下文容量由 CLI 和模型配置决定，不支持通过此开关开启 1M"}
           onClick={() => onToggle1M(!enable1M)}
           className="ms-switch-button"
         >
-          <span>1M 上下文</span>
+          <span>{engine === "claude" ? "1M 上下文" : "原生上下文"}</span>
           <span aria-hidden className="ms-switch">
             <span />
           </span>

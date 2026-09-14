@@ -204,6 +204,7 @@ export function ModelListSection({
       </div>
 
       <EffortSection
+        engine={activeEngine}
         effort={effort}
         onChange={onEffortChange}
         enable1M={enable1M}
