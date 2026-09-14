@@ -6,7 +6,7 @@
 
 插件使用宿主发现的 CLI 和供应商配置，不内置个人供应商 ID、API Key 或本机路径。面向 Windows、macOS、Linux，使用同一份构建产物，安装时无需修改宿主源代码。
 
-> **供应商切换：** 插件内选择系统渠道或独立渠道会同步宿主当前供应商（`set_current_provider`）；创建或编辑独立渠道会写入宿主供应商列表（`upsert_provider`）；删除独立渠道会调用 `delete_provider`。对 Claude / Codex / Kimi / Grok，这会改写 CLI 原生配置文件（`settings.json` / `config.toml` / `auth.json`），与宿主设置页渠道切换相同。系统渠道详情只读，不在插件内编辑或删除。pi / omp / dsh 的供应商在宿主侧多为仅展示。
+> **供应商切换：** 插件内选择系统渠道或独立渠道会同步宿主当前供应商（`set_current_provider`）；创建或编辑独立渠道会写入宿主供应商列表（`upsert_provider`）；删除独立渠道会调用 `delete_provider`。对 Claude / Codex / Kimi / Grok，这会改写 CLI 原生配置文件（`settings.json` / `config.toml` / `auth.json`），与宿主设置页渠道切换相同。Codex 独立渠道会写入 `settingsConfig`（`requires_openai_auth` + `auth.json` 的 `OPENAI_API_KEY`），不能只写扁平字段，否则 CLI 会按 `env_key` 去找环境变量并报 `Missing environment variable: OPENAI_API_KEY`。系统渠道详情只读，不在插件内编辑或删除。omp / pi 的独立渠道还会写入 `models.yml` / `models.json`，并必须指定协议类型（`api`：`openai-completions` / `openai-responses` / `anthropic-messages` / `google-generative-ai`），否则 CLI 会报错。dsh 的供应商在宿主侧多为仅展示。
 
 ## 目录
 
@@ -43,11 +43,11 @@
 | --- | --- |
 | 系统渠道 | 显示并可选中宿主已配置的供应商；详情只读，不可编辑或保存；API Key 默认掩码，可点眼睛查看明文；选中后同步宿主当前供应商 |
 | CLI 原生配置 | 为适用的 CLI 显示原生配置入口；详情只读，从 CLI 原生文件读取 Base URL、API Key 和模型，Key 默认掩码，可点眼睛查看；模型列表优先按 Base URL 接口获取；选中后恢复官方配置备份 |
-| 独立渠道 | 在插件中创建、编辑、保存名称、Base URL、API Key 和可选默认模型；同步到宿主供应商列表（ID 前缀 `plugin_model-switcher_`）；Key 同样默认掩码、可点眼睛查看 |
-| 切换渠道 | 同步宿主当前启用渠道；Claude / Codex / Kimi / Grok 会写入 CLI 原生配置，随后对话使用该渠道 |
-| 删除独立渠道 | 删除插件记录，并从宿主供应商列表移除；若删的是当前项，再切回上次系统渠道或官方配置备份 |
+| 独立渠道 | 在插件中创建、编辑、保存名称、Base URL、API Key 和可选默认模型；同步到宿主供应商列表（ID 前缀 `plugin_model-switcher_`）；Key 同样默认掩码、可点眼睛查看。omp / pi 还需选择协议类型，并写入 `models.yml` / `models.json` |
+| 切换渠道 | 同步宿主当前启用渠道；Claude / Codex / Kimi / Grok 会写入 CLI 原生配置，随后对话使用该渠道；omp / pi 独立渠道写入对应 models 配置 |
+| 删除独立渠道 | 删除插件记录，并从宿主供应商列表移除；omp / pi 同时从 `models.yml` / `models.json` 去掉该供应商；若删的是当前项，再切回上次系统渠道或官方配置备份 |
 
-插件内切换、创建或删除渠道会改写 Claude / Codex / Kimi / Grok 的 `settings.json` / `config.toml` / `auth.json`，与宿主设置页渠道切换相同。pi / omp / dsh 的供应商在宿主侧多为仅展示。写入失败会提示错误，不会假装已生效。用户主动执行的提示词清洗另见下文。
+插件内切换、创建或删除渠道会改写 Claude / Codex / Kimi / Grok 的 `settings.json` / `config.toml` / `auth.json`，与宿主设置页渠道切换相同。omp / pi 独立渠道会改写 `models.yml` / `models.json` 并写入 `api` 协议。dsh 的供应商在宿主侧多为仅展示。写入失败会提示错误，不会假装已生效。用户主动执行的提示词清洗另见下文。
 
 ### 全局主题与自由选色
 

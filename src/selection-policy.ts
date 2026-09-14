@@ -42,12 +42,17 @@ export function modelSelectionError(
 ): string | null {
   const id = model.trim().replace(/\[1m\]$/i, "");
   if (!isConcreteModel(id)) return "请选择具体模型";
-  if (evidence?.authoritative && !evidence.nativeIds?.includes(id)) {
-    return "该模型不在当前 CLI 的权威目录中";
+  if (evidence?.authoritative && evidence.nativeIds) {
+    const nativeSet = new Set(evidence.nativeIds);
+    if (!nativeSet.has(id)) {
+      return "该模型不在当前 CLI 的权威目录中";
+    }
   }
-  if (evidence?.modelProtocols?.length && evidence.engineProtocols?.length &&
-      !evidence.modelProtocols.some(protocol => evidence.engineProtocols!.includes(protocol))) {
-    return "模型声明的协议与当前 CLI 不兼容";
+  if (evidence?.modelProtocols?.length && evidence.engineProtocols?.length) {
+    const engineProtocolSet = new Set(evidence.engineProtocols);
+    if (!evidence.modelProtocols.some(protocol => engineProtocolSet.has(protocol))) {
+      return "模型声明的协议与当前 CLI 不兼容";
+    }
   }
   // Names and provider brands do not describe the protocol exposed by a relay.
   // Partial catalogs and missing metadata cannot prove incompatibility.

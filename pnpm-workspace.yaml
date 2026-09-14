@@ -1,2 +1,9 @@
 allowBuilds:
   esbuild: true
+minimumReleaseAge: 10080
+minimumReleaseAgeExclude:
+  - electron-to-chromium
+  - node-releases
+trustPolicy: no-downgrade
+trustPolicyExclude:
+  - semver

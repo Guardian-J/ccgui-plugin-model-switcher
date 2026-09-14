@@ -1,6 +1,11 @@
-import type { CliEngineId, SystemProviderChannel } from "./types";
+import type { CliEngineId, CustomPluginChannel, SystemProviderChannel } from "./types";
+import { DEFAULT_PI_FAMILY_API, isPiFamilyApiProtocol } from "./types";
 import type { PluginContext } from "./ccgui-plugin";
-import { parsePiFamilyProviders } from "./pi-family-parser";
+import {
+  parsePiFamilyProviders,
+  removePiFamilyProviderText,
+  upsertPiFamilyProviderText,
+} from "./pi-family-parser";
 
 interface TauriInternals {
   invoke?: (cmd: string, args?: unknown) => Promise<unknown>;
@@ -539,12 +544,14 @@ export async function getSystemProviderChannels(
             modelsRes.file?.format || (engine === "omp" ? "yaml" : "json"),
           );
           for (const [pId, pData] of Object.entries(parsedProviders)) {
+            if (isPluginProviderId(pId)) continue;
             piFamilyProviderCount++;
             channels.push({
               id: pId,
               name: pData.name || pId,
               baseUrl: pData.baseUrl || "",
               apiKey: pData.apiKey || "",
+              api: pData.api,
               model: pData.models?.[0]?.id || "",
               remark: `${engine === "omp" ? "models.yml" : "models.json"} · ${pData.models?.length || 0} 个模型`,
               isCurrent: pId === currentId,
@@ -623,22 +630,110 @@ export function isPluginProviderId(providerId: string): boolean {
   return providerId.startsWith(PLUGIN_PROVIDER_PREFIX);
 }
 
+function isPiFamilyEngine(engine: CliEngineId): engine is "pi" | "omp" {
+  return engine === "pi" || engine === "omp";
+}
+
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function tomlTableKey(id: string): string {
+  return /^[A-Za-z0-9_-]+$/.test(id) ? id : tomlString(id);
+}
+
+/**
+ * Codex 独立渠道必须走宿主 settingsConfig：config.toml 用 requires_openai_auth，
+ * auth.json 写 OPENAI_API_KEY。只传扁平字段时宿主会写成 env_key，CLI 就会报缺环境变量。
+ */
+function buildCodexPluginSettingsConfig(
+  providerId: string,
+  channel: CustomPluginChannel,
+): { config: string; auth: { OPENAI_API_KEY: string } } {
+  const model = channel.model?.trim();
+  const lines = ["disable_response_storage = true"];
+  if (model) lines.push(`model = ${tomlString(model)}`);
+  lines.push(
+    `model_provider = ${tomlString(providerId)}`,
+    "",
+    `[model_providers.${tomlTableKey(providerId)}]`,
+    `base_url = ${tomlString(channel.baseUrl.trim())}`,
+    `name = ${tomlString(channel.name.trim() || "CC GUI")}`,
+    "requires_openai_auth = true",
+    'wire_api = "responses"',
+  );
+  return {
+    config: `${lines.join("\n")}\n`,
+    auth: { OPENAI_API_KEY: channel.apiKey },
+  };
+}
+
+async function readPiFamilyModelsConfig(engine: "pi" | "omp"): Promise<{
+  text: string;
+  format: string;
+}> {
+  const modelsRes = await invokeTauri<{
+    file?: { format?: string };
+    text?: string;
+  }>("pi_family_models_config_read", { engine });
+  return {
+    text: modelsRes?.text ?? "",
+    format: modelsRes?.file?.format || (engine === "omp" ? "yaml" : "json"),
+  };
+}
+
+/** omp / pi 独立渠道必须写入 models.yml / models.json，并带上 api 协议，否则 CLI 会报错。 */
+async function applyPiFamilyPluginChannel(
+  engine: "pi" | "omp",
+  channel: CustomPluginChannel,
+): Promise<void> {
+  const { text, format } = await readPiFamilyModelsConfig(engine);
+  const next = upsertPiFamilyProviderText(text, format, pluginProviderId(channel.id), {
+    name: channel.name,
+    baseUrl: channel.baseUrl,
+    apiKey: channel.apiKey,
+    api: isPiFamilyApiProtocol(channel.api || "") ? channel.api! : DEFAULT_PI_FAMILY_API,
+    model: channel.model,
+  });
+  await invokeTauri("pi_family_models_config_write", { engine, text: next });
+  invalidateNativeCatalogCache(engine);
+}
+
+async function deletePiFamilyPluginChannel(
+  engine: "pi" | "omp",
+  channelId: string,
+): Promise<void> {
+  const { text, format } = await readPiFamilyModelsConfig(engine);
+  const next = removePiFamilyProviderText(text, format, pluginProviderId(channelId));
+  if (next === text) return;
+  await invokeTauri("pi_family_models_config_write", { engine, text: next });
+  invalidateNativeCatalogCache(engine);
+}
+
 /**
  * 把独立渠道 upsert 到宿主供应商列表并设为当前项，随后对话使用该渠道的 URL/Key。
+ * Codex 附带 settingsConfig（auth.json + requires_openai_auth），omp / pi 写入 models.yml / models.json。
  */
 export async function applyCustomPluginChannelToEngine(
   _ctx: PluginContext,
   engine: CliEngineId,
-  channel: { id: string; name: string; baseUrl: string; apiKey: string; model?: string },
+  channel: CustomPluginChannel,
 ): Promise<void> {
   const id = pluginProviderId(channel.id);
-  const json: Record<string, string> = {
+  const json: Record<string, unknown> = {
     name: channel.name,
     baseUrl: channel.baseUrl,
     apiKey: channel.apiKey,
   };
   const model = channel.model?.trim();
   if (model) json.model = model;
+  if (engine === "codex") {
+    json.settingsConfig = buildCodexPluginSettingsConfig(id, channel);
+  }
+  if (isPiFamilyEngine(engine)) {
+    json.api = isPiFamilyApiProtocol(channel.api || "") ? channel.api! : DEFAULT_PI_FAMILY_API;
+    await applyPiFamilyPluginChannel(engine, { ...channel, api: json.api as CustomPluginChannel["api"] });
+  }
   await invokeTauri("upsert_provider", { engine, id, json });
   await invokeTauri("set_current_provider", { engine, id });
   invalidateCliConfig();
@@ -652,6 +747,9 @@ export async function deleteCustomPluginChannel(
   engine: CliEngineId,
   channelId: string,
 ): Promise<void> {
+  if (isPiFamilyEngine(engine)) {
+    await deletePiFamilyPluginChannel(engine, channelId);
+  }
   await invokeTauri("delete_provider", {
     engine,
     id: pluginProviderId(channelId),

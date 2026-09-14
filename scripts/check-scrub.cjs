@@ -65,6 +65,11 @@ try {
     fs.writeFileSync(wrapper, text);
     assert.deepEqual(scrub.resolveTargets(wrapper), [fs.realpathSync(entry)]);
   }
+  const outside = path.join(root, "outside.js");
+  fs.writeFileSync(outside, original);
+  const escaped = path.join(install, "escaped.cmd");
+  fs.writeFileSync(escaped, '"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\..\\..\\..\\outside.js" %*');
+  assert.throws(() => scrub.resolveTargets(escaped), /Unsupported CLI wrapper/);
   if (process.platform !== "win32") {
     const link = path.join(root, "claude");
     fs.symlinkSync(entry, link);

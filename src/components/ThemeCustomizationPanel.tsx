@@ -70,11 +70,11 @@ export function ThemeCustomizationPanel({ config, update, section }: Props) {
         <button type="button" aria-pressed={config.backgroundFit === "cover"} onClick={() => void update({ backgroundFit: "cover" })}>铺满</button>
         <button type="button" aria-pressed={config.backgroundFit === "contain"} onClick={() => void update({ backgroundFit: "contain" })}>完整显示</button>
       </div>
-      <label className="ms-theme-slider ms-image-dim"><span>阅读遮罩<output>{config.backgroundDim}%</output></span>
+      <div className="ms-theme-slider ms-image-dim"><span>阅读遮罩<output>{config.backgroundDim}%</output></span>
         <div className="ms-effort-track"><div className="ms-effort-fill" style={{ width: `calc(${config.backgroundDim / 100} * (100% - 21px) + 21px)` }} />
           <input className="ms-range" aria-label="阅读遮罩" type="range" min="0" max="100" step="5" value={config.backgroundDim}
             onChange={event => void update({ backgroundDim: Number(event.target.value) })} /></div>
-      </label>
+      </div>
     </>}
   </div>;
 }

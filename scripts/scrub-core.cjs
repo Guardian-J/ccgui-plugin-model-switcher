@@ -49,6 +49,17 @@ function resolveLauncher(target) {
   throw new Error("Claude CLI not found on PATH; configure its executable path in the host settings");
 }
 
+function packageRelative(value) {
+  const relative = String(value || "").replace(/\\/g, "/");
+  if (!relative || relative.split("/").some((part) => !part || part === "." || part === "..")) return null;
+  return relative;
+}
+
+function insideDir(root, file) {
+  const rel = path.relative(root, file);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
 function resolveTargets(launcher, visited = new Set()) {
   const file = fs.realpathSync(launcher);
   if (visited.has(file) || visited.size >= 12) throw new Error("CLI launcher cycle: " + file);
@@ -64,9 +75,19 @@ function resolveTargets(launcher, visited = new Set()) {
   // npm sh/cmd/PowerShell launchers all identify the same package entrypoint.
   const entry = text.match(/@anthropic-ai[/\\]claude-code[/\\]([^"'\s]+)/);
   if (entry) {
-    const relative = entry[1].replace(/\\/g, "/");
-    const target = path.join(path.dirname(file), "node_modules", "@anthropic-ai", "claude-code", relative);
-    return resolveTargets(target, visited);
+    const relative = packageRelative(entry[1]);
+    const pkgRoot = path.resolve(path.dirname(file), "node_modules", "@anthropic-ai", "claude-code");
+    const target = relative ? path.resolve(pkgRoot, relative) : "";
+    if (!relative || !insideDir(pkgRoot, target)) {
+      throw new Error("Unsupported CLI wrapper; configure the actual executable path: " + file);
+    }
+    const realTarget = realFile(target);
+    let realRoot;
+    try { realRoot = fs.realpathSync(pkgRoot); } catch { realRoot = ""; }
+    if (!realTarget || !realRoot || !insideDir(realRoot, realTarget)) {
+      throw new Error("Unsupported CLI wrapper; configure the actual executable path: " + file);
+    }
+    return resolveTargets(realTarget, visited);
   }
   throw new Error("Unsupported CLI wrapper; configure the actual executable path: " + file);
 }

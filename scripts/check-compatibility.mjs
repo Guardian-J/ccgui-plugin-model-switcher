@@ -66,6 +66,10 @@ await assert.rejects(() => links.openBrowser({ bridge: { invoke: async () => ({ 
 console.log('Chat HTTP links, URL validation and Windows/macOS/Linux browser arguments passed.');
 const calls = [];
 let current = null;
+const piFamilyModels = {
+  omp: 'providers:\n  custom-omp:\n    baseUrl: "https://omp-relay.example.com"\n    apiKey: "sk-omp"\n    models:\n      - id: "omp-model-1"\n        name: "OMP Model 1"\n',
+  pi: '{\n  "providers": {\n    "custom-pi": {\n      "baseUrl": "https://pi-relay.example.com",\n      "apiKey": "sk-pi",\n      "models": [{ "id": "pi-model-1", "name": "PI Model 1" }]\n    }\n  }\n}',
+};
 globalThis.window = {
   dispatchEvent() {},
   __TAURI_INTERNALS__: {
@@ -151,17 +155,21 @@ globalThis.window = {
           }];
         return [];
       }
+      if (command === "pi_family_models_config_write") {
+        if (args.engine === "omp" || args.engine === "pi") piFamilyModels[args.engine] = args.text;
+        return {};
+      }
       if (command === "pi_family_models_config_read") {
         if (args.engine === "omp") {
           return {
             file: { format: "yaml", path: "C:/preview/.omp/agent/models.yml", exists: true },
-            text: 'providers:\n  custom-omp:\n    baseUrl: "https://omp-relay.example.com"\n    apiKey: "sk-omp"\n    models:\n      - id: "omp-model-1"\n        name: "OMP Model 1"\n',
+            text: piFamilyModels.omp,
           };
         }
         if (args.engine === "pi") {
           return {
             file: { format: "json", path: "C:/preview/.pi/agent/models.json", exists: true },
-            text: '{\n  "providers": {\n    "custom-pi": {\n      "baseUrl": "https://pi-relay.example.com",\n      "apiKey": "sk-pi",\n      "models": [{ "id": "pi-model-1", "name": "PI Model 1" }]\n    }\n  }\n}',
+            text: piFamilyModels.pi,
           };
         }
         return { file: { format: "yaml", path: "", exists: false }, text: "" };
@@ -411,25 +419,98 @@ for (const engine of ["claude", "codex", "kimi", "grok", "pi", "omp"]) {
   await bridge.deleteCustomPluginChannel(engine, channel.id);
   const writes = calls.slice(writeCount);
   const hostId = bridge.pluginProviderId(channel.id);
+  const isPiFamily = engine === "pi" || engine === "omp";
+  const expectedCommands = isPiFamily
+    ? [
+        "pi_family_models_config_read",
+        "pi_family_models_config_write",
+        "upsert_provider",
+        "set_current_provider",
+        "pi_family_models_config_read",
+        "pi_family_models_config_write",
+        "delete_provider",
+      ]
+    : ["upsert_provider", "set_current_provider", "delete_provider"];
   assert.deepEqual(
     writes.map((item) => item.command),
-    ["upsert_provider", "set_current_provider", "delete_provider"],
+    expectedCommands,
     `${engine} plugin channel ops must sync host providers`,
   );
-  assert.deepEqual(writes[0].args, {
+  const upsert = writes.find((item) => item.command === "upsert_provider");
+  const expectedJson = {
+    name: "Relay",
+    baseUrl: "https://example.invalid",
+    apiKey: "test-only",
+    model: "alias",
+    ...(isPiFamily ? { api: "openai-completions" } : {}),
+  };
+  if (engine === "codex") {
+    expectedJson.settingsConfig = {
+      config: upsert.args.json.settingsConfig.config,
+      auth: { OPENAI_API_KEY: "test-only" },
+    };
+    assert.match(upsert.args.json.settingsConfig.config, /requires_openai_auth = true/);
+    assert.match(upsert.args.json.settingsConfig.config, /wire_api = "responses"/);
+    assert.doesNotMatch(upsert.args.json.settingsConfig.config, /env_key/);
+    assert.match(upsert.args.json.settingsConfig.config, new RegExp(hostId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.deepEqual(upsert.args, {
     engine,
     id: hostId,
-    json: {
-      name: "Relay",
-      baseUrl: "https://example.invalid",
-      apiKey: "test-only",
-      model: "alias",
-    },
+    json: expectedJson,
   });
-  assert.deepEqual(writes[1].args, { engine, id: hostId });
-  assert.deepEqual(writes[2].args, { engine, id: hostId });
+  if (isPiFamily) {
+    const written = writes.find((item) => item.command === "pi_family_models_config_write");
+    assert.match(written.args.text, /openai-completions/);
+    assert.match(written.args.text, new RegExp(hostId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.deepEqual(writes.find((item) => item.command === "set_current_provider").args, { engine, id: hostId });
+  assert.deepEqual(writes.find((item) => item.command === "delete_provider").args, { engine, id: hostId });
 }
 console.log("Provider switching syncs host channels and the current provider.");
+const parser = await loadModule("../src/pi-family-parser.ts");
+const yaml = `providers:
+  custom-omp:
+    baseUrl: "https://omp-relay.example.com"
+    apiKey: "sk-omp"
+    models:
+      - id: "omp-model-1"
+        name: "OMP Model 1"
+`;
+const upserted = parser.upsertPiFamilyProviderText(yaml, "yaml", "plugin_model-switcher_test", {
+  name: "Relay",
+  baseUrl: "https://example.invalid",
+  apiKey: "test-only",
+  api: "anthropic-messages",
+  model: "alias",
+});
+assert.match(upserted, /api: anthropic-messages/);
+assert.match(upserted, /custom-omp:/);
+assert.match(upserted, /plugin_model-switcher_test:/);
+assert.match(upserted, /omp-model-1/);
+const patchedMissingApi = parser.upsertPiFamilyProviderText(
+  `providers:
+  plugin_model-switcher_test:
+    name: Relay
+    baseUrl: https://example.invalid
+    apiKey: test-only
+    models:
+      - id: alias
+`,
+  "yaml",
+  "plugin_model-switcher_test",
+  {
+    name: "Relay",
+    baseUrl: "https://example.invalid",
+    apiKey: "test-only",
+    api: "openai-completions",
+    model: "alias",
+  },
+);
+assert.match(patchedMissingApi, /api: openai-completions/);
+assert.doesNotMatch(parser.removePiFamilyProviderText(upserted, "yaml", "plugin_model-switcher_test"), /plugin_model-switcher_test:/);
+assert.match(parser.removePiFamilyProviderText(upserted, "yaml", "plugin_model-switcher_test"), /custom-omp:/);
+console.log("OMP/PI plugin channels persist api protocol in models.yml.");
 assert.notEqual(policy.modelSelectionError("codex", "alias", {
   modelProtocols: ["anthropic-messages"], engineProtocols: ["openai-responses"],
 }), null);

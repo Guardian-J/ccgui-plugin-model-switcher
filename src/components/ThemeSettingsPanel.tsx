@@ -115,7 +115,7 @@ export function ThemeSettingsPanel({ manager, onClose }: Props) {
         <div className="ms-theme-sliders">
           {([{ key: "backdropOpacity", label: "幕布浓度", min: 20, max: 80, step: 5, unit: "%" },
             { key: "backdropBlur", label: "幕布模糊", min: 0, max: 16, step: 1, unit: "px" }] as const).map(item =>
-            <label className="ms-theme-slider" key={item.key}>
+            <div className="ms-theme-slider" key={item.key}>
               <span>{item.label}<output>{config[item.key]}{item.unit}</output></span>
               <div className="ms-effort-track">
                 <div className="ms-effort-fill" style={{ width: `calc(${(config[item.key] - item.min) / (item.max - item.min)} * (100% - 21px) + 21px)` }} />
@@ -123,7 +123,7 @@ export function ThemeSettingsPanel({ manager, onClose }: Props) {
                   aria-label={item.label} value={config[item.key]} disabled={!config.enableBackdropPolish}
                   onChange={event => void update({ [item.key]: Number(event.target.value) })} />
               </div>
-            </label>)}
+            </div>)}
         </div>
       </section>
       <div className="ms-theme-toggles">

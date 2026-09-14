@@ -316,223 +316,131 @@ export function inferModelEngine(name: string): string | null {
   return null;
 }
 
-/** 对应项目内 EngineIcon 原生精确 SVG */
-export function ProjectEngineIcon({ engine, size = 18 }: { engine: string; size?: number }) {
-  const norm = engine.toLowerCase();
+function GeminiEngineIcon({ size, gradPrefix = "gemini" }: { size: number; gradPrefix?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
+      <defs>
+        <linearGradient gradientUnits="userSpaceOnUse" id={`${gradPrefix}-0`} x1="7" x2="11" y1="15.5" y2="12">
+          <stop stopColor="#08B962" />
+          <stop offset="1" stopColor="#08B962" stopOpacity="0" />
+        </linearGradient>
+        <linearGradient gradientUnits="userSpaceOnUse" id={`${gradPrefix}-1`} x1="8" x2="11.5" y1="5.5" y2="11">
+          <stop stopColor="#F94543" />
+          <stop offset="1" stopColor="#F94543" stopOpacity="0" />
+        </linearGradient>
+        <linearGradient gradientUnits="userSpaceOnUse" id={`${gradPrefix}-2`} x1="3.5" x2="17.5" y1="13.5" y2="12">
+          <stop stopColor="#FABC12" />
+          <stop offset=".46" stopColor="#FABC12" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={GEMINI_PATH} fill="#3186FF" />
+      <path d={GEMINI_PATH} fill={`url(#${gradPrefix}-0)`} />
+      <path d={GEMINI_PATH} fill={`url(#${gradPrefix}-1)`} />
+      <path d={GEMINI_PATH} fill={`url(#${gradPrefix}-2)`} />
+    </svg>
+  );
+}
 
-  // 1. Google Gemini 官方四角闪耀星标 (4色渐变)
-  if (norm.includes("gemini")) {
-    return (
-      <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
-        <defs>
-          <linearGradient gradientUnits="userSpaceOnUse" id="gemini-0" x1="7" x2="11" y1="15.5" y2="12">
-            <stop stopColor="#08B962" />
-            <stop offset="1" stopColor="#08B962" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient gradientUnits="userSpaceOnUse" id="gemini-1" x1="8" x2="11.5" y1="5.5" y2="11">
-            <stop stopColor="#F94543" />
-            <stop offset="1" stopColor="#F94543" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient gradientUnits="userSpaceOnUse" id="gemini-2" x1="3.5" x2="17.5" y1="13.5" y2="12">
-            <stop stopColor="#FABC12" />
-            <stop offset=".46" stopColor="#FABC12" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <path d={GEMINI_PATH} fill="#3186FF" />
-        <path d={GEMINI_PATH} fill="url(#gemini-0)" />
-        <path d={GEMINI_PATH} fill="url(#gemini-1)" />
-        <path d={GEMINI_PATH} fill="url(#gemini-2)" />
-      </svg>
-    );
-  }
+function ClaudeEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="#D97757" className="shrink-0" aria-hidden>
+      <path d={CLAUDE_PATH} fillRule="nonzero" />
+    </svg>
+  );
+}
 
-  // 2. Anthropic Claude Code 官方 Sunburst 标志 (#D97757)
-  if (norm.includes("claude")) {
-    return (
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 24 24"
-        fill="#D97757"
-        className="shrink-0"
-        aria-hidden
-      >
-        <path d={CLAUDE_PATH} fillRule="nonzero" />
-      </svg>
-    );
-  }
+function CodexEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" className="shrink-0 text-foreground-icon-primary" aria-hidden>
+      <path d={OPENAI_PATH} />
+    </svg>
+  );
+}
 
-  // 3. OpenAI / Codex
-  if (norm.includes("codex") || norm.includes("gpt") || norm.includes("openai")) {
-    return (
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 24 24"
-        fill="currentColor"
+function DeepSeekEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="#4D6BFE" className="shrink-0" aria-hidden>
+      <path d={DEEPSEEK_PATH} />
+    </svg>
+  );
+}
+
+function GrokEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" className="shrink-0 text-foreground-icon-primary" aria-hidden>
+      {GROK_PATHS.map((p, i) => (<path key={i} d={p} />))}
+    </svg>
+  );
+}
+
+function KimiEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" className="shrink-0 text-foreground-icon-primary" aria-hidden>
+      {KIMI_PATHS.map((p, i) => (<path key={i} d={p} />))}
+    </svg>
+  );
+}
+
+function PiEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" className="shrink-0 text-foreground-icon-primary" aria-hidden>
+      {PI_PATHS.map((p, i) => (<path key={i} d={p} />))}
+    </svg>
+  );
+}
+
+function OmpEngineIcon({ size }: { size: number }) {
+  return (
+    <svg viewBox="0 0 64 64" width={size} height={size} className="shrink-0" aria-hidden>
+      <defs>
+        <linearGradient id="plugin-omp-grad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#ec4899" />
+          <stop offset=".5" stopColor="#8b5cf6" />
+          <stop offset="1" stopColor="#06b6d4" />
+        </linearGradient>
+      </defs>
+      <path fill="url(#plugin-omp-grad)" d="M10 14h44v9H43v33h-9V23h-9v22h-9V23H10z" />
+    </svg>
+  );
+}
+
+function QwenEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
+      <defs>
+        <linearGradient id="qwen-icon-grad" x1="0%" x2="100%" y1="0%" y2="0%">
+          <stop offset="0%" stopColor="#6336E7" stopOpacity=".84" />
+          <stop offset="100%" stopColor="#6F69F7" stopOpacity=".84" />
+        </linearGradient>
+      </defs>
+      <path
+        d="M12.604 1.34c.393.69.784 1.382 1.174 2.075a.18.18 0 00.157.091h5.552c.174 0 .322.11.446.327l1.454 2.57c.19.337.24.478.024.837-.26.43-.513.864-.76 1.3l-.367.658c-.106.196-.223.28-.04.512l2.652 4.637c.172.301.111.494-.043.77-.437.785-.882 1.564-1.335 2.34-.159.272-.352.375-.68.37-.777-.016-1.552-.01-2.327.016a.099.099 0 00-.081.05 575.097 575.097 0 01-2.705 4.74c-.169.293-.38.363-.725.364-.997.003-2.002.004-3.017.002a.537.537 0 01-.465-.271l-1.335-2.323a.09.09 0 00-.083-.049H4.982c-.285.03-.553-.001-.805-.092l-1.603-2.77a.543.543 0 01-.002-.54l1.207-2.12a.198.198 0 000-.197 550.951 550.951 0 01-1.875-3.272l-.79-1.395c-.16-.31-.173-.496.095-.965.465-.813.927-1.625 1.387-2.436.132-.234.304-.334.584-.335a338.3 338.3 0 012.589-.001.124.124 0 00.107-.063l2.806-4.895a.488.488 0 01.422-.246c.524-.001 1.053 0 1.583-.006L11.704 1c.341-.003.724.032.9.34zm-3.432.403a.06.06 0 00-.052.03L6.254 6.788a.157.157 0 01-.135.078H3.253c-.056 0-.07.025-.041.074l5.81 10.156c.025.042.013.062-.034.063l-2.795.015a.218.218 0 00-.2.116l-1.32 2.31c-.044.078-.021.118.068.118l5.716.008c.046 0 .08.02.104.061l1.403 2.454c.046.081.092.082.139 0l5.006-8.76.783-1.382a.055.055 0 01.096 0l1.424 2.53a.122.122 0 00.107.062l2.763-.02a.04.04 0 00.035-.02.041.041 0 000-.04l-2.9-5.086a.108.108 0 010-.113l.293-.507 1.12-1.977c.024-.041.012-.062-.035-.062H9.2c-.059 0-.073-.026-.043-.077l1.434-2.505a.107.107 0 000-.114L9.225 1.774a.06.06 0 00-.053-.031zm6.29 8.02c.046 0 .058.02.034.06l-.832 1.465-2.613 4.585a.056.056 0 01-.05.029.058.058 0 01-.05-.029L8.498 9.841c-.02-.034-.01-.052.028-.054l.216-.012 6.722-.012z"
+        fill="url(#qwen-icon-grad)"
+        fillRule="nonzero"
+      />
+    </svg>
+  );
+}
+
+function ChatGlmEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
+      <defs>
+        <linearGradient id="chatglm-icon-grad" x1="-18.756%" x2="70.894%" y1="49.371%" y2="90.944%">
+          <stop offset="0%" stopColor="#504AF4" />
+          <stop offset="100%" stopColor="#3485FF" />
+        </linearGradient>
+      </defs>
+      <path
+        d="M9.917 2c4.906 0 10.178 3.947 8.93 10.58-.014.07-.037.14-.057.21l-.003-.277c-.083-3-1.534-8.934-8.87-8.934-3.393 0-8.137 3.054-7.93 8.158-.04 4.778 3.555 8.4 7.95 8.332l.073-.001c1.2-.033 2.763-.429 3.1-1.657.063-.031.26.534.268.598.048.256.112.369.192.34.981-.348 2.286-1.222 1.952-2.38-.176-.61-1.775-.147-1.921-.347.418-.979 2.234-.926 3.153-.716.443.102.657.38 1.012.442.29.052.981-.2.96.242-1.5 3.042-4.893 5.41-8.808 5.41C3.654 22 0 16.574 0 11.737 0 5.947 4.959 2 9.917 2z"
+        fill="url(#chatglm-icon-grad)"
         fillRule="evenodd"
-        className="shrink-0 text-foreground-icon-primary"
-        aria-hidden
-      >
-        <path d={OPENAI_PATH} />
-      </svg>
-    );
-  }
+      />
+    </svg>
+  );
+}
 
-  // 4. DeepSeek
-  if (norm.includes("dsh") || norm.includes("deepseek")) {
-    return (
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 24 24"
-        fill="#4D6BFE"
-        className="shrink-0"
-        aria-hidden
-      >
-        <path d={DEEPSEEK_PATH} />
-      </svg>
-    );
-  }
-
-  // 5. Grok
-  if (norm.includes("grok")) {
-    return (
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 24 24"
-        fill="currentColor"
-        fillRule="evenodd"
-        className="shrink-0 text-foreground-icon-primary"
-        aria-hidden
-      >
-        {GROK_PATHS.map((p, i) => (
-          <path key={i} d={p} />
-        ))}
-      </svg>
-    );
-  }
-
-  // 6. Kimi
-  if (norm.includes("kimi")) {
-    return (
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 24 24"
-        fill="currentColor"
-        fillRule="evenodd"
-        className="shrink-0 text-foreground-icon-primary"
-        aria-hidden
-      >
-        {KIMI_PATHS.map((p, i) => (
-          <path key={i} d={p} />
-        ))}
-      </svg>
-    );
-  }
-
-  // 7. Pi
-  if (norm.includes("pi")) {
-    return (
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 24 24"
-        fill="currentColor"
-        fillRule="evenodd"
-        className="shrink-0 text-foreground-icon-primary"
-        aria-hidden
-      >
-        {PI_PATHS.map((p, i) => (
-          <path key={i} d={p} />
-        ))}
-      </svg>
-    );
-  }
-
-  // 8. OMP
-  if (norm.includes("omp")) {
-    return (
-      <svg viewBox="0 0 64 64" width={size} height={size} className="shrink-0" aria-hidden>
-        <defs>
-          <linearGradient id="plugin-omp-grad" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#ec4899" />
-            <stop offset=".5" stopColor="#8b5cf6" />
-            <stop offset="1" stopColor="#06b6d4" />
-          </linearGradient>
-        </defs>
-        <path fill="url(#plugin-omp-grad)" d="M10 14h44v9H43v33h-9V23h-9v22h-9V23H10z" />
-      </svg>
-    );
-  }
-
-  // 9. Qwen
-  if (norm.includes("qwen")) {
-    return (
-      <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
-        <defs>
-          <linearGradient id="qwen-icon-grad" x1="0%" x2="100%" y1="0%" y2="0%">
-            <stop offset="0%" stopColor="#6336E7" stopOpacity=".84" />
-            <stop offset="100%" stopColor="#6F69F7" stopOpacity=".84" />
-          </linearGradient>
-        </defs>
-        <path
-          d="M12.604 1.34c.393.69.784 1.382 1.174 2.075a.18.18 0 00.157.091h5.552c.174 0 .322.11.446.327l1.454 2.57c.19.337.24.478.024.837-.26.43-.513.864-.76 1.3l-.367.658c-.106.196-.223.28-.04.512l2.652 4.637c.172.301.111.494-.043.77-.437.785-.882 1.564-1.335 2.34-.159.272-.352.375-.68.37-.777-.016-1.552-.01-2.327.016a.099.099 0 00-.081.05 575.097 575.097 0 01-2.705 4.74c-.169.293-.38.363-.725.364-.997.003-2.002.004-3.017.002a.537.537 0 01-.465-.271l-1.335-2.323a.09.09 0 00-.083-.049H4.982c-.285.03-.553-.001-.805-.092l-1.603-2.77a.543.543 0 01-.002-.54l1.207-2.12a.198.198 0 000-.197 550.951 550.951 0 01-1.875-3.272l-.79-1.395c-.16-.31-.173-.496.095-.965.465-.813.927-1.625 1.387-2.436.132-.234.304-.334.584-.335a338.3 338.3 0 012.589-.001.124.124 0 00.107-.063l2.806-4.895a.488.488 0 01.422-.246c.524-.001 1.053 0 1.583-.006L11.704 1c.341-.003.724.032.9.34zm-3.432.403a.06.06 0 00-.052.03L6.254 6.788a.157.157 0 01-.135.078H3.253c-.056 0-.07.025-.041.074l5.81 10.156c.025.042.013.062-.034.063l-2.795.015a.218.218 0 00-.2.116l-1.32 2.31c-.044.078-.021.118.068.118l5.716.008c.046 0 .08.02.104.061l1.403 2.454c.046.081.092.082.139 0l5.006-8.76.783-1.382a.055.055 0 01.096 0l1.424 2.53a.122.122 0 00.107.062l2.763-.02a.04.04 0 00.035-.02.041.041 0 000-.04l-2.9-5.086a.108.108 0 010-.113l.293-.507 1.12-1.977c.024-.041.012-.062-.035-.062H9.2c-.059 0-.073-.026-.043-.077l1.434-2.505a.107.107 0 000-.114L9.225 1.774a.06.06 0 00-.053-.031zm6.29 8.02c.046 0 .058.02.034.06l-.832 1.465-2.613 4.585a.056.056 0 01-.05.029.058.058 0 01-.05-.029L8.498 9.841c-.02-.034-.01-.052.028-.054l.216-.012 6.722-.012z"
-          fill="url(#qwen-icon-grad)"
-          fillRule="nonzero"
-        />
-      </svg>
-    );
-  }
-
-  // 10. ChatGLM
-  if (norm.includes("glm") || norm.includes("chatglm")) {
-    return (
-      <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
-        <defs>
-          <linearGradient id="chatglm-icon-grad" x1="-18.756%" x2="70.894%" y1="49.371%" y2="90.944%">
-            <stop offset="0%" stopColor="#504AF4" />
-            <stop offset="100%" stopColor="#3485FF" />
-          </linearGradient>
-        </defs>
-        <path
-          d="M9.917 2c4.906 0 10.178 3.947 8.93 10.58-.014.07-.037.14-.057.21l-.003-.277c-.083-3-1.534-8.934-8.87-8.934-3.393 0-8.137 3.054-7.93 8.158-.04 4.778 3.555 8.4 7.95 8.332l.073-.001c1.2-.033 2.763-.429 3.1-1.657.063-.031.26.534.268.598.048.256.112.369.192.34.981-.348 2.286-1.222 1.952-2.38-.176-.61-1.775-.147-1.921-.347.418-.979 2.234-.926 3.153-.716.443.102.657.38 1.012.442.29.052.981-.2.96.242-1.5 3.042-4.893 5.41-8.808 5.41C3.654 22 0 16.574 0 11.737 0 5.947 4.959 2 9.917 2z"
-          fill="url(#chatglm-icon-grad)"
-          fillRule="evenodd"
-        />
-      </svg>
-    );
-  }
-
-  // 11. Antigravity CLI (agy) - 采用 Gemini 专属彩色星标
-  if (norm.includes("agy") || norm.includes("antigravity")) {
-    return (
-      <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
-        <defs>
-          <linearGradient gradientUnits="userSpaceOnUse" id="agy-gemini-0" x1="7" x2="11" y1="15.5" y2="12">
-            <stop stopColor="#08B962" />
-            <stop offset="1" stopColor="#08B962" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient gradientUnits="userSpaceOnUse" id="agy-gemini-1" x1="8" x2="11.5" y1="5.5" y2="11">
-            <stop stopColor="#F94543" />
-            <stop offset="1" stopColor="#F94543" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient gradientUnits="userSpaceOnUse" id="agy-gemini-2" x1="3.5" x2="17.5" y1="13.5" y2="12">
-            <stop stopColor="#FABC12" />
-            <stop offset=".46" stopColor="#FABC12" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <path d={GEMINI_PATH} fill="#3186FF" />
-        <path d={GEMINI_PATH} fill="url(#agy-gemini-0)" />
-        <path d={GEMINI_PATH} fill="url(#agy-gemini-1)" />
-        <path d={GEMINI_PATH} fill="url(#agy-gemini-2)" />
-      </svg>
-    );
-  }
-
-  // 通用终端图标
+function FallbackEngineIcon({ size }: { size: number }) {
   return (
     <svg
       width={size}
@@ -550,4 +458,24 @@ export function ProjectEngineIcon({ engine, size = 18 }: { engine: string; size?
       <path d="M12 19h8" />
     </svg>
   );
+}
+
+function resolveEngineIcon(norm: string, size: number) {
+  if (norm.includes("gemini")) return <GeminiEngineIcon size={size} />;
+  if (norm.includes("claude")) return <ClaudeEngineIcon size={size} />;
+  if (norm.includes("codex") || norm.includes("gpt") || norm.includes("openai")) return <CodexEngineIcon size={size} />;
+  if (norm.includes("dsh") || norm.includes("deepseek")) return <DeepSeekEngineIcon size={size} />;
+  if (norm.includes("grok")) return <GrokEngineIcon size={size} />;
+  if (norm.includes("kimi")) return <KimiEngineIcon size={size} />;
+  if (norm.includes("pi")) return <PiEngineIcon size={size} />;
+  if (norm.includes("omp")) return <OmpEngineIcon size={size} />;
+  if (norm.includes("qwen")) return <QwenEngineIcon size={size} />;
+  if (norm.includes("glm") || norm.includes("chatglm")) return <ChatGlmEngineIcon size={size} />;
+  if (norm.includes("agy") || norm.includes("antigravity")) return <GeminiEngineIcon size={size} gradPrefix="agy-gemini" />;
+  return <FallbackEngineIcon size={size} />;
+}
+
+/** 对应项目内 EngineIcon 原生精确 SVG */
+export function ProjectEngineIcon({ engine, size = 18 }: { engine: string; size?: number }) {
+  return resolveEngineIcon(engine.toLowerCase(), size);
 }

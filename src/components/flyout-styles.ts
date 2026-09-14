@@ -9,7 +9,7 @@ export const flyoutStyles = `
   --ms-border: var(--color-border-button-default, var(--border-button-default, #e1e4e8));
   --ms-accent: var(--color-accent-500, #147d92);
   --ms-tint: color-mix(in srgb, var(--ms-accent) 9%, var(--ms-bg));
-  position: absolute; left: 0; z-index: 99999;
+  position: absolute; left: 0; inset: auto; z-index: 99999; margin: 0; padding: 0;
   display: flex; flex-direction: column; width: 760px; max-width: calc(100vw - 24px); height: 560px;
   overflow: hidden; border: 1px solid var(--ms-border); border-radius: 8px;
   background: var(--ms-bg); background-color: var(--ms-bg); color: var(--ms-text);
@@ -28,7 +28,7 @@ export const flyoutStyles = `
   --ms-accent: var(--color-border-focus-ring, #62c4d4);
 }
 .ms-flyout *, .ms-flyout *::before, .ms-flyout *::after { box-sizing: border-box; }
-.ms-flyout button, .ms-flyout input { font: inherit; letter-spacing: 0; }
+.ms-flyout button, .ms-flyout input, .ms-flyout select { font: inherit; letter-spacing: 0; }
 .ms-flyout button { color: inherit; cursor: pointer; }
 .ms-flyout button:disabled { opacity: .4; cursor: not-allowed; }
 .ms-flyout button:focus-visible, .ms-flyout input:focus-visible { outline: 2px solid var(--ms-accent); outline-offset: 2px; }
@@ -82,6 +82,7 @@ export const flyoutStyles = `
 .ms-channel-form { display: flex; flex-direction: column; gap: 10px; padding: 2px 0 12px; border-bottom: 1px solid var(--ms-border); }
 .ms-channel-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--ms-muted); }
 .ms-field { display: block; min-width: 0; width: 100%; height: 34px; padding: 7px 10px; border: 1px solid var(--ms-border); border-radius: 6px; background: var(--ms-bg); color: var(--ms-text); outline: none; }
+.ms-flyout select.ms-field { appearance: auto; }
 .ms-field[readonly] { color: var(--ms-muted); cursor: default; }
 .ms-secret-field { position: relative; display: block; }
 .ms-secret-field .ms-field { padding-right: 36px; }
@@ -137,7 +138,7 @@ export const flyoutStyles = `
 .ms-range-labels { display: flex; justify-content: space-between; padding: 6px 0 3px; color: var(--ms-muted); font-size: 11px; }
 .ms-status { flex-shrink: 0; max-height: 64px; overflow-y: auto; padding: 7px 18px; border-top: 1px solid var(--ms-border); background: var(--ms-tint); color: var(--ms-text); font-size: 12px; overflow-wrap: anywhere; }
 .ms-confirm-backdrop { position: absolute; inset: 0; z-index: 8; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--ms-bg); }
-.ms-confirm-dialog { width: min(360px, 100%); padding: 18px; border: 1px solid var(--ms-border); border-radius: 8px; background: var(--ms-surface); color: var(--ms-text); box-shadow: 0 12px 32px #0003; }
+.ms-confirm-dialog { position: relative; inset: auto; margin: 0; width: min(360px, 100%); padding: 18px; border: 1px solid var(--ms-border); border-radius: 8px; background: var(--ms-surface); color: var(--ms-text); box-shadow: 0 12px 32px #0003; }
 .ms-confirm-dialog h3 { margin: 0 0 8px; font-size: 14px; }
 .ms-confirm-dialog p { margin: 0 0 16px; color: var(--ms-muted); font-size: 12px; overflow-wrap: anywhere; }
 .ms-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }

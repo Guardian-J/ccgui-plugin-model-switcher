@@ -16,11 +16,29 @@ export interface SystemProviderChannel {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /** omp / pi 自定义供应商协议 */
+  api?: string;
   remark?: string;
   isNative?: boolean;
   isCurrent?: boolean;
   settingsConfig?: Record<string, unknown>;
   raw?: unknown;
+}
+
+/** pi / omp 自定义供应商的协议类型（对应 models.json / models.yml 的 api 字段） */
+export const PI_FAMILY_API_PROTOCOLS = [
+  "openai-completions",
+  "openai-responses",
+  "anthropic-messages",
+  "google-generative-ai",
+] as const;
+
+export type PiFamilyApiProtocol = (typeof PI_FAMILY_API_PROTOCOLS)[number];
+
+export const DEFAULT_PI_FAMILY_API: PiFamilyApiProtocol = "openai-completions";
+
+export function isPiFamilyApiProtocol(value: string): value is PiFamilyApiProtocol {
+  return (PI_FAMILY_API_PROTOCOLS as readonly string[]).includes(value);
 }
 
 /** 插件独立维护的自定义渠道 */
@@ -30,8 +48,20 @@ export interface CustomPluginChannel {
   baseUrl: string;
   apiKey: string;
   model?: string;
+  /** omp / pi 自定义供应商必填协议；其他 CLI 忽略 */
+  api?: PiFamilyApiProtocol;
   createdAt?: number;
 }
+
+export const EMPTY_CHANNEL_FORM = {
+  name: "",
+  baseUrl: "",
+  apiKey: "",
+  model: "",
+  api: DEFAULT_PI_FAMILY_API as string,
+};
+
+export type ChannelFormState = typeof EMPTY_CHANNEL_FORM;
 
 export interface PluginState {
   selectedCli: CliEngineId;
