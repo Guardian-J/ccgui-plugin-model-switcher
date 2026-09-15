@@ -40,7 +40,7 @@ interface ModelListSectionProps {
   onCustomInputChange: (val: string) => void;
   onAddCustomModel: () => void;
   effort: EffortLevel;
-  onEffortChange: (effort: EffortLevel) => void;
+  onEffortChange: (effort: EffortLevel) => Promise<boolean>;
   enable1M: boolean;
   onToggle1M: (enabled: boolean) => void;
 }
@@ -204,9 +204,11 @@ export function ModelListSection({
       </div>
 
       <EffortSection
+        key={activeEngine}
         engine={activeEngine}
         effort={effort}
         onChange={onEffortChange}
+        disabled={fetchingModels}
         enable1M={enable1M}
         onToggle1M={onToggle1M}
       />

@@ -229,10 +229,10 @@ for (const engine of ["codex", "kimi", "grok"]) {
 }
 const ompChannels = (await bridge.getSystemProviderChannels("omp")).channels;
 assert.ok(ompChannels.some((c) => c.id === "custom-omp" && c.baseUrl === "https://omp-relay.example.com"), "omp must load custom-omp provider channel from models.yml");
-assert.equal(ompChannels.some((c) => c.isNative), false, "omp with custom providers must not add redundant native channel");
+assert.equal(ompChannels.some((c) => c.isNative), true, "OMP built-in providers must remain selectable alongside custom providers");
 const piChannels = (await bridge.getSystemProviderChannels("pi")).channels;
 assert.ok(piChannels.some((c) => c.id === "custom-pi" && c.baseUrl === "https://pi-relay.example.com"), "pi must load custom-pi provider channel from models.json");
-assert.equal(piChannels.some((c) => c.isNative), false, "pi with custom providers must not add redundant native channel");
+assert.equal(piChannels.some((c) => c.isNative), true, "PI built-in providers must remain selectable alongside custom providers");
 assert.equal(
   (await bridge.getSystemProviderChannels("dsh")).channels.length,
   0,
@@ -591,6 +591,47 @@ for (const nl of ['\n', '\r\n']) {
 }
 assert.deepEqual(JSON.parse(parser.removePiFamilyProviderText('{"providers":{"only":{"models":[]}}}', 'json', 'only')), { providers: {} });
 console.log("OMP/PI plugin channels persist api protocol in models.yml.");
+{
+  const invoke = window.__TAURI_INTERNALS__.invoke;
+  try {
+    for (const engine of ['omp', 'pi']) {
+      let written;
+      window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+        if (command === 'pi_family_models_config_read') return { text: engine === 'omp' ? 'providers: {}\n' : '{"providers":{}}', file: { format: engine === 'omp' ? 'yaml' : 'json' } };
+        if (command === 'pi_family_models_config_write') { written = args.text; return {}; }
+        throw Error(command);
+      };
+      await bridge.ensurePiFamilyModelConfigured(engine, { id: 'protocol-test', isPlugin: true, api: 'anthropic-messages', baseUrl: 'https://example.invalid', apiKey: 'test-only' }, 'alias');
+      const provider = parser.parsePiFamilyProviders(written, engine === 'omp' ? 'yaml' : 'json')['plugin_model-switcher_protocol-test'];
+      assert.equal(provider.api, 'anthropic-messages');
+      assert.equal(provider.models[0].id, 'alias');
+      const readable = window.__TAURI_INTERNALS__.invoke;
+      window.__TAURI_INTERNALS__.invoke = (command, args) => command === 'pi_family_models_config_write'
+        ? Promise.reject('read-only config') : readable(command, args);
+      await assert.rejects(() => bridge.ensurePiFamilyModelConfigured(engine, { id: 'protocol-test', isPlugin: true }, 'alias'), /read-only config/);
+    }
+    for (const engine of ['kimi', 'grok']) {
+      window.__TAURI_INTERNALS__.invoke = async (command) => {
+        assert.equal(command, 'list_engine_models', 'Registry-based CLI must not use a relay /models ID as a selector');
+        return { models: [{ id: 'provider/alias' }], authoritative: true };
+      };
+      const catalog = await api.loadNativeChannelModels(unusedBridgeCtx, engine, { baseUrl: 'https://example.invalid' }, true);
+      assert.equal(catalog.models[0].id, 'provider/alias');
+      assert.equal(catalog.authoritative, true);
+    }
+    const requests = [];
+    window.__TAURI_INTERNALS__.invoke = () => new Promise(resolve => requests.push(resolve));
+    bridge.invalidateNativeCatalogCache('omp');
+    const older = bridge.getNativeCatalog('omp', true);
+    const newer = bridge.getNativeCatalog('omp', true);
+    await Promise.resolve();
+    requests[1]({ models: [{ id: 'new-model' }], authoritative: true });
+    await newer;
+    requests[0]({ models: [{ id: 'old-model' }], authoritative: true });
+    await older;
+    assert.equal(bridge.peekNativeCatalog('omp').models[0].id, 'new-model', 'Late old probe cannot overwrite refreshed catalog');
+  } finally { window.__TAURI_INTERNALS__.invoke = invoke; }
+}
 assert.notEqual(policy.modelSelectionError("codex", "alias", {
   modelProtocols: ["anthropic-messages"], engineProtocols: ["openai-responses"],
 }), null);
@@ -610,6 +651,15 @@ assert.equal((await scrub.checkScrubStatus(executableCtx)).status, "clean");
 console.log("Portable execution, host channel adapters and metadata-based model validation passed.");
 
 const display = await loadModule("../src/session-display.ts");
+{
+  const state = { selectedCli: 'omp', activeChannelType: 'plugin', activePluginChannelId: 'a', pluginChannels: { omp: [{ id: 'a' }, { id: 'b' }] } };
+  const session = { sessionKey: 'session', selectedCli: 'omp', selectedModel: 'alias', effort: 'high', enable1MContext: false };
+  const switched = display.withSessionDisplay(state, { ...session, selectedProviderId: bridge.pluginProviderId('b') });
+  assert.equal(switched.activePluginChannelId, 'b', 'Each session resolves its own independent channel');
+  const native = display.withSessionDisplay(state, { ...session, selectedProviderId: bridge.NATIVE_PROVIDER_ID });
+  assert.equal(native.activeChannelType, 'system');
+  assert.equal(native.activePluginChannelId, undefined);
+}
 const saved = { selectedCli: "codex", selectedModel: "global-model", effort: "high", enable1MContext: true };
 let active = { engine: "claude", sessionId: "a", workspacePath: "/project", model: "session-a", effort: "low" };
 globalThis.localStorage = { getItem: () => active ? JSON.stringify(active) : null };
@@ -619,6 +669,8 @@ assert.equal(selection.selectedModel, "session-a");
 assert.equal(selection.effort, "low");
 assert.equal(display.withSessionDisplay(saved, selection).enable1MContext, false);
 const firstKey = selection.sessionKey;
+active = { ...active, model: 'another-model', effort: 'ultra' };
+assert.equal(display.readSessionDisplay().sessionKey, firstKey, 'Model/effort changes keep the flyout mounted');
 active = { ...active, sessionId: "b", model: "session-b[1m]", effort: "max" };
 selection = display.readSessionDisplay();
 assert.notEqual(selection.sessionKey, firstKey);
@@ -822,6 +874,14 @@ for (const session of [pending, history, null]) {
   assert.deepEqual(stored, session ? { ...session, provider: providerId } : null);
   assert.deepEqual(JSON.parse(storage.get(tabsKey)), [pending, history].map(tab =>
     session && tab.sessionId === session.sessionId ? { ...tab, provider: providerId } : tab));
+}
+{
+  const callback = menu.memoizedProps.onChannelChange;
+  menu.memoizedProps.onChannelChange = () => { throw Error('host rejected channel'); };
+  const before = storage.get(activeKey);
+  await assert.rejects(() => sync.applyChannelSelectionToHost({ engine: 'codex', providerId: 'rejected' }), /host rejected channel/);
+  assert.equal(storage.get(activeKey), before, 'Rejected host change must not persist a different provider');
+  menu.memoizedProps.onChannelChange = callback;
 }
 delete globalThis.document;
 const beforeFallback = calls.length;

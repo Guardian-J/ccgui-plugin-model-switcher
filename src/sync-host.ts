@@ -357,7 +357,7 @@ async function syncAppSettings(engine: string, model: string, effort: string) {
       await internals.invoke("update_app_settings", { settings });
     }
   } catch (err) {
-    console.warn("[model-switcher] 同步 app_settings 失败:", err);
+    throw new Error(`保存 CLI 默认配置失败: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -532,14 +532,12 @@ export async function applyChannelSelectionToHost(params: {
   providerId: string;
 }): Promise<void> {
   const { engine, providerId } = params;
+  const error = hostSessionSelectionError(engine);
+  if (error) throw new Error(error);
   const callbacks = getHostCliMenuProps();
 
   if (callbacks && typeof callbacks.onChannelChange === "function") {
-    try {
-      callbacks.onChannelChange(engine, providerId);
-    } catch (err) {
-      console.warn("[model-switcher] 触发宿主 onChannelChange 失败:", err);
-    }
+    await callbacks.onChannelChange(engine, providerId);
   }
 
   syncSessionProviderToLocalStorage(engine, providerId);

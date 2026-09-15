@@ -61,9 +61,10 @@ export default function activate(ctx: PluginContext): Disposer {
     });
 
   const saveState = async (nextState: PluginState) => {
-    currentState = nextState.selectedCli === "claude" ? nextState : { ...nextState, enable1MContext: false };
+    const saved = nextState.selectedCli === "claude" ? nextState : { ...nextState, enable1MContext: false };
+    await ctx.storage.set("state", saved);
+    currentState = saved;
     notify();
-    await ctx.storage.set("state", currentState);
   };
 
   function useCurrentState(): PluginState {

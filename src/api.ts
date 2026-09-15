@@ -127,8 +127,8 @@ export async function fetchModelsFromProvider(
 
 /**
  * CLI 原生配置渠道的模型列表：
- * 对于 claude/codex/kimi/grok，若官方配置有 Base URL 则走供应商接口拉取；
- * 对于 omp/pi 等具有独立 models.yml/models.json 目录的引擎，直接读取本地原生目录，避免因远端 Key 校验未就绪导致打开弹窗报错。
+ * Claude/Codex 配置了 Base URL 时可读取远端模型；Kimi/Grok 必须使用 CLI 注册的别名，
+ * OMP/PI 使用 CLI 的供应商限定目录，均不能由远端裸 ID 替代。
  */
 export async function loadNativeChannelModels(
   ctx: PluginContext,
@@ -136,7 +136,7 @@ export async function loadNativeChannelModels(
   channel: { baseUrl?: string; apiKey?: string } | null | undefined,
   force = false,
 ): Promise<NativeCatalog> {
-  if (engine === "omp" || engine === "pi") {
+  if (engine === "omp" || engine === "pi" || engine === "kimi" || engine === "grok") {
     return getNativeCatalog(engine, force);
   }
   const baseUrl = channel?.baseUrl?.trim() ?? "";

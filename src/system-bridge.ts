@@ -108,7 +108,7 @@ export async function getNativeCatalog(
         ),
         authoritative: catalog?.authoritative === true,
       };
-      nativeCatalogsCache[engine] = { at: Date.now(), value: filtered };
+      if (nativeCatalogsInflight[engine] === pending) nativeCatalogsCache[engine] = { at: Date.now(), value: filtered };
       return filtered;
     })
     .finally(() => {
@@ -313,9 +313,10 @@ function getCliConfig(): Promise<CliConfigMap> {
   if (cliConfigInflight) return cliConfigInflight;
   const pending = invokeTauri<CliConfigMap>("get_cli_config");
   cliConfigInflight = pending;
-  void pending.finally(() => {
+  const clearPending = () => {
     if (cliConfigInflight === pending) cliConfigInflight = null;
-  });
+  };
+  void pending.then(clearPending, clearPending);
   return pending;
 }
 
@@ -531,7 +532,6 @@ export async function getSystemProviderChannels(
       });
 
     // 对于 pi 与 omp，读取 models.json / models.yml 中的 providers 配置并解析为独立供应商渠道
-    let piFamilyProviderCount = 0;
     if (engine === "pi" || engine === "omp") {
       try {
         const modelsRes = await invokeTauri<{
@@ -545,8 +545,7 @@ export async function getSystemProviderChannels(
           );
           for (const [pId, pData] of Object.entries(parsedProviders)) {
             if (isPluginProviderId(pId)) continue;
-            piFamilyProviderCount++;
-            channels.push({
+            const channel: SystemProviderChannel = {
               id: pId,
               name: pData.name || pId,
               baseUrl: pData.baseUrl || "",
@@ -560,7 +559,10 @@ export async function getSystemProviderChannels(
                 api: pData.api,
               },
               raw: pData,
-            });
+            };
+            const existingIndex = channels.findIndex(item => item.id === pId);
+            if (existingIndex < 0) channels.push(channel);
+            else channels[existingIndex] = channel;
           }
         }
       } catch (err) {
@@ -568,8 +570,8 @@ export async function getSystemProviderChannels(
       }
     }
 
-    // 只有在非 dsh 且 (非 pi/omp 或 pi/omp 未定义自定义 providers) 时才插入默认的 "CLI 原生配置" 占位
-    if (engine !== "dsh" && ((engine !== "pi" && engine !== "omp") || piFamilyProviderCount === 0)) {
+    // OMP/PI built-in providers remain usable alongside custom models configs.
+    if (engine !== "dsh") {
       channels.unshift({
         id: NATIVE_PROVIDER_ID,
         name: "CLI 原生配置",
@@ -580,12 +582,6 @@ export async function getSystemProviderChannels(
         isNative: true,
         isCurrent: currentId === NATIVE_PROVIDER_ID,
       });
-    } else if ((engine === "pi" || engine === "omp") && piFamilyProviderCount > 0 && currentId === NATIVE_PROVIDER_ID) {
-      // 若已解析出独立渠道且当前为默认占位，自动指向首个渠道
-      currentId = channels[0]?.id || NATIVE_PROVIDER_ID;
-      if (channels[0]) {
-        channels[0].isCurrent = true;
-      }
     }
 
     return { current: currentId, channels };
@@ -797,7 +793,7 @@ export async function ensurePiFamilyModelConfigured(
       invalidateNativeCatalogCache(engine);
     }
   } catch (err) {
-    console.warn("[model-switcher] ensurePiFamilyModelConfigured 失败:", err);
+    throw new Error(`写入 ${engine.toUpperCase()} 模型配置失败: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

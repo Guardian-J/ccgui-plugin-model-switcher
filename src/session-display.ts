@@ -2,6 +2,7 @@ import { useEffect, useState } from "./react-context";
 import { getHostSession, isConcreteModel } from "./selection-policy";
 import { findBuiltinTriggerButton, getHostCliMenuProps, repairLegacyHostModel } from "./sync-host";
 import type { CliEngineId, EffortLevel, PluginState } from "./types";
+import { isPluginProviderId, pluginProviderId } from "./system-bridge";
 
 export interface SessionDisplay {
   sessionKey: string;
@@ -24,7 +25,8 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
   const effort = (session?.effort as EffortLevel) || host?.lastUsedEffort || (matchingHost?.efforts?.[engine] as EffortLevel) || "high";
   const selectedProviderId = session?.provider || matchingHost?.selectedChannels?.[engine] || "";
   return {
-    sessionKey: JSON.stringify([engine, session?.sessionId ?? null, session?.workspacePath ?? "", host?.streaming ?? false, model, effort, selectedProviderId]),
+    // Model/effort updates must not remount the flyout and interrupt pointer capture or reset scrolling.
+    sessionKey: JSON.stringify([engine, session?.sessionId ?? null, session?.workspacePath ?? "", host?.streaming ?? false, selectedProviderId]),
     selectedCli: engine as CliEngineId,
     selectedModel: isConcreteModel(model) ? model.replace(/\[1m\]$/i, "").trim() : "",
     effort: effort as EffortLevel,
@@ -36,12 +38,18 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
 export function withSessionDisplay(state: PluginState, display: SessionDisplay | null): PluginState {
   if (!display) return state.selectedCli === "claude" ? state : { ...state, enable1MContext: false };
   const { sessionKey: _key, selectedProviderId, ...selection } = display;
+  const channel = state.pluginChannels?.[display.selectedCli]?.find(item =>
+    pluginProviderId(item.id) === selectedProviderId);
   return {
     ...state,
     ...selection,
     ...(selectedProviderId ? { selectedProviderId } : {}),
+    ...(selectedProviderId ? {
+      activeChannelType: isPluginProviderId(selectedProviderId) ? "plugin" as const : "system" as const,
+      activePluginChannelId: channel?.id,
+    } : {}),
     ...(state.selectedCli !== display.selectedCli ? {
-      selectedProviderId: selectedProviderId || "", activeChannelType: "system" as const, activePluginChannelId: undefined,
+      selectedProviderId: selectedProviderId || "", activeChannelType: channel ? "plugin" as const : "system" as const, activePluginChannelId: channel?.id,
     } : {}),
   };
 }

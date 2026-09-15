@@ -129,6 +129,8 @@ export function CliModelFlyoutMenu({
     below: false,
   });
   const menuRef = useRef<HTMLDialogElement | null>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   const busy = switching;
 
   useEffect(() => {
@@ -143,11 +145,14 @@ export function CliModelFlyoutMenu({
   }, [sessionDisplay]);
 
   useEffect(() => {
+    let positionFrame = 0;
+    const applyLayout = (next: typeof menuLayout) => setMenuLayout(prev =>
+      prev.offsetX === next.offsetX && prev.maxHeight === next.maxHeight && prev.below === next.below ? prev : next);
     const updatePosition = () => {
       const triggerEl = triggerRef?.current;
       const totalWidth = Math.min(760, window.innerWidth - 24);
       if (!triggerEl) {
-        setMenuLayout({ offsetX: 0, maxHeight: window.innerHeight - 24, below: false });
+        applyLayout({ offsetX: 0, maxHeight: window.innerHeight - 24, below: false });
         return;
       }
       const rect = triggerEl.getBoundingClientRect();
@@ -157,22 +162,28 @@ export function CliModelFlyoutMenu({
       const preferredHeight = window.innerWidth <= 600 ? 680 : 560;
       const availableHeight = Math.max(0, Math.min(preferredHeight, below ? spaceBelow : spaceAbove));
       const left = Math.max(12, Math.min(rect.left, window.innerWidth - totalWidth - 12));
-      setMenuLayout({ offsetX: left - rect.left, maxHeight: availableHeight, below });
+      applyLayout({ offsetX: left - rect.left, maxHeight: availableHeight, below });
+    };
+    const schedulePosition = (event: Event) => {
+      // Scrolling the model/channel lists does not move the trigger.
+      if (event.type === "scroll" && event.target instanceof Node && menuRef.current?.contains(event.target)) return;
+      if (positionFrame) return;
+      positionFrame = requestAnimationFrame(() => { positionFrame = 0; updatePosition(); });
     };
 
     updatePosition();
-    window.addEventListener("resize", updatePosition);
-    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", schedulePosition);
+    window.addEventListener("scroll", schedulePosition, { capture: true, passive: true });
 
     const handlePointerDown = (e: PointerEvent) => {
       const target = e.target as Node;
       if (menuRef.current?.contains(target) || triggerRef?.current?.contains(target)) return;
-      onClose();
+      closeRef.current();
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        onClose();
+        closeRef.current();
         triggerRef?.current?.focus();
       }
     };
@@ -181,12 +192,13 @@ export function CliModelFlyoutMenu({
     window.addEventListener("keydown", handleKeyDown);
 
     return () => {
-      window.removeEventListener("resize", updatePosition);
-      window.removeEventListener("scroll", updatePosition, true);
+      cancelAnimationFrame(positionFrame);
+      window.removeEventListener("resize", schedulePosition);
+      window.removeEventListener("scroll", schedulePosition, true);
       window.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [triggerRef, onClose]);
+  }, [triggerRef]);
 
   useEffect(() => {
     menuRef.current?.focus();
@@ -273,8 +285,9 @@ export function CliModelFlyoutMenu({
 
   const activeChannel = useMemo(() => {
     if (state.activeChannelType === "plugin") {
-      const p = pluginCustomChannels.find((c) => c.id === state.activePluginChannelId) || pluginCustomChannels[0];
-      if (p) return { id: p.id, name: p.name, baseUrl: p.baseUrl, apiKey: p.apiKey, model: p.model || "", isPlugin: true };
+      const p = pluginCustomChannels.find((c) => c.id === state.activePluginChannelId);
+      if (p) return { ...p, model: p.model || "", isPlugin: true };
+      return null;
     }
     const sys = systemChannels.find((c) => c.id === (state.selectedProviderId || currentChannelId));
     if (sys) {
@@ -284,6 +297,7 @@ export function CliModelFlyoutMenu({
         baseUrl: sys.baseUrl,
         apiKey: sys.apiKey,
         model: sys.model || "",
+        api: sys.api,
         isPlugin: false,
         settingsConfig: sys.settingsConfig,
         raw: sys.raw,
@@ -293,6 +307,7 @@ export function CliModelFlyoutMenu({
   }, [state.activeChannelType, state.activePluginChannelId, pluginCustomChannels, systemChannels, currentChannelId, state.selectedProviderId]);
 
   const nativeActive = activeChannel?.id === NATIVE_PROVIDER_ID;
+  const useNativeModels = nativeActive && (!activeChannel?.baseUrl || ["omp", "pi", "kimi", "grok"].includes(activeEngine));
 
   // 缓存 CLI 原生元数据用于后台协议校验，不直接展示在可用模型列表中
   useEffect(() => {
@@ -306,9 +321,22 @@ export function CliModelFlyoutMenu({
     }
   }, [activeEngine]);
 
+  useEffect(() => {
+    if (!useNativeModels || loadingChannels) return;
+    let cancelled = false;
+    void loadNativeChannelModels(ctx, activeEngine, activeChannel).then(catalog => {
+      if (cancelled) return;
+      setNativeModels(catalog.models);
+      setNativeAuthoritative(catalog.authoritative);
+    }).catch(error => {
+      if (!cancelled) setStatusMsg(`读取 CLI 模型失败: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    return () => { cancelled = true; };
+  }, [activeEngine, useNativeModels, loadingChannels]);
+
   // 当渠道切换或打开弹窗时：若当前渠道配置了 Base URL 且尚未拉取过模型，自动调用接口拉取
   useEffect(() => {
-    if (!activeChannel || loadingChannels) return;
+    if (!activeChannel || loadingChannels || useNativeModels) return;
     const baseUrl = activeChannel.baseUrl?.trim();
     if (!baseUrl) return;
 
@@ -333,7 +361,7 @@ export function CliModelFlyoutMenu({
           fetchedModels: { ...state.fetchedModels, [pId]: models },
         };
         if (activeChannel?.isPlugin) {
-          void ensurePiFamilyModelConfigured(activeEngine, activeChannel, models);
+          await ensurePiFamilyModelConfigured(activeEngine, activeChannel, models);
         }
         setState(nextState);
         await onSave(nextState);
@@ -352,7 +380,7 @@ export function CliModelFlyoutMenu({
     return () => {
       cancelled = true;
     };
-  }, [activeEngine, activeChannel?.id, activeChannel?.baseUrl, activeChannel?.apiKey, loadingChannels]);
+  }, [activeEngine, activeChannel?.id, activeChannel?.baseUrl, activeChannel?.apiKey, loadingChannels, useNativeModels]);
 
   const sortedSystemChannels = useMemo(() => {
     if (systemChannels.length <= 1) return systemChannels;
@@ -385,13 +413,14 @@ export function CliModelFlyoutMenu({
 
     const pId = channelModelKey(activeEngine, activeChannel.id);
     const legacyKey = activeEngine === legacyEngine.current ? activeChannel.id : "";
-    const fetched = state.fetchedModels?.[pId] || state.fetchedModels?.[legacyKey] || [];
+    const fetched = useNativeModels ? nativeModels.map(model => model.id)
+      : state.fetchedModels?.[pId] || state.fetchedModels?.[legacyKey] || [];
     const custom = state.customModels?.[pId] || state.customModels?.[legacyKey] || [];
 
     const normalizeId = (id: string): string =>
       nativeActive ? id : displayEngineModel(activeEngine, activeChannel, id);
 
-    // 可用模型只包含接口获取到的模型以及用户添加的自定义模型，坚决不混入原生模型 ID
+    // Native selectors are required by CLI registries; relay channels use their API IDs.
     const normalizedCustom = custom.map(normalizeId).filter(isConcreteModel);
     const normalizedFetched = fetched.map(normalizeId).filter(isConcreteModel);
 
@@ -464,7 +493,7 @@ export function CliModelFlyoutMenu({
     }
 
     return [];
-  }, [activeChannel, activeEngine, nativeActive, state.fetchedModels, state.customModels, state.selectedModel]);
+  }, [activeChannel, activeEngine, nativeActive, useNativeModels, nativeModels, state.fetchedModels, state.customModels, state.selectedModel]);
 
   const filteredModelOptions = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -483,7 +512,7 @@ export function CliModelFlyoutMenu({
     const protocols = nativeModels.find((entry) => entry.id === cleanId)?.protocols;
     return nativeActive ? {
       nativeIds,
-      authoritative: false, // 允许选择从接口拉取到的任意有效模型，不被本地静态目录限制
+      authoritative: useNativeModels && nativeAuthoritative && nativeModels.length > 0 && ["kimi", "grok"].includes(activeEngine),
       modelProtocols: Array.isArray(protocols) ? protocols : undefined,
       engineProtocols: engines.find((engine) => engine.id === activeEngine)?.supportedProtocols,
     } : undefined;
@@ -500,7 +529,7 @@ export function CliModelFlyoutMenu({
     selectionPending.current = true;
     setSwitching(true);
     try {
-      if (activeChannel?.isPlugin && targetModel) {
+      if (activeChannel && targetModel) {
         await ensurePiFamilyModelConfigured(activeEngine, activeChannel, targetModel);
       }
       await applyModelSelectionToHost({
@@ -532,7 +561,7 @@ export function CliModelFlyoutMenu({
   };
 
   const handleEffortChange = async (effort: EffortLevel) => {
-    await commitSelection({ ...state, effort });
+    return commitSelection({ ...state, effort });
   };
 
   const handleToggle1M = async (enabled: boolean) => {
@@ -542,6 +571,22 @@ export function CliModelFlyoutMenu({
   const handleFetchModels = async () => {
     if (busy || fetchingModels) return;
     if (!activeChannel) return;
+    if (useNativeModels) {
+      setFetchingModels(true);
+      const request = ++modelRequest.current;
+      try {
+        const catalog = await loadNativeChannelModels(ctx, activeEngine, activeChannel, true);
+        if (request !== modelRequest.current) return;
+        setNativeModels(catalog.models);
+        setNativeAuthoritative(catalog.authoritative);
+        setStatusMsg(`已读取 ${catalog.models.length} 个 CLI 模型`);
+      } catch (error) {
+        if (request === modelRequest.current) setStatusMsg(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (request === modelRequest.current) setFetchingModels(false);
+      }
+      return;
+    }
     const baseUrl = activeChannel.baseUrl?.trim();
     if (!baseUrl) {
       setStatusMsg("当前渠道未配置 Base URL，无法通过接口获取模型");
@@ -567,7 +612,7 @@ export function CliModelFlyoutMenu({
           fetchedModels: { ...state.fetchedModels, [pId]: models },
         };
         if (activeChannel?.isPlugin) {
-          void ensurePiFamilyModelConfigured(activeEngine, activeChannel, models);
+          await ensurePiFamilyModelConfigured(activeEngine, activeChannel, models);
         }
         setState(nextState);
         await onSave(nextState);
@@ -644,17 +689,15 @@ export function CliModelFlyoutMenu({
     };
     try {
       await applyChannelSelectionToHost({ engine: activeEngine, providerId: channel.id });
-      setCurrentChannelId(channel.id);
-      setState(nextState);
-      await onSave(nextState);
-      if (hostModel) {
-        await applyModelSelectionToHost({
+      await applyModelSelectionToHost({
           engine: activeEngine,
           model: hostModel,
           effort: state.effort,
           enable1M: state.enable1MContext,
-        });
-      }
+      });
+      await onSave(nextState);
+      setCurrentChannelId(channel.id);
+      setState(nextState);
       setStatusMsg(hostModel ? `已生效: ${channel.name}` : "渠道已切换，请选择模型");
       setTimeout(() => setStatusMsg(null), 2000);
     } catch (e) {
@@ -683,9 +726,7 @@ export function CliModelFlyoutMenu({
     try {
       await applyCustomPluginChannelToEngine(ctx, activeEngine, channel);
       await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(channel.id) });
-      if (hostModel) {
-        await applyModelSelectionToHost({ engine: activeEngine, model: hostModel, effort: state.effort, enable1M: state.enable1MContext });
-      }
+      await applyModelSelectionToHost({ engine: activeEngine, model: hostModel, effort: state.effort, enable1M: state.enable1MContext });
       setState(nextState);
       await onSave(nextState);
       setStatusMsg(hostModel ? `已生效: ${channel.name}` : "渠道已切换，请选择模型");
@@ -826,7 +867,7 @@ export function CliModelFlyoutMenu({
     setSearchQuery("");
     setCustomInput("");
     closeChannelForm();
-    setState((prev) => ({ ...prev, selectedCli: item.id, selectedModel: "", activeChannelType: "system" }));
+    setState((prev) => ({ ...prev, selectedCli: item.id, selectedModel: "", selectedProviderId: "", activeChannelType: "system", activePluginChannelId: undefined, enable1MContext: item.id === "claude" && prev.enable1MContext }));
   };
 
   const currentEngineObj = engines.find((e) => e.id === activeEngine);
@@ -979,7 +1020,7 @@ export function CliModelFlyoutMenu({
               onCustomInputChange={setCustomInput}
               onAddCustomModel={() => void handleAddCustomModel()}
               effort={state.effort || "high"}
-              onEffortChange={(effort) => void handleEffortChange(effort)}
+              onEffortChange={handleEffortChange}
               enable1M={Boolean(state.enable1MContext)}
               onToggle1M={(enabled) => void handleToggle1M(enabled)}
             />

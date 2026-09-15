@@ -1,0 +1,66 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Effort interaction regression</title>
+<div id="root"></div>
+<button id="check" style="margin-top: 20px">Run regression checks</button>
+<pre id="result"></pre>
+<script type="module">
+  import React from 'react';
+  import { createRoot } from 'react-dom/client';
+  import { initReact } from '../src/react-context.ts';
+  import { EffortSection } from '../src/components/EffortSection.tsx';
+  import { flyoutStyles } from '../src/components/flyout-styles.ts';
+  initReact(React);
+  // Inspect stats during a real mouse drag: no saves/parent renders until release.
+  window.stats = { calls: [], renders: 0, delay: 300, reject: false };
+  function Demo() {
+    window.stats.renders++;
+    const [effort, setEffort] = React.useState('high');
+    window.setEffort = setEffort;
+    const save = async level => {
+      window.stats.calls.push(level);
+      await new Promise(resolve => setTimeout(resolve, window.stats.delay));
+      if (window.stats.reject) return false;
+      setEffort(level);
+      return true;
+    };
+    return React.createElement('div', { className: 'ms-flyout', style: { position: 'relative', width: 560, height: 'auto', padding: 20 } },
+      React.createElement('style', null, flyoutStyles),
+      React.createElement(EffortSection, { engine: 'codex', effort, onChange: save, enable1M: false, onToggle1M() {} }));
+  }
+  window.readEffort = () => ({ ...window.stats, value: Number(document.querySelector('input').value),
+    label: document.querySelector('output').textContent, disabled: document.querySelector('input').disabled,
+    canvases: document.querySelectorAll('canvas').length });
+  createRoot(document.querySelector('#root')).render(React.createElement(Demo));
+  window.runChecks = async () => {
+    const assert = (ok, message) => { if (!ok) throw Error(message); };
+    const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const input = document.querySelector('input');
+    const key = (type, name) => input.dispatchEvent(new KeyboardEvent(type, { key: name, bubbles: true }));
+    window.stats.calls = [];
+    window.stats.delay = 120;
+    window.stats.reject = false;
+    window.setEffort('low');
+    await pause(0);
+    const renders = window.stats.renders;
+    for (let i = 0; i < 4; i++) { key('keydown', 'ArrowRight'); await pause(0); }
+    assert(window.stats.calls.length === 0, 'Key repeat must preview without saving');
+    assert(window.stats.renders === renders, 'Preview must not rerender the parent');
+    assert(window.readEffort().label === 'max', 'Keyboard keeps six discrete stops');
+    key('keyup', 'ArrowRight'); await pause(0);
+    assert(window.stats.calls.join() === 'max' && input.disabled, 'One save on release');
+    await pause(170);
+    assert(window.readEffort().value === 4 && !input.disabled, 'Final stop persists');
+    window.stats.reject = true;
+    key('keydown', 'End'); await pause(0); key('keyup', 'End'); await pause(170);
+    assert(window.readEffort().value === 4 && !input.disabled, 'Failed save restores persisted value');
+    window.stats.reject = false;
+    window.setEffort('medium'); await pause(0);
+    assert(window.readEffort().value === 1, 'External host changes stay synchronized');
+    return 'PASS: local preview, keyboard repeat, single delayed save, rollback, external sync';
+  };
+  document.querySelector('#check').onclick = async () => {
+    try { document.querySelector('#result').textContent = await window.runChecks(); }
+    catch (error) { document.querySelector('#result').textContent = error.stack; throw error; }
+  };
+</script>
