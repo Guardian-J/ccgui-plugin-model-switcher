@@ -11,6 +11,7 @@ import { FileSearchPanel } from "./components/FileSearchPanel";
 import { SearchIcon } from "./icons";
 import { installChatLinks } from "./chat-links";
 import { repairLegacyContextSelections } from "./sync-host";
+import { compactPluginModelLabel, installCompactModelLabels } from "./model-display";
 
 /**
  * CC GUI 插件入口：模型与供应商切换助手 (原生样式对齐 + GUI 美化扩展)
@@ -91,7 +92,7 @@ export default function activate(ctx: PluginContext): Disposer {
     }, [state.selectedCli]);
 
     const engineName = CLI_DISPLAY_NAMES[state.selectedCli] || state.selectedCli;
-    const bareModel = state.selectedModel ? state.selectedModel.replace(/\[1m\]$/i, "") : "未获取模型";
+    const bareModel = state.selectedModel ? compactPluginModelLabel(state.selectedModel.replace(/\[1m\]$/i, "")) : "未获取模型";
     const displayModel = state.enable1MContext ? `${bareModel} [1m]` : bareModel;
     const effortText = state.effort || "high";
     const modelIconEngine =
@@ -180,7 +181,7 @@ export default function activate(ctx: PluginContext): Disposer {
   // 2. 底部状态栏控件：显示 CLI 的 Logo 和模型信息
   function StatusBarItem() {
     const state = withSessionDisplay(useCurrentState(), useSessionDisplay());
-    const bareModel = state.selectedModel ? state.selectedModel.replace(/\[1m\]$/i, "") : "未获取模型";
+    const bareModel = state.selectedModel ? compactPluginModelLabel(state.selectedModel.replace(/\[1m\]$/i, "")) : "未获取模型";
     const displayModel = state.enable1MContext ? `${bareModel}[1m]` : bareModel;
     const modelIconEngine =
       inferModelEngine(state.selectedModel) || state.selectedCli;
@@ -197,6 +198,7 @@ export default function activate(ctx: PluginContext): Disposer {
   }
 
   const disposers: Disposer[] = [
+    installCompactModelLabels(),
     installChatLinks(ctx),
     ctx.ui.registerPanelTab({
       key: "file-search", label: () => "搜索", icon: SearchIcon, order: 0.5,

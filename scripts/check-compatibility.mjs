@@ -21,6 +21,10 @@ async function loadModule(path) {
 }
 
 const bridge = await loadModule("../src/system-bridge.ts");
+const modelDisplay = await loadModule("../src/model-display.ts");
+assert.equal(modelDisplay.compactPluginModelLabel('模型 plugin_model-switcher_custom_1789434719040/deepseek-v4-flash · high'), '模型 deepseek-v4-flash · high');
+assert.equal(modelDisplay.compactPluginModelLabel('plugin_model-switcher_custom_1/org/model'), 'org/model');
+assert.equal(modelDisplay.compactPluginModelLabel('openrouter/org/model'), 'openrouter/org/model');
 // The delete button receives the displayed ID, while older entries retain suffixes/prefixes.
 for (const engine of ['omp', 'pi']) {
   const channel = { id: 'custom_test', isPlugin: true };
@@ -565,6 +569,27 @@ const patchedMissingApi = parser.upsertPiFamilyProviderText(
 assert.match(patchedMissingApi, /api: openai-completions/);
 assert.doesNotMatch(parser.removePiFamilyProviderText(upserted, "yaml", "plugin_model-switcher_test"), /plugin_model-switcher_test:/);
 assert.match(parser.removePiFamilyProviderText(upserted, "yaml", "plugin_model-switcher_test"), /custom-omp:/);
+// Last-provider deletion must emit an empty mapping, never YAML null; adding again must expand it.
+for (const nl of ['\n', '\r\n']) {
+  const onlyProvider = ['# config', 'providers: # custom channels', '  plugin_model-switcher_test:', '    models: []', 'defaults:', '  model: native', ''].join(nl);
+  const empty = parser.removePiFamilyProviderText(onlyProvider, 'yaml', 'plugin_model-switcher_test');
+  assert.ok(empty.includes('providers: {} # custom channels' + nl));
+  assert.ok(empty.includes('defaults:' + nl + '  model: native'));
+  assert.equal(parser.removePiFamilyProviderText(empty, 'yaml', 'plugin_model-switcher_test'), empty);
+  const added = parser.upsertPiFamilyProviderText(empty, 'yaml', 'plugin_model-switcher_test', {
+    name: 'Relay', baseUrl: 'https://example.invalid', apiKey: 'test-only', api: 'openai-completions', model: 'alias',
+  });
+  assert.ok(!added.includes('providers: {}'));
+  assert.equal(parser.parsePiFamilyProviders(added, 'yaml')['plugin_model-switcher_test'].models[0].id, 'alias');
+  const previous = piFamilyModels.omp;
+  piFamilyModels.omp = onlyProvider;
+  const callStart = calls.length;
+  await bridge.deleteCustomPluginChannel('omp', 'test');
+  assert.ok(piFamilyModels.omp.includes('providers: {}'));
+  assert.equal(calls.slice(callStart).at(-1).command, 'delete_provider', 'Removing the final OMP provider reaches host deletion');
+  piFamilyModels.omp = previous;
+}
+assert.deepEqual(JSON.parse(parser.removePiFamilyProviderText('{"providers":{"only":{"models":[]}}}', 'json', 'only')), { providers: {} });
 console.log("OMP/PI plugin channels persist api protocol in models.yml.");
 assert.notEqual(policy.modelSelectionError("codex", "alias", {
   modelProtocols: ["anthropic-messages"], engineProtocols: ["openai-responses"],

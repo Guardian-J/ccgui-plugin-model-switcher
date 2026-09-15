@@ -793,7 +793,7 @@ export function CliModelFlyoutMenu({
       setState(nextState);
       setStatusMsg("已删除该渠道");
     } catch (e) {
-      setStatusMsg(e instanceof Error ? e.message : "删除渠道失败");
+      setStatusMsg(`删除渠道失败: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       selectionPending.current = false;
       setSwitching(false);

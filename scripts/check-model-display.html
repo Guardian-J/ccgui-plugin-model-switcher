@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Model display regression</title>
+<div id="root"></div>
+<pre id="result">Running…</pre>
+<script type="module">
+  import React from 'react';
+  import { createRoot } from 'react-dom/client';
+  import { flushSync } from 'react-dom';
+  import { installCompactModelLabels } from '../src/model-display.ts';
+
+  const full = 'plugin_model-switcher_custom_1789434719040/deepseek-v4-flash';
+  const root = createRoot(document.querySelector('#root'));
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  function render(model, show = true) {
+    flushSync(() => root.render(React.createElement('div', { 'data-virtual-inner': true },
+      React.createElement('div', { className: 'group' },
+        React.createElement('p', { className: 'prose-chat' }, full),
+        show && React.createElement('div', { className: 'mt-1 flex items-center gap-2' },
+          React.createElement('button', null, 'Copy'),
+          React.createElement('span', { className: 'text-caption-1-regular tabular-nums' }, `00:21 · 模型 ${model} · high`))),
+      React.createElement('span', { id: 'ordinary' }, full))));
+  }
+  const meta = () => document.querySelector('span.tabular-nums');
+  let dispose;
+  try {
+    render(full);
+    const originalNode = meta().firstChild;
+    dispose = installCompactModelLabels();
+    assert(meta().textContent === '00:21 · 模型 deepseek-v4-flash · high', 'Shorten existing metadata');
+    assert(meta().firstChild === originalNode, 'Preserve React text node');
+    assert(document.querySelector('.prose-chat').textContent === full, 'Preserve message content');
+    assert(document.querySelector('#ordinary').textContent === full, 'Preserve unrelated labels');
+    render('plugin_model-switcher_custom_2/org/model');
+    await settle();
+    assert(meta().textContent.includes('模型 org/model'), 'Shorten React updates and preserve model namespaces');
+    render('native/model');
+    await settle();
+    dispose();
+    assert(meta().textContent.includes('模型 native/model'), 'Do not restore stale model after host update');
+    dispose = installCompactModelLabels();
+    render(full, false);
+    await settle();
+    render(full);
+    await settle();
+    assert(!meta().textContent.includes('plugin_model-switcher_'), 'Shorten virtualized remount');
+    dispose();
+    assert(meta().textContent.includes(full), 'Restore current original on unload');
+    render(full, false);
+    document.querySelector('#result').textContent = 'PASS: existing rows, React updates, scoped labels, virtualized remount, unload';
+    document.title = 'PASS';
+  } catch (error) {
+    dispose?.();
+    document.querySelector('#result').textContent = error.stack;
+    document.title = 'FAIL';
+    throw error;
+  }
+</script>

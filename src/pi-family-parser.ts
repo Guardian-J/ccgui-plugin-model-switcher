@@ -294,6 +294,8 @@ export function upsertPiFamilyProviderText(
 
     if (!range || range.startLine < 0) {
       const pIdx = range?.providersIndex ?? lines.findIndex((l) => /^providers\s*:/.test(l.trim()));
+      // Expand an empty mapping before inserting the first provider again.
+      if (pIdx >= 0) lines[pIdx] = lines[pIdx].replace(/^(providers\s*:)\s*\{\s*\}/, "$1");
       lines.splice(pIdx >= 0 ? pIdx + 1 : lines.length, 0, ...newBlockLines);
     } else {
       lines.splice(range.startLine, range.endLine - range.startLine, ...newBlockLines);
@@ -331,6 +333,11 @@ export function removePiFamilyProviderText(text: string, format: string, id: str
     const range = findYamlProviderLineRange(lines, id);
     if (!range || range.startLine < 0) return text;
     lines.splice(range.startLine, range.endLine - range.startLine);
+    const nextContent = lines.slice(range.providersIndex + 1).find(line => line.trim() && !line.trim().startsWith("#"));
+    if (!nextContent || nextContent.search(/\S/) === 0) {
+      // Bare `providers:` is YAML null, which the host rejects; zero providers is valid.
+      lines[range.providersIndex] = lines[range.providersIndex].replace(/^(providers\s*:)/, "$1 {}");
+    }
     return lines.join(nl) + (lines.length > 0 ? nl : "");
   }
   try {

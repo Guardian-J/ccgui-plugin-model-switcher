@@ -842,7 +842,7 @@ export async function applyCustomPluginChannelToEngine(
 }
 
 /**
- * 从宿主供应商列表删除独立渠道。当前项被删时回落到官方配置；CLI 自身文件不动。
+ * 删除宿主独立渠道及 OMP/PI 原生模型配置中的对应项，允许删除最后一个渠道。
  */
 export async function deleteCustomPluginChannel(
   engine: CliEngineId,
