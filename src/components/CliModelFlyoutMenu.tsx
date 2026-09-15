@@ -134,7 +134,7 @@ export function CliModelFlyoutMenu({
   const busy = switching;
 
   useEffect(() => {
-    if (!sessionDisplay) return;
+    if (!sessionDisplay || selectionPending.current) return;
     if (sessionDisplay.selectedCli !== activeEngine) {
       modelRequest.current++;
       setFetchingModels(false);
@@ -142,7 +142,7 @@ export function CliModelFlyoutMenu({
       setActiveEngine(sessionDisplay.selectedCli);
     }
     setState(prev => withSessionDisplay(prev, sessionDisplay));
-  }, [sessionDisplay]);
+  }, [sessionDisplay, busy]);
 
   useEffect(() => {
     let positionFrame = 0;
@@ -336,7 +336,7 @@ export function CliModelFlyoutMenu({
 
   // 当渠道切换或打开弹窗时：若当前渠道配置了 Base URL 且尚未拉取过模型，自动调用接口拉取
   useEffect(() => {
-    if (!activeChannel || loadingChannels || useNativeModels) return;
+    if (!activeChannel || loadingChannels || useNativeModels || busy) return;
     const baseUrl = activeChannel.baseUrl?.trim();
     if (!baseUrl) return;
 
@@ -360,9 +360,6 @@ export function CliModelFlyoutMenu({
           ...state,
           fetchedModels: { ...state.fetchedModels, [pId]: models },
         };
-        if (activeChannel?.isPlugin) {
-          await ensurePiFamilyModelConfigured(activeEngine, activeChannel, models);
-        }
         setState(nextState);
         await onSave(nextState);
         setStatusMsg(`已通过接口获取 ${models.length} 个模型`);
@@ -379,8 +376,9 @@ export function CliModelFlyoutMenu({
 
     return () => {
       cancelled = true;
+      if (request === modelRequest.current) setFetchingModels(false);
     };
-  }, [activeEngine, activeChannel?.id, activeChannel?.baseUrl, activeChannel?.apiKey, loadingChannels, useNativeModels]);
+  }, [activeEngine, activeChannel?.id, activeChannel?.baseUrl, activeChannel?.apiKey, loadingChannels, useNativeModels, busy]);
 
   const sortedSystemChannels = useMemo(() => {
     if (systemChannels.length <= 1) return systemChannels;
@@ -466,6 +464,7 @@ export function CliModelFlyoutMenu({
 
     const customSet = new Set(custom.map(normalizeId));
     for (const id of custom) customSet.add(id);
+    const catalogSet = new Set(normalizedFetched);
 
     if (rawList.length > 0) {
       return rawList.map((m) => {
@@ -488,6 +487,7 @@ export function CliModelFlyoutMenu({
           label: m,
           description: desc,
           custom: isCustom,
+          catalog: catalogSet.has(m),
         };
       });
     }
@@ -495,11 +495,9 @@ export function CliModelFlyoutMenu({
     return [];
   }, [activeChannel, activeEngine, nativeActive, useNativeModels, nativeModels, state.fetchedModels, state.customModels, state.selectedModel]);
 
-  const filteredModelOptions = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return modelOptions;
-    return modelOptions.filter((m) => m.label.toLowerCase().includes(q) || (m.description && m.description.toLowerCase().includes(q)));
-  }, [modelOptions, searchQuery]);
+  const favoriteModelOptions = useMemo(() => modelOptions.filter(model => model.custom), [modelOptions]);
+  const catalogModelOptions = useMemo(() => modelOptions.filter(model => model.catalog), [modelOptions]);
+  useEffect(() => { setSearchQuery(""); }, [activeEngine, activeChannel?.id]);
 
   const bareSelectedModel = displayEngineModel(
     activeEngine,
@@ -611,9 +609,6 @@ export function CliModelFlyoutMenu({
           ...state,
           fetchedModels: { ...state.fetchedModels, [pId]: models },
         };
-        if (activeChannel?.isPlugin) {
-          await ensurePiFamilyModelConfigured(activeEngine, activeChannel, models);
-        }
         setState(nextState);
         await onSave(nextState);
         setStatusMsg(`已通过接口获取 ${models.length} 个模型`);
@@ -627,19 +622,36 @@ export function CliModelFlyoutMenu({
     }
   };
 
-  const handleAddCustomModel = async () => {
-    const id = customInput.trim();
-    if (!id || !activeChannel) return;
+  const handleAddCustomModel = async (modelId = customInput) => {
+    if (!activeChannel || busy || fetchingModels || selectionPending.current) return;
+    const id = displayEngineModel(activeEngine, activeChannel, modelId);
+    if (!isConcreteModel(id)) return;
     const pId = channelModelKey(activeEngine, activeChannel.id);
     const currentCustom = state.customModels?.[pId] ||
       (activeEngine === legacyEngine.current ? state.customModels?.[activeChannel.id] : []) || [];
-    const nextCustom = currentCustom.includes(id) ? currentCustom : [id, ...currentCustom];
+    if (currentCustom.some(model => displayEngineModel(activeEngine, activeChannel, model) === id)) {
+      setStatusMsg("该模型已在自选列表中");
+      return;
+    }
+    const nextCustom = [id, ...currentCustom];
     const nextState: PluginState = {
       ...state,
-      selectedModel: id,
       customModels: { ...state.customModels, [pId]: nextCustom },
     };
-    if (await commitSelection(nextState)) setCustomInput("");
+    selectionPending.current = true;
+    setSwitching(true);
+    try {
+      await onSave(nextState);
+      setState(nextState);
+      setCustomInput("");
+      setSearchQuery("");
+      setStatusMsg(`已加入自选: ${id}`);
+    } catch (error) {
+      setStatusMsg(error instanceof Error ? error.message : "加入自选失败，请重试");
+    } finally {
+      selectionPending.current = false;
+      setSwitching(false);
+    }
   };
 
   const confirmDeleteCustomModel = async () => {
@@ -652,7 +664,6 @@ export function CliModelFlyoutMenu({
     const nextState: PluginState = {
       ...state,
       customModels: { ...state.customModels, [key]: nextCustom },
-      selectedModel: bareSelectedModel === modelId ? "" : state.selectedModel,
     };
     selectionPending.current = true;
     setSwitching(true);
@@ -660,12 +671,10 @@ export function CliModelFlyoutMenu({
       await onSave(nextState);
       setState(nextState);
       setPendingDeleteModel(null);
-      const fetched = state.fetchedModels?.[pId] || state.fetchedModels?.[legacyKey] || [];
-      const remainsFromApi = fetched.some(id => displayEngineModel(activeEngine, activeChannel, id) === modelId);
-      setStatusMsg(remainsFromApi ? "已删除自定义记录；同名模型仍由供应商接口提供" : "已删除自定义模型");
+      setStatusMsg("已移出自选");
     } catch (e) {
       setPendingDeleteModel(null);
-      setStatusMsg(e instanceof Error ? e.message : "删除自定义模型失败，请重试");
+      setStatusMsg(e instanceof Error ? e.message : "移出自选失败，请重试");
     } finally {
       selectionPending.current = false;
       setSwitching(false);
@@ -727,8 +736,8 @@ export function CliModelFlyoutMenu({
       await applyCustomPluginChannelToEngine(ctx, activeEngine, channel);
       await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(channel.id) });
       await applyModelSelectionToHost({ engine: activeEngine, model: hostModel, effort: state.effort, enable1M: state.enable1MContext });
-      setState(nextState);
       await onSave(nextState);
+      setState(nextState);
       setStatusMsg(hostModel ? `已生效: ${channel.name}` : "渠道已切换，请选择模型");
       setTimeout(() => setStatusMsg(null), 2000);
     } catch (e) {
@@ -1003,7 +1012,11 @@ export function CliModelFlyoutMenu({
             <ModelListSection
               activeEngine={activeEngine}
               activeChannel={activeChannel}
-              filteredModelOptions={filteredModelOptions}
+              favoriteModelOptions={favoriteModelOptions}
+              catalogModelOptions={catalogModelOptions}
+              onAddFavorite={(id) => {
+                if (catalogModelOptions.some(model => model.id === id)) void handleAddCustomModel(id);
+              }}
               bareSelectedModel={bareSelectedModel}
               fetchingModels={fetchingModels}
               searchQuery={searchQuery}
@@ -1040,8 +1053,8 @@ export function CliModelFlyoutMenu({
               className="ms-confirm-dialog"
               aria-labelledby="ms-delete-title"
             >
-              <h3 id="ms-delete-title">删除自定义模型</h3>
-              <p>确定删除“{pendingDeleteModel}”吗？此操作不可撤销。</p>
+              <h3 id="ms-delete-title">移出自选</h3>
+              <p>确定将“{pendingDeleteModel}”移出自选吗？之后可以重新添加。</p>
               <div className="ms-confirm-actions">
                 <button type="button" className="ms-button" onClick={() => setPendingDeleteModel(null)}>
                   取消
@@ -1051,7 +1064,7 @@ export function CliModelFlyoutMenu({
                   className="ms-button ms-danger"
                   onClick={() => void confirmDeleteCustomModel()}
                 >
-                  确认删除
+                  确认移出
                 </button>
               </div>
             </dialog>

@@ -671,6 +671,8 @@ assert.equal(display.withSessionDisplay(saved, selection).enable1MContext, false
 const firstKey = selection.sessionKey;
 active = { ...active, model: 'another-model', effort: 'ultra' };
 assert.equal(display.readSessionDisplay().sessionKey, firstKey, 'Model/effort changes keep the flyout mounted');
+active = { ...active, provider: 'another-channel' };
+assert.equal(display.readSessionDisplay().sessionKey, firstKey, 'Channel changes keep the in-flight switch mounted');
 active = { ...active, sessionId: "b", model: "session-b[1m]", effort: "max" };
 selection = display.readSessionDisplay();
 assert.notEqual(selection.sessionKey, firstKey);
@@ -860,14 +862,20 @@ for (const engine of ['omp', 'pi', 'codex', 'claude']) {
 delete window.React;
 window.__TAURI_INTERNALS__.invoke = invokeBeforeSwitch;
 const channelCalls = [];
-menu.memoizedProps.onChannelChange = (engine, providerId) => channelCalls.push([engine, providerId]);
+menu.memoizedProps.onChannelChange = (engine, providerId) => {
+  channelCalls.push([engine, providerId]);
+  // The host callback returns void while its backend mutation is still pending.
+  setTimeout(() => { menu.memoizedProps.selectedChannels = { [engine]: providerId }; }, 40);
+};
 for (const session of [pending, history, null]) {
+  menu.memoizedProps.selectedChannels = { codex: 'before' };
   footer.memoizedProps.active = session;
   storage.set(activeKey, JSON.stringify(session));
   storage.set(tabsKey, JSON.stringify([pending, history]));
   const before = calls.length;
   const providerId = bridge.pluginProviderId("test");
   await sync.applyChannelSelectionToHost({ engine: "codex", providerId });
+  assert.equal(menu.memoizedProps.selectedChannels.codex, providerId, 'Wait for the committed host selection');
   assert.deepEqual(channelCalls.at(-1), ["codex", providerId]);
   assert.equal(calls.length, before, "Channel selection must not write global defaults, including blank or absent sessions");
   const stored = JSON.parse(storage.get(activeKey));
@@ -883,11 +891,31 @@ for (const session of [pending, history, null]) {
   assert.equal(storage.get(activeKey), before, 'Rejected host change must not persist a different provider');
   menu.memoizedProps.onChannelChange = callback;
 }
+{
+  const callback = menu.memoizedProps.onChannelChange;
+  menu.memoizedProps.onChannelChange = () => {};
+  const before = storage.get(activeKey);
+  await assert.rejects(() => sync.applyChannelSelectionToHost({ engine: 'codex', providerId: 'not-accepted' }), /未确认/);
+  assert.equal(storage.get(activeKey), before, 'Silent host rejection cannot persist a successful switch');
+  menu.memoizedProps.onChannelChange = callback;
+}
+{
+  const callback = menu.memoizedProps.onChannelChange;
+  const session = footer.memoizedProps.active;
+  const before = storage.get(activeKey);
+  menu.memoizedProps.onChannelChange = () => {
+    setTimeout(() => { footer.memoizedProps.active = { ...history, sessionId: 'another-tab' }; }, 10);
+  };
+  await assert.rejects(() => sync.applyChannelSelectionToHost({ engine: 'codex', providerId: 'late-channel' }), /会话已变化/);
+  assert.equal(storage.get(activeKey), before, 'Changing tabs stops the pending channel operation before storage/model updates');
+  footer.memoizedProps.active = session;
+  menu.memoizedProps.onChannelChange = callback;
+}
 delete globalThis.document;
 const beforeFallback = calls.length;
 storage.set(activeKey, JSON.stringify(pending));
-await sync.applyChannelSelectionToHost({ engine: "codex", providerId: "relay" });
-assert.equal(JSON.parse(storage.get(activeKey)).provider, "relay");
+await assert.rejects(() => sync.applyChannelSelectionToHost({ engine: "codex", providerId: "relay" }), /无法连接/);
+assert.deepEqual(JSON.parse(storage.get(activeKey)), pending, 'Missing host callback must not fake a successful switch');
 assert.equal(calls.length, beforeFallback, "Missing host callbacks must not fall back to writing global defaults");
 delete globalThis.localStorage;
 console.log("Pending CLI selection, live session guards, streaming locks and host retargeting passed.");

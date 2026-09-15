@@ -4,6 +4,7 @@ node_modules/
 
 # Generated plugin bundles
 /dist/
+/dist.zip
 /main.js
 
 # Local environment and credentials

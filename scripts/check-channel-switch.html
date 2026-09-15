@@ -1,0 +1,127 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Channel switch regression</title>
+<style>#root { position: absolute; top: 580px; } #result { position: absolute; top: 620px; }</style>
+<div id="root"></div><pre id="result">Running…</pre>
+<script type="module">
+  import React from 'react';
+  import { createRoot } from 'react-dom/client';
+  import { initReact } from '../src/react-context.ts';
+  import { CliModelFlyoutMenu } from '../src/components/CliModelFlyoutMenu.tsx';
+  import { useSessionDisplay, withSessionDisplay } from '../src/session-display.ts';
+  import { DEFAULT_STATE } from '../src/constants.ts';
+  import { pluginProviderId } from '../src/system-bridge.ts';
+  initReact(React);
+  localStorage.clear();
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const assert = (value, message) => { if (!value) throw Error(message); };
+  const waitFor = async (predicate, message) => {
+    const deadline = Date.now() + 7000;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw Error(`Timed out: ${message}`);
+      await delay(20);
+    }
+  };
+  const pluginId = pluginProviderId('b');
+  const configs = { codex: { current: 'a', providers: {
+    a: { name: 'Channel A', baseUrl: 'https://a.example.invalid', apiKey: 'test-a', model: 'model-a' },
+    rejected: { name: 'Rejected', model: 'model-rejected' },
+  } } };
+  let saved = { ...DEFAULT_STATE, selectedCli: 'codex', selectedProviderId: 'a', selectedModel: 'model-a',
+    fetchedModels: { 'codex:a': ['model-a'] }, customModels: { 'codex:b': ['model-b'] },
+    pluginChannels: { codex: [{ id: 'b', name: 'Channel B', baseUrl: 'https://b.example.invalid',
+      apiKey: 'test-b', model: 'model-b' }] } };
+  const calls = [];
+  let saves = 0, saving = 0, maxSaving = 0, host;
+  window.__TAURI_INTERNALS__ = { invoke: async (cmd, args) => {
+    calls.push(cmd);
+    switch (cmd) {
+      case 'get_cli_config': return configs;
+      case 'official_config_read': return [];
+      case 'list_engines': return [{ id: 'codex', available: true, enabled: true }];
+      case 'get_app_settings': return {};
+      case 'update_app_settings': await delay(160); return;
+      case 'upsert_provider': configs[args.engine].providers[args.id] = args.json; return;
+      case 'fetch_provider_models': await delay(15); return { models: ['model-b', 'model-c'] };
+      default: throw Error(`Unexpected IPC: ${cmd}`);
+    }
+  } };
+  const ctx = { bridge: { invoke: async () => { throw Error('Unexpected bridge call'); } } };
+  function HostMenu(props) {
+    return React.createElement('button', { 'aria-haspopup': 'dialog', 'aria-label': props.selectedChannels.codex }, 'Host');
+  }
+  function Plugin() {
+    const display = useSessionDisplay();
+    return React.createElement(CliModelFlyoutMenu, { key: display?.sessionKey || 'none', ctx,
+      state: withSessionDisplay(saved, display), onClose() {}, onSave: async next => {
+        saves++; maxSaving = Math.max(maxSaving, ++saving);
+        await delay(140); saved = next; saving--;
+      } });
+  }
+  function App() {
+    const [active, setActive] = React.useState({ engine: 'codex', sessionId: 'test-session',
+      workspacePath: '/test', model: 'model-a', provider: 'a' });
+    host = active;
+    const update = patch => setActive(previous => {
+      const next = { ...previous, ...patch };
+      localStorage.setItem('ccgui-next.activeSession:v1', JSON.stringify(next));
+      return next;
+    });
+    return React.createElement(React.Fragment, null,
+      React.createElement('div', { className: 'select-none' }, React.createElement(HostMenu, {
+        value: 'codex', active, models: { codex: active.model }, selectedChannels: { codex: active.provider },
+        onChannelChange: (engine, id) => {
+          calls.push(`channel:${id}`);
+          // Match the host: no Promise returned, and backend failures are swallowed.
+          if (id !== 'rejected') setTimeout(() => update({ provider: id }), 100);
+        },
+        onModelChange: (engine, model) => { calls.push(`model:${model}`); update({ model }); },
+        onEffortChange() {}, onChange() {},
+      })), React.createElement(Plugin));
+  }
+  const button = name => [...document.querySelectorAll('.ms-channel-row > button.ms-row')]
+    .find(el => el.querySelector('.ms-row-title')?.textContent === name);
+  const tab = index => document.querySelectorAll('.ms-segments button')[index].click();
+  const ready = () => !document.querySelector('.ms-loading-overlay') && !document.querySelector('.ms-model-picker input')?.disabled;
+  try {
+    createRoot(document.querySelector('#root')).render(React.createElement(App));
+    await waitFor(() => button('Channel A') && ready(), 'initial channels');
+    const dialog = document.querySelector('.ms-flyout');
+    tab(1);
+    await waitFor(() => button('Channel B'), 'plugin tab');
+    button('Channel B').click();
+    await delay(40);
+    assert(!calls.includes('model:model-b'), 'Model waits for channel acknowledgement');
+    button('Channel B').click();
+    await waitFor(() => saved.activePluginChannelId === 'b' && saved.fetchedModels['codex:b'] && ready(), 'switch and catalog save');
+    assert(calls.filter(cmd => cmd === `channel:${pluginId}`).length === 1, 'Rapid duplicate click cannot start a second switch');
+    assert(document.querySelector('.ms-flyout') === dialog, 'Channel switch preserves the mounted dialog');
+    assert(host.provider === pluginId && host.model === 'model-b', 'Host channel and model agree');
+    assert(saved.customModels['codex:b'].includes('model-b'), 'Favorites preserved');
+    assert(maxSaving === 1, 'Catalog save cannot race with channel save');
+    tab(0);
+    await waitFor(() => button('Channel A'), 'system tab');
+    button('Channel A').click();
+    await waitFor(() => saved.activeChannelType === 'system' && saved.selectedProviderId === 'a' && ready(), 'switch back');
+    assert(host.provider === 'a' && host.model === 'model-a', 'System channel and model agree');
+    const savesBefore = saves;
+    const modelsBefore = calls.filter(cmd => cmd.startsWith('model:')).length;
+    button('Rejected').click();
+    await waitFor(() => document.querySelector('.ms-status')?.textContent.includes('宿主未确认'), 'silent host rejection');
+    assert(saved.selectedProviderId === 'a' && host.provider === 'a', 'Rejected channel does not replace current channel');
+    assert(saves === savesBefore && calls.filter(cmd => cmd.startsWith('model:')).length === modelsBefore,
+      'Rejected channel causes no plugin save or model change');
+    assert(button('Channel A').getAttribute('aria-pressed') === 'true', 'Failed switch keeps previous checkmark');
+    tab(1);
+    await waitFor(() => button('Channel B'), 'retry plugin tab');
+    button('Channel B').click();
+    await waitFor(() => saved.activePluginChannelId === 'b' && ready(), 'retry after rejection');
+    assert(host.provider === pluginId && host.model === 'model-b', 'Retry succeeds after a rejected switch');
+    document.querySelector('#result').textContent = 'PASS: delayed host confirmation, duplicate clicks, stable dialog, serialized catalog/save, system/plugin round trip, rejection, retry, preserved favorites';
+    document.title = 'PASS';
+  } catch (error) {
+    document.querySelector('#result').textContent = error.stack;
+    document.title = 'FAIL';
+    throw error;
+  }
+</script>

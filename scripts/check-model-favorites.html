@@ -1,0 +1,129 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Model favorites regression</title>
+<style>#root { position: absolute; top: 580px; } #result { position: absolute; top: 600px; }</style>
+<div id="root"></div>
+<pre id="result">Running…</pre>
+<script type="module">
+  import React from 'react';
+  import { createRoot } from 'react-dom/client';
+  import { initReact } from '../src/react-context.ts';
+  import { CliModelFlyoutMenu } from '../src/components/CliModelFlyoutMenu.tsx';
+  import { DEFAULT_STATE } from '../src/constants.ts';
+  import { channelModelKey, NATIVE_PROVIDER_ID } from '../src/system-bridge.ts';
+
+  initReact(React);
+  localStorage.clear();
+  const engine = new URL(location.href).searchParams.get('engine') || 'codex';
+  const calls = [];
+  let catalog = ['model-a', 'model-b'];
+  window.__TAURI_INTERNALS__ = { invoke: async (cmd, args) => {
+    calls.push({ cmd, args });
+    switch (cmd) {
+      case 'list_engines': return [engine].map(id => ({ id, available: true, enabled: true }));
+      case 'get_cli_config': case 'get_app_settings': return {};
+      case 'official_config_read': return [];
+      case 'list_engine_models': return { models: [{ id: 'native/model-a' }], authoritative: true };
+      case 'pi_family_models_config_read': return { text: '{"providers":{}}', file: { format: 'json' } };
+      case 'fetch_provider_models': return { models: catalog };
+      default: throw Error(`Unexpected host mutation: ${cmd}`);
+    }
+  } };
+  const ctx = { storage: { get: async () => null, set: async () => {} },
+    bridge: { invoke: async () => { throw Error('Unexpected bridge call'); } } };
+  const key = channelModelKey(engine, 'test');
+  const initial = { ...DEFAULT_STATE, selectedCli: engine, selectedModel: 'model-a',
+    activeChannelType: 'plugin', activePluginChannelId: 'test',
+    pluginChannels: { [engine]: ['test', 'other'].map(id => ({ id, name: id,
+      baseUrl: 'https://models.example.invalid', apiKey: 'test-only-key' })) } };
+  let root, saved, failSave = false;
+  const assert = (value, message) => { if (!value) throw Error(message); };
+  const waitFor = async (predicate, message) => {
+    const deadline = Date.now() + 5000;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw Error(`Timed out: ${message}`);
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  };
+  const rows = () => [...document.querySelectorAll('.ms-model-row .ms-row-name')].map(el => el.textContent);
+  const options = () => [...document.querySelectorAll('datalist option')].map(el => el.value);
+  const picker = () => document.querySelector('.ms-model-picker input');
+  const addButton = () => document.querySelector('.ms-favorite-add');
+  const input = async (el, value) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  };
+  const mount = async state => {
+    root?.unmount();
+    saved = state;
+    root = createRoot(document.querySelector('#root'));
+    root.render(React.createElement(CliModelFlyoutMenu, { ctx, state, onClose: () => {},
+      onSave: async next => { if (failSave) throw Error('Test save failure'); saved = next; } }));
+    await waitFor(() => picker() && !picker().disabled && options().length > 0, 'channel catalog loaded');
+  };
+  const add = async id => {
+    await input(picker(), id);
+    assert(!addButton().disabled, `Can add ${id}`);
+    addButton().click();
+    await waitFor(() => rows().includes(id), `Added ${id}`);
+  };
+  try {
+    await mount(initial);
+    assert(options().join() === catalog.join(), 'Dropdown uses fetched API catalog');
+    const fetchCall = calls.find(call => call.cmd === 'fetch_provider_models');
+    assert(fetchCall.args.apiKey === 'test-only-key', 'Fetch uses current channel key');
+    assert(rows().length === 0, 'Fetched and active models are not automatic favorites');
+    await input(picker(), 'unknown');
+    assert(addButton().disabled, 'Dropdown add requires an actual catalog model');
+    await add('model-a');
+    assert(saved.customModels[key].join() === 'model-a', 'Favorite saved for engine and channel');
+    await input(picker(), 'model-a');
+    assert(addButton().disabled, 'Duplicate favorite disabled');
+    await add('model-b');
+    await input(picker(), 'unmatched');
+    assert(rows().length === 2, 'Searching catalog preserves favorite rows');
+    document.querySelector('.ms-model-row.is-selected .ms-model-delete').click();
+    await waitFor(() => document.querySelector('.ms-confirm-dialog'), 'remove confirmation');
+    document.querySelector('.ms-confirm-dialog .ms-danger').click();
+    await waitFor(() => rows().join() === 'model-b', 'favorite removed');
+    assert(options().includes('model-a'), 'Removal preserves candidate catalog');
+    assert(saved.selectedModel === 'model-a', 'Removal preserves active model');
+    catalog = ['model-a', 'model-c'];
+    document.querySelector('.ms-models .ms-section-heading button').click();
+    await waitFor(() => options().includes('model-c') && !picker().disabled, 'catalog refreshed');
+    assert(rows().join() === 'model-b', 'Refresh preserves favorites absent from API');
+    failSave = true;
+    await input(picker(), 'model-c');
+    addButton().click();
+    await waitFor(() => document.querySelector('.ms-status')?.textContent === 'Test save failure', 'save error');
+    assert(!rows().includes('model-c'), 'Failed save does not create favorite');
+    failSave = false;
+    await input(document.querySelector('.ms-custom-model input'), 'manual-model');
+    document.querySelector('.ms-add-model').click();
+    await waitFor(() => rows().includes('manual-model'), 'manual favorite added');
+    assert(saved.selectedModel === 'model-a', 'Adding favorites preserves active model');
+    const persisted = saved;
+    await mount(persisted);
+    assert(rows().includes('manual-model') && rows().includes('model-b'), 'Favorites survive reopening');
+    await mount({ ...persisted, activePluginChannelId: 'other' });
+    assert(rows().length === 0, 'Favorites isolated by channel');
+    await mount({ ...initial, customModels: { test: ['legacy-model'], ['another:test']: ['foreign-model'] } });
+    assert(rows().join() === 'legacy-model', 'Legacy manual models preserved; other engines isolated');
+    await add('model-c');
+    assert(saved.customModels[key].includes('legacy-model'), 'Adding preserves legacy favorites');
+    await mount({ ...DEFAULT_STATE, selectedCli: engine, selectedProviderId: NATIVE_PROVIDER_ID });
+    await waitFor(() => options().includes('native/model-a'), 'native catalog loaded');
+    assert(rows().length === 0, 'Native models also require explicit favorite');
+    await add('native/model-a');
+    assert(saved.customModels[channelModelKey(engine, NATIVE_PROVIDER_ID)].includes('native/model-a'), 'Native selectors preserved');
+    assert(calls.every(call => /^(list_|get_|official_config_read$|pi_family_models_config_read$|fetch_provider_models$)/.test(call.cmd)),
+      'Fetching and managing favorites never mutate host or CLI configuration');
+    document.querySelector('#result').textContent = `PASS (${engine}): API catalog/key, explicit favorites, duplicates, removal, refresh, failed save, manual/legacy models, persistence, channel isolation, native selectors, no host writes`;
+    document.title = 'PASS';
+  } catch (error) {
+    document.querySelector('#result').textContent = error.stack;
+    document.title = 'FAIL';
+    throw error;
+  }
+</script>

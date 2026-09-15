@@ -105,6 +105,9 @@ export const flyoutStyles = `
 .ms-scrub-message { margin: 0; color: var(--ms-muted); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 96px; overflow-y: auto; }
 .ms-muted { color: var(--ms-muted); font-size: 11px; }
 .ms-search { position: relative; flex-shrink: 0; }
+.ms-model-picker { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.ms-model-picker .ms-search { flex: 1; min-width: 0; }
+.ms-favorite-add { flex-shrink: 0; white-space: nowrap; padding: 8px 10px; border: 1px solid var(--ms-border); border-radius: 6px; }
 .ms-search .ms-field { padding-left: 33px; background: var(--ms-surface); }
 .ms-search-icon { position: absolute; left: 11px; top: 10px; color: var(--ms-muted); pointer-events: none; }
 .ms-model-list { display: flex; flex-direction: column; gap: 4px; min-height: 80px; flex: 1; overflow-y: auto; padding: 3px; margin: -3px; }

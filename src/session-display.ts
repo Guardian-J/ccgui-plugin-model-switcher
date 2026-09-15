@@ -25,8 +25,8 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
   const effort = (session?.effort as EffortLevel) || host?.lastUsedEffort || (matchingHost?.efforts?.[engine] as EffortLevel) || "high";
   const selectedProviderId = session?.provider || matchingHost?.selectedChannels?.[engine] || "";
   return {
-    // Model/effort updates must not remount the flyout and interrupt pointer capture or reset scrolling.
-    sessionKey: JSON.stringify([engine, session?.sessionId ?? null, session?.workspacePath ?? "", host?.streaming ?? false, selectedProviderId]),
+    // Selection updates must not remount a flyout whose host/storage writes are still in flight.
+    sessionKey: JSON.stringify([engine, session?.sessionId ?? null, session?.workspacePath ?? "", host?.streaming ?? false]),
     selectedCli: engine as CliEngineId,
     selectedModel: isConcreteModel(model) ? model.replace(/\[1m\]$/i, "").trim() : "",
     effort: effort as EffortLevel,

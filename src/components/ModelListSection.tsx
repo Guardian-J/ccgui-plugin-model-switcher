@@ -22,12 +22,15 @@ export interface ModelOptionItem {
   label: string;
   description?: string;
   custom?: boolean;
+  catalog?: boolean;
 }
 
 interface ModelListSectionProps {
   activeEngine: CliEngineId;
   activeChannel: { id: string } | null;
-  filteredModelOptions: ModelOptionItem[];
+  favoriteModelOptions: ModelOptionItem[];
+  catalogModelOptions: ModelOptionItem[];
+  onAddFavorite: (modelId: string) => void;
   bareSelectedModel: string;
   fetchingModels: boolean;
   searchQuery: string;
@@ -48,7 +51,9 @@ interface ModelListSectionProps {
 export function ModelListSection({
   activeEngine,
   activeChannel,
-  filteredModelOptions,
+  favoriteModelOptions,
+  catalogModelOptions,
+  onAddFavorite,
   bareSelectedModel,
   fetchingModels,
   searchQuery,
@@ -65,11 +70,14 @@ export function ModelListSection({
   enable1M,
   onToggle1M,
 }: ModelListSectionProps) {
+  const candidate = catalogModelOptions.find(model => model.id === searchQuery.trim());
+  const alreadyAdded = candidate && favoriteModelOptions.some(model => model.id === candidate.id);
+  const catalogId = `ms-model-catalog-${activeEngine}-${activeChannel?.id || "none"}`;
   return (
     <div className="ms-models">
       <div className="ms-section-heading">
         <h3>
-          可用模型 <span className="ms-count">{filteredModelOptions.length}</span>
+          自选模型 <span className="ms-count">{favoriteModelOptions.length}</span>
         </h3>
         <span className="ms-actions">
           <button
@@ -88,24 +96,40 @@ export function ModelListSection({
         </span>
       </div>
 
-      <div className="ms-search">
-        <SearchIcon size={14} className="ms-search-icon" />
-        <input
-          value={searchQuery}
-          onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="搜索模型…"
-          aria-label="搜索模型"
-          className={FIELD}
-        />
+      <div className="ms-model-picker">
+        <div className="ms-search">
+          <SearchIcon size={14} className="ms-search-icon" />
+          <input
+            value={searchQuery}
+            list={catalogId}
+            disabled={fetchingModels || !activeChannel}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder={fetchingModels ? "正在拉取模型…" : "搜索或选择模型…"}
+            aria-label="搜索或选择模型"
+            autoComplete="off"
+            className={FIELD}
+          />
+          <datalist id={catalogId}>
+            {catalogModelOptions.map(model => <option key={model.id} value={model.id} />)}
+          </datalist>
+        </div>
+        <button
+          type="button"
+          className="ms-button ms-primary ms-favorite-add"
+          disabled={fetchingModels || !activeChannel || !candidate || alreadyAdded}
+          onClick={() => candidate && onAddFavorite(candidate.id)}
+        >
+          {alreadyAdded ? "已加入自选" : "加入自选"}
+        </button>
       </div>
 
       <div
         className="ms-model-list"
         role="group"
-        aria-label="可用模型"
+        aria-label="自选模型"
         aria-busy={fetchingModels}
       >
-        {fetchingModels ? (
+        {fetchingModels && favoriteModelOptions.length === 0 ? (
           <div className="ms-model-loading" role="status">
             <span className="ms-loading-caption">
               <RefreshIcon size={16} className="animate-spin" />
@@ -121,10 +145,10 @@ export function ModelListSection({
               </div>
             ))}
           </div>
-        ) : filteredModelOptions.length === 0 ? (
-          <span className="ms-empty">{searchQuery ? "无匹配模型" : "暂无模型"}</span>
+        ) : favoriteModelOptions.length === 0 ? (
+          <span className="ms-empty">暂无自选模型，请在上方选择模型并加入自选</span>
         ) : (
-          filteredModelOptions.map((opt) => {
+          favoriteModelOptions.map((opt) => {
             const isSelected = Boolean(
               bareSelectedModel === opt.id ||
                 (activeChannel &&
@@ -150,7 +174,6 @@ export function ModelListSection({
                   <span className="ms-row-copy">
                     <span className="ms-row-title">
                       <span className="ms-row-name">{opt.label}</span>
-                      {opt.custom ? <span className="ms-custom-badge">自定义</span> : null}
                     </span>
                     {opt.description ? (
                       <span className="ms-row-detail">{opt.description}</span>
@@ -162,8 +185,8 @@ export function ModelListSection({
                   <button
                     type="button"
                     className={`${ICON_BTN} ms-model-delete`}
-                    aria-label={`删除自定义模型 ${opt.id}`}
-                    title="删除自定义模型"
+                    aria-label={`移出自选 ${opt.id}`}
+                    title="移出自选"
                     onClick={(event) => onDeleteCustomModel(opt.id, event)}
                   >
                     <TrashIcon size={14} />
@@ -194,8 +217,8 @@ export function ModelListSection({
         <button
           type="button"
           disabled={fetchingModels || !customInput.trim() || !activeChannel}
-          aria-label="添加自定义模型"
-          title="添加自定义模型"
+          aria-label="将自定义模型加入自选"
+          title="将自定义模型加入自选"
           onClick={onAddCustomModel}
           className={`${ICON_BTN} ms-add-model`}
         >

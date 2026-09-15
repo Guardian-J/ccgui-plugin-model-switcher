@@ -69,7 +69,7 @@ export interface PluginState {
   selectedModel: string;
   effort: EffortLevel;
   enable1MContext: boolean;
-  customModels: Record<string, string[]>; // providerId -> custom models
+  customModels: Record<string, string[]>; // engine/channel -> favorites (includes manually added models)
   fetchedModels: Record<string, string[]>; // providerId -> fetched models
   pluginChannels?: Record<string, CustomPluginChannel[]>; // engineId -> CustomPluginChannel[]
   activeChannelType?: "system" | "plugin"; // 明确区分当前生效的是系统供应商还是插件独立渠道

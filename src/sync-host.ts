@@ -6,7 +6,7 @@ interface HostCliMenuCallbacks {
   onModelChange?: (engine: string, model: string) => void;
   onChange?: (engine: string) => void;
   onEffortChange?: (engine: string, effort: string) => void;
-  onChannelChange?: (engine: string, channelId: string) => void;
+  onChannelChange?: (engine: string, channelId: string) => void | Promise<void>;
 }
 
 interface HostCliMenuProps extends HostCliMenuCallbacks {
@@ -536,8 +536,32 @@ export async function applyChannelSelectionToHost(params: {
   if (error) throw new Error(error);
   const callbacks = getHostCliMenuProps();
 
-  if (callbacks && typeof callbacks.onChannelChange === "function") {
-    await callbacks.onChannelChange(engine, providerId);
+  if (!callbacks?.onChannelChange) {
+    throw new Error("无法连接宿主渠道切换入口，请重载插件后重试");
+  }
+  const sessionIdentity = (host: HostCliMenuProps | null) => {
+    const session = host?.session !== undefined ? host.session : getHostSession();
+    return JSON.stringify([session?.engine, session?.sessionId, session?.workspacePath]);
+  };
+  const originalSession = sessionIdentity(callbacks);
+  await callbacks.onChannelChange(engine, providerId);
+
+  // The host wraps its asynchronous setProvider in a void callback and catches
+  // backend failures internally. Only its committed selection acknowledges success.
+  const deadline = Date.now() + 5000;
+  while (true) {
+    const current = getHostCliMenuProps();
+    if (sessionIdentity(current) !== originalSession) {
+      throw new Error("当前会话已变化，已停止后续模型切换，请在目标会话重试");
+    }
+    const selectionError = hostSessionSelectionError(engine);
+    if (selectionError) throw new Error(selectionError);
+    const confirmedProvider = current?.selectedChannels?.[engine] ?? current?.session?.provider;
+    if (confirmedProvider === providerId) break;
+    if (Date.now() >= deadline) {
+      throw new Error("宿主未确认渠道切换，请检查渠道配置或宿主错误提示后重试");
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
   }
 
   syncSessionProviderToLocalStorage(engine, providerId);
