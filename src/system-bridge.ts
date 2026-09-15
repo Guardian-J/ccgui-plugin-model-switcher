@@ -1,21 +1,12 @@
 import type { CliEngineId, CustomPluginChannel, SystemProviderChannel, PiFamilyApiProtocol } from "./types";
 import { DEFAULT_PI_FAMILY_API, isPiFamilyApiProtocol } from "./types";
 import type { PluginContext } from "./ccgui-plugin";
+import { invokeHost as invokeTauri, isRemoteHost } from "./host-transport";
 import {
   parsePiFamilyProviders,
   removePiFamilyProviderText,
   upsertPiFamilyProviderText,
 } from "./pi-family-parser";
-
-interface TauriInternals {
-  invoke?: (cmd: string, args?: unknown) => Promise<unknown>;
-}
-
-declare global {
-  interface Window {
-    __TAURI_INTERNALS__?: TauriInternals;
-  }
-}
 
 export interface EngineItemRule {
   id: CliEngineId;
@@ -133,21 +124,6 @@ export function channelModelKey(
   providerId: string,
 ): string {
   return `${engine}:${providerId}`;
-}
-
-/**
- * 安全调用 Tauri IPC。宿主 hardening 用同步 pluginDepth 拦截插件栈上的 invoke；
- * 微任务后 depth 已归零。React 点击/effect 本身已脱出，微任务几乎无额外等待。
- */
-async function invokeTauri<T>(
-  cmd: string,
-  args: Record<string, unknown> = {},
-): Promise<T> {
-  const internals = window.__TAURI_INTERNALS__;
-  if (!internals?.invoke) {
-    throw new Error("当前环境未检测到 Tauri 宿主 IPC 接口");
-  }
-  return (await Promise.resolve().then(() => internals.invoke!(cmd, args))) as T;
 }
 
 type HostEngineInfo = {
@@ -769,6 +745,11 @@ export async function ensurePiFamilyModelConfigured(
   if (bareModels.length === 0) return;
 
   const id = channel.isPlugin ? pluginProviderId(channel.id) : channel.id;
+  if (isRemoteHost()) {
+    const catalog = await getNativeCatalog(engine);
+    const registered = new Set(catalog.models.map(model => model.id));
+    if (bareModels.every(model => registered.has(`${id}/${model}`))) return;
+  }
   try {
     const { text, format } = await readPiFamilyModelsConfig(engine);
     const providers = parsePiFamilyProviders(text, format);
@@ -830,6 +811,13 @@ export async function applyCustomPluginChannelToEngine(
   }
   if (isPiFamilyEngine(engine)) {
     json.api = isPiFamilyApiProtocol(channel.api || "") ? channel.api! : DEFAULT_PI_FAMILY_API;
+    if (isRemoteHost()) {
+      // Selecting an unchanged, already registered channel does not require
+      // the models-file editor, which older remote hosts do not expose.
+      const registered = (await getCliConfig())?.[engine]?.providers?.[id];
+      if (registered && ["name", "baseUrl", "apiKey", "api", "model"].every(key =>
+          (registered[key] || "") === (json[key] || ""))) return;
+    }
     await applyPiFamilyPluginChannel(engine, { ...channel, api: json.api as CustomPluginChannel["api"] });
   }
   await invokeTauri("upsert_provider", { engine, id, json });

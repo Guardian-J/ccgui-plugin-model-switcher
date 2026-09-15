@@ -10,13 +10,16 @@ import { useSessionDisplay, withSessionDisplay } from "./session-display";
 import { FileSearchPanel } from "./components/FileSearchPanel";
 import { SearchIcon } from "./icons";
 import { installChatLinks } from "./chat-links";
-import { repairLegacyContextSelections } from "./sync-host";
+import { repairLegacyContextSelections, findBuiltinTriggerButton } from "./sync-host";
 import { compactPluginModelLabel, installCompactModelLabels } from "./model-display";
+import { disposeHostTransport } from "./host-transport";
+import { withRemoteStorage } from "./remote-storage";
 
 /**
  * CC GUI 插件入口：模型与供应商切换助手 (原生样式对齐 + GUI 美化扩展)
  */
 export default function activate(ctx: PluginContext): Disposer {
+  ctx = withRemoteStorage(ctx);
   initReact(ctx.react);
   void repairLegacyContextSelections().catch(() => {
     console.warn("[model-switcher] 修复旧版上下文模型选择失败，请重新选择模型");
@@ -104,17 +107,15 @@ export default function activate(ctx: PluginContext): Disposer {
       const el = containerRef.current;
       if (!el) return;
 
+      let hidden: HTMLElement | null = null;
+      let previousDisplay = "";
       const hideOriginalTrigger = () => {
-        // 往上遍历找到位于 ComposerToolbar 内的直接子节点
-        let node: HTMLElement | null = el;
-        while (node && node.parentElement && !node.parentElement.classList.contains("select-none")) {
-          node = node.parentElement;
-        }
-
-        // 查找在其前面的兄弟节点（原生 cliMenu 按钮）
-        if (node && node.previousElementSibling instanceof HTMLElement) {
-          node.previousElementSibling.style.display = "none";
-        }
+        const trigger = findBuiltinTriggerButton(el);
+        if (!trigger || trigger === hidden) return;
+        if (hidden) hidden.style.display = previousDisplay;
+        hidden = trigger;
+        previousDisplay = trigger.style.display;
+        trigger.style.display = "none";
       };
 
       hideOriginalTrigger();
@@ -122,6 +123,7 @@ export default function activate(ctx: PluginContext): Disposer {
       const timer = setTimeout(hideOriginalTrigger, 50);
       return () => {
         clearTimeout(timer);
+        if (hidden) hidden.style.display = previousDisplay;
       };
     }, []);
 
@@ -129,14 +131,8 @@ export default function activate(ctx: PluginContext): Disposer {
       <div
         ref={containerRef}
         data-ccgui-plugin-model-switcher="true"
-        className="relative inline-flex items-center"
+        className="relative inline-flex min-w-0 items-center"
       >
-        <style>{`
-          /* 确保紧邻的原生模型选择器按钮不重复展示 */
-          div.select-none > button.group:not([data-ccgui-plugin-btn])[aria-label*=" · "] {
-            display: none !important;
-          }
-        `}</style>
         <button
           ref={buttonRef}
           type="button"
@@ -150,17 +146,17 @@ export default function activate(ctx: PluginContext): Disposer {
           {/* 1. CLI 引擎 Logo */}
           <ProjectEngineIcon engine={state.selectedCli} size={16} />
           <span className="flex min-w-0 items-center gap-1 text-body-2-medium whitespace-nowrap text-text-secondary transition-colors duration-150 ease group-hover:text-text-primary">
-            <span className="shrink-0">{engineName}</span>
-            <span aria-hidden className="shrink-0 text-text-tertiary">
+            <span className="shrink-0 max-md:hidden">{engineName}</span>
+            <span aria-hidden className="shrink-0 text-text-tertiary max-md:hidden">
               /
             </span>
             {/* 2. 模型品牌 Logo */}
             <ProjectEngineIcon engine={modelIconEngine} size={14} />
-            <span className="max-w-44 truncate">{displayModel}</span>
-            <span aria-hidden className="shrink-0 text-text-tertiary">
+            <span className="max-w-44 truncate max-md:max-w-28">{displayModel}</span>
+            <span aria-hidden className="shrink-0 text-text-tertiary max-md:hidden">
               ·
             </span>
-            <span className="shrink-0 font-normal">{effortText}</span>
+            <span className="shrink-0 font-normal max-md:hidden">{effortText}</span>
           </span>
         </button>
 
@@ -199,6 +195,7 @@ export default function activate(ctx: PluginContext): Disposer {
   }
 
   const disposers: Disposer[] = [
+    disposeHostTransport,
     installCompactModelLabels(),
     installChatLinks(ctx),
     ctx.ui.registerPanelTab({

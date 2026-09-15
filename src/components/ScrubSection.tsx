@@ -7,6 +7,7 @@ import {
   type ScrubStatus,
 } from "../prompt-scrubber";
 import { RefreshIcon } from "../icons";
+import { isRemoteHost } from "../host-transport";
 
 const ICON_BTN = "ms-icon-button";
 
@@ -64,6 +65,7 @@ export function ScrubSection({ ctx, activeEngine }: ScrubSectionProps) {
     }
   };
 
+  if (isRemoteHost()) return <section className="ms-scrub"><h3>提示词清洗</h3><p className="ms-muted">此操作需要在桌面端执行。</p></section>;
   return (
     <section className="ms-scrub" aria-label="提示词清洗" aria-busy={scrubbing}>
       <div className="ms-scrub-heading">

@@ -1,0 +1,127 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Remote host regression</title>
+<style>body{margin:0}#root{position:absolute;bottom:12px;left:12px;max-width:calc(100vw - 24px)}.select-none{display:flex;transform:translateZ(0);overflow:hidden}.relative{position:relative}#result{position:fixed;top:0;left:0;z-index:100001;background:white;font-size:10px;max-width:100vw;white-space:pre-wrap}</style>
+<div id="root"></div><pre id="result">Running…</pre>
+<script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import activate from '../src/index.tsx';
+import { invokeHost, disposeHostTransport } from '../src/host-transport.ts';
+import { loadNativeChannelModels, fetchModelsFromProvider } from '../src/api.ts';
+import { loadFileIndex } from '../src/file-search.ts';
+import { withRemoteStorage } from '../src/remote-storage.ts';
+import { readSessionDisplay } from '../src/session-display.ts';
+import { ensurePiFamilyModelConfigured } from '../src/system-bridge.ts';
+
+localStorage.clear();
+delete window.__TAURI_INTERNALS__;
+const calls = [], sockets = [];
+let remoteModel = 'org/current-model', rejectModels = false, disconnectStorage = false;
+const assert = (value, message) => { if (!value) throw Error(message); };
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const waitFor = async (predicate, message) => {
+  const deadline = Date.now() + 6000;
+  while (!predicate()) { if (Date.now() > deadline) throw Error(message); await delay(20); }
+};
+async function dispatch(cmd, args) {
+  switch (cmd) {
+    case 'list_engines': return ['codex','omp'].map(id => ({ id, available:true, enabled:true }));
+    case 'get_cli_config': return { codex: { current:'relay', providers:{ relay:{ name:'Remote relay',
+      baseUrl:'http://127.0.0.1:12345', apiKey:'test-only-key', model:remoteModel } } } };
+    case 'official_config_read': return [];
+    case 'get_app_settings': return {};
+    case 'update_app_settings': return;
+    case 'list_engine_models': return { models:[{ id:'provider/native-model' }], authoritative:true };
+    case 'fetch_provider_models': if (rejectModels) throw Error('Remote provider unavailable'); return { models:[remoteModel,'org/second-model'] };
+    case 'list_file_index': return [{ rel:'src',isDir:true },{ rel:'src/remote.ts',isDir:false }];
+    case 'plugin_storage_get': return null;
+    case 'plugin_storage_set': if (disconnectStorage) throw Error('Disconnected');
+    default: throw Error(`unknown command: ${cmd}`);
+  }
+}
+class RemoteSocket {
+  static OPEN=1; readyState=0;
+  constructor(url) { this.url=String(url); sockets.push(this); setTimeout(() => { this.readyState=1; this.onopen?.(); }, 5); }
+  send(data) {
+    const { type,id,cmd,args } = JSON.parse(data);
+    assert(type === 'invoke', 'Host request envelope'); calls.push({ cmd,args });
+    if (cmd === 'pending-until-disconnect') return;
+    setTimeout(async () => {
+      let response;
+      try { response={ type:'response',id,ok:true,payload:await dispatch(cmd,args) }; }
+      catch(error) { response={ type:'response',id,ok:false,error:error.message }; }
+      const text=JSON.stringify(response);
+      this.onmessage?.({ data:id%2 ? text : new TextEncoder().encode(text).buffer });
+    }, cmd === 'get_cli_config' ? 35 : 4);
+  }
+  close() { if (this.readyState===3) return; this.readyState=3; queueMicrotask(() => this.onclose?.()); }
+}
+window.WebSocket=RemoteSocket;
+let Composer, Status, changeSession;
+const ctx = { pluginId:'model-switcher', react:React, host:{ isWeb:true },
+  ui:{ registerComposerSlot(def){ Composer=def.component; return ()=>{}; }, registerStatusBarItem(def){ Status=def.component; return ()=>{}; },
+    registerPanelTab(){return ()=>{};}, registerMarkdownRenderer(){return ()=>{};} },
+  theme:{ injectCss(){return ()=>{};} },
+  storage:{ get:key=>invokeHost('plugin_storage_get',{key}), set:(key,value)=>invokeHost('plugin_storage_set',{key,value}), delete:key=>invokeHost('plugin_storage_delete',{key}) },
+  bridge:{ invoke(){throw Error('Remote must not run client-side exec or HTTP fallback');} } };
+function NativeMenu(props) { return React.createElement('button',{'aria-label':'Codex CLI / Friendly label · high','aria-haspopup':'dialog'},'Native'); }
+function App() {
+  const [session,setSession]=React.useState({ engine:'codex',sessionId:'remote-a',workspacePath:'/remote-project',provider:'relay' });
+  const [model,setModel]=React.useState(remoteModel);
+  changeSession=()=>{ remoteModel='org/other-session-model'; setModel(remoteModel); setSession({...session,sessionId:'remote-b'}); };
+  return React.createElement(React.Fragment,null,
+    React.createElement('div',{className:'select-none'},
+      React.createElement('button',{'aria-haspopup':'dialog','id':'add-menu'},'Add'),
+      React.createElement('div',null,React.createElement(NativeMenu,{ active:session,value:'codex',models:{codex:model},efforts:{codex:'xhigh'},
+        selectedChannels:{codex:'relay'},session:{activeModel:'unrelated-history',activeEffort:'low'},
+        onModelChange:(engine,id)=>setModel(id), onEffortChange(){},onChange(){},onChannelChange(){} })),
+      React.createElement('div',null,React.createElement(Composer))),React.createElement(Status));
+}
+const input = async (el,value) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,value);
+  el.dispatchEvent(new Event('input',{bubbles:true})); await delay(0); };
+try {
+  localStorage.setItem('ccgui-next.activeSession:v1',JSON.stringify({engine:'omp',sessionId:'stale-client',workspacePath:'/wrong',model:'wrong'}));
+  const dispose=activate(ctx);
+  createRoot(document.querySelector('#root')).render(React.createElement(App));
+  await waitFor(()=>document.querySelector('[data-ccgui-plugin-btn]')?.title.includes('org/current-model'),'Read mounted remote model ID');
+  const display=readSessionDisplay();
+  assert(display.selectedCli==='codex' && display.effort==='xhigh' && display.sessionKey.includes('remote-a'),'Live remote context beats client storage/history');
+  assert(document.querySelector('#add-menu').style.display!=='none','Keep unrelated native menu visible');
+  document.querySelector('[data-ccgui-plugin-btn]').click();
+  await waitFor(()=>document.querySelectorAll('datalist option').length===2 && !document.querySelector('.ms-model-picker input').disabled,'Remote channel models loaded');
+  assert(calls.some(call=>call.cmd==='fetch_provider_models' && call.args.baseUrl==='http://127.0.0.1:12345' && call.args.apiKey==='test-only-key'),'Query host endpoint with host key');
+  await input(document.querySelector('.ms-model-picker input'),'org/second-model');
+  document.querySelector('.ms-favorite-add').click();
+  await waitFor(()=>document.querySelector('.ms-model-row'),'Favorite saved on read-only remote host');
+  const stored=await withRemoteStorage(ctx).storage.get('state');
+  assert(stored.customModels['codex:relay'].includes('org/second-model'),'Remote local persistence survives context recreation');
+  disconnectStorage=true;
+  let storageFailed=false;
+  try { await withRemoteStorage(ctx).storage.set('state',{bad:true}); } catch { storageFailed=true; }
+  assert(storageFailed && !(await withRemoteStorage(ctx).storage.get('state')).bad,'Network failure is not reported as a saved preference');
+  disconnectStorage=false;
+  const catalog=await loadNativeChannelModels(ctx,'omp',null);
+  assert(catalog.models[0].id==='provider/native-model','Read host native selectors remotely');
+  await ensurePiFamilyModelConfigured('omp',{id:'provider'},'native-model');
+  assert(!calls.some(call=>call.cmd==='pi_family_models_config_write'),'Existing OMP model needs no remote config write');
+  const index=await loadFileIndex(ctx,'/remote-project',false);
+  assert(index.files.join()==='src/remote.ts','Read host workspace index without exec');
+  rejectModels=true;
+  let queryFailed=false;
+  try { await fetchModelsFromProvider(ctx,'http://127.0.0.1:12345','test-only-key'); } catch { queryFailed=true; }
+  assert(queryFailed,'Remote query failure does not fall back to client localhost');
+  changeSession();
+  await waitFor(()=>document.querySelector('[data-ccgui-plugin-btn]')?.title.includes(remoteModel),'Follow active remote session');
+  const rect=document.querySelector('.ms-flyout').getBoundingClientRect();
+  if(innerWidth<=600) assert(rect.left>=0 && rect.right<=innerWidth && rect.top>=0 && rect.bottom<=innerHeight,'Narrow viewport contains dialog');
+  const wsUrl=new URL(sockets[0].url);
+  assert(wsUrl.host===location.host && wsUrl.pathname==='/ws' && wsUrl.searchParams.get('token')===new URL(location.href).searchParams.get('token'),'Same-origin remote authentication');
+  const interrupted=invokeHost('pending-until-disconnect').then(()=>false,()=>true);
+  await delay(10); disposeHostTransport();
+  assert(await interrupted,'Disconnect rejects in-flight request');
+  await invokeHost('list_engines');
+  assert(sockets.length===2 && calls.filter(call=>call.cmd==='pending-until-disconnect').length===1,'Reconnect on next call without replaying requests');
+  document.querySelector('#result').textContent='PASS: remote CLI/models/files, text/binary frames, live session and model ID, local preference fallback, no client HTTP/exec, disconnect/reconnect, narrow layout';
+  document.title='PASS';
+} catch(error) { document.title='FAIL'; document.querySelector('#result').textContent=error.stack; throw error; }
+</script>

@@ -146,11 +146,26 @@ export function CliModelFlyoutMenu({
 
   useEffect(() => {
     let positionFrame = 0;
+    let mobileModal = false;
     const applyLayout = (next: typeof menuLayout) => setMenuLayout(prev =>
       prev.offsetX === next.offsetX && prev.maxHeight === next.maxHeight && prev.below === next.below ? prev : next);
     const updatePosition = () => {
+      const menu = menuRef.current;
+      const useModal = window.innerWidth <= 600 && typeof menu?.showModal === "function";
+      if (menu && useModal !== mobileModal) {
+        menu.close();
+        if (useModal) menu.showModal();
+        else menu.open = true;
+        mobileModal = useModal;
+      }
       const triggerEl = triggerRef?.current;
+      const viewport = window.visualViewport;
+      const visibleHeight = viewport?.height ?? window.innerHeight;
       const totalWidth = Math.min(760, window.innerWidth - 24);
+      if (window.innerWidth <= 600) {
+        applyLayout({ offsetX: 0, maxHeight: Math.max(0, visibleHeight - 24), below: false });
+        return;
+      }
       if (!triggerEl) {
         applyLayout({ offsetX: 0, maxHeight: window.innerHeight - 24, below: false });
         return;
@@ -173,10 +188,18 @@ export function CliModelFlyoutMenu({
 
     updatePosition();
     window.addEventListener("resize", schedulePosition);
+    window.visualViewport?.addEventListener("resize", schedulePosition);
     window.addEventListener("scroll", schedulePosition, { capture: true, passive: true });
 
     const handlePointerDown = (e: PointerEvent) => {
       const target = e.target as Node;
+      if (mobileModal && target === menuRef.current) {
+        const rect = menuRef.current.getBoundingClientRect();
+        if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+          closeRef.current();
+          return;
+        }
+      }
       if (menuRef.current?.contains(target) || triggerRef?.current?.contains(target)) return;
       closeRef.current();
     };
@@ -192,8 +215,10 @@ export function CliModelFlyoutMenu({
     window.addEventListener("keydown", handleKeyDown);
 
     return () => {
+      if (mobileModal) menuRef.current?.close();
       cancelAnimationFrame(positionFrame);
       window.removeEventListener("resize", schedulePosition);
+      window.visualViewport?.removeEventListener("resize", schedulePosition);
       window.removeEventListener("scroll", schedulePosition, true);
       window.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("keydown", handleKeyDown);

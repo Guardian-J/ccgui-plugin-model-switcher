@@ -33,6 +33,7 @@ export const flyoutStyles = `
 .ms-flyout button:disabled { opacity: .4; cursor: not-allowed; }
 .ms-flyout button:focus-visible, .ms-flyout input:focus-visible { outline: 2px solid var(--ms-accent); outline-offset: 2px; }
 .ms-flyout svg { flex-shrink: 0; }
+.ms-flyout::backdrop { background: #00000020; }
 .ms-content { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .ms-loading-overlay { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: var(--ms-bg); color: var(--ms-muted); cursor: wait; }
 .ms-loading-overlay svg, .ms-loading-caption svg { color: var(--ms-accent); }
@@ -221,7 +222,7 @@ export const flyoutStyles = `
 @keyframes ms-enter { from { opacity: 0; } to { opacity: 1; } }
 @keyframes ms-spin { to { transform: rotate(360deg); } }
 @media (max-width: 600px) {
-  .ms-flyout { height: 680px; }
+  .ms-flyout { position: fixed; left: 12px; right: 12px; top: 12px !important; bottom: auto !important; width: auto; height: calc(100dvh - 24px); transform: none !important; }
   .ms-header { padding: 10px 12px; }
   .ms-header-title { gap: 7px; }
   .ms-header-title > .ms-badge { display: none; }
@@ -236,7 +237,7 @@ export const flyoutStyles = `
   .ms-theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ms-theme-toggles { grid-template-columns: 1fr; }
 }
-@media (hover: none) { .ms-delete { opacity: 1; } }
+@media (hover: none) { .ms-delete, .ms-model-delete { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .ms-flyout, .ms-flyout *, .ms-flyout *::before { animation: none !important; transition: none !important; }
 }

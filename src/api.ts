@@ -1,6 +1,7 @@
 import type { PluginContext } from "./ccgui-plugin";
 import type { CliEngineId } from "./types";
 import { getNativeCatalog, type NativeCatalog } from "./system-bridge";
+import { invokeHost, isRemoteHost } from "./host-transport";
 
 export interface FetchedModelItem {
   id: string;
@@ -31,21 +32,21 @@ export async function fetchModelsFromProvider(
   }
 
   // 1. 优先使用 CC GUI 宿主原生提供的 fetch_provider_models 命令（支持任意第三方代理域名，无 network 权限限制，且自动探测 /v1/models、兼容 OpenAI 与 Anthropic 格式）
-  const internals = typeof window !== "undefined" ? window.__TAURI_INTERNALS__ : undefined;
-  if (internals?.invoke) {
-    try {
-      const res = await internals.invoke("fetch_provider_models", {
-        baseUrl: trimmedUrl,
-        apiKey: apiKey.trim(),
-      }) as ProviderModelList;
-      const hostModels = normalizeModelIds(res?.models).concat(normalizeModelIds(res?.data));
-      if (hostModels.length > 0) {
-        return Array.from(new Set(hostModels));
-      }
-    } catch (tauriErr) {
-      console.warn("[model-switcher] 原生 fetch_provider_models 失败，降级尝试插件桥接:", tauriErr);
+  try {
+    const res = await invokeHost<ProviderModelList>("fetch_provider_models", {
+      baseUrl: trimmedUrl,
+      apiKey: apiKey.trim(),
+    });
+    const hostModels = normalizeModelIds(res?.models).concat(normalizeModelIds(res?.data));
+    if (hostModels.length > 0) {
+      return Array.from(new Set(hostModels));
     }
+  } catch (tauriErr) {
+    // Remote keys/endpoints belong to the host, including its localhost URLs.
+    if (isRemoteHost()) throw tauriErr;
+    console.warn("[model-switcher] 原生 fetch_provider_models 失败，降级尝试插件桥接:", tauriErr);
   }
+  if (isRemoteHost()) return [];
 
   // 2. 降级方案：依次尝试常见的 OpenAI 兼容模型端点。
   const targetUrls = trimmedUrl.endsWith("/models") || trimmedUrl.endsWith("/v1/models")

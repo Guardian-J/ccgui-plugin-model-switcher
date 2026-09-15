@@ -3,6 +3,7 @@ import type { PluginContext } from "../ccgui-plugin";
 import { absoluteFilePath, loadFileIndex, searchFiles, type FileIndex } from "../file-search";
 import { openHostFile } from "../host-files";
 import { SearchIcon, RefreshIcon } from "../icons";
+import { isRemoteHost } from "../host-transport";
 
 function Highlight({ text, indexes, offset = 0 }: { text: string; indexes: readonly number[]; offset?: number }) {
   const positions = new Set(indexes);
@@ -78,7 +79,7 @@ export function FileSearchPanel({ ctx, workspacePath }: { ctx: PluginContext; wo
         <RefreshIcon className={loading ? "ms-file-spin" : ""} />
       </button>
     </div>
-    <label className="ms-file-options"><input type="checkbox" checked={includeGenerated} disabled={loading} onChange={event => {
+    <label className="ms-file-options" title={isRemoteHost() ? "远程访问使用宿主索引，遵循工作区的忽略规则" : undefined}><input type="checkbox" checked={includeGenerated} disabled={loading || isRemoteHost()} onChange={event => {
       setIncludeGenerated(event.target.checked); void refresh(event.target.checked);
     }} />包含依赖与构建目录</label>
     <div className="ms-file-status" role="status">

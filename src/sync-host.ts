@@ -1,6 +1,7 @@
 import type { CliEngineId, EffortLevel } from "./types";
 import { getHostSession, sessionSelectionError, modelSelectionError } from "./selection-policy";
 import type { HostSession, ModelCompatibility } from "./selection-policy";
+import { invokeHost } from "./host-transport";
 
 interface HostCliMenuCallbacks {
   onModelChange?: (engine: string, model: string) => void;
@@ -147,12 +148,32 @@ function findTimelineFiber(): unknown {
 /**
  * 从 DOM 中定位原生被隐藏的 CliMenu 按钮
  */
+function committedFiber(element: HTMLElement): any {
+  const key = Object.keys(element).find(k => k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$"));
+  if (!key) return null;
+  let fiber = (element as any)[key];
+  let root = fiber;
+  while (root?.return) root = root.return;
+  if (root?.stateNode?.current && root.stateNode.current !== root) fiber = fiber.alternate;
+  return fiber;
+}
+
 export function findBuiltinTriggerButton(anchor?: HTMLElement | null): HTMLElement | null {
   if (typeof document === "undefined") return null;
-
+  const isCliTrigger = (element: HTMLElement | null) => {
+    if (!element) return false;
+    let fiber = committedFiber(element);
+    for (let depth = 0; fiber && depth < 60; depth++, fiber = fiber.return) {
+      if (typeof fiber.memoizedProps?.onModelChange === "function") return true;
+    }
+    return false;
+  };
   const toolbar = anchor?.closest("div.select-none");
   if (toolbar) {
-    return toolbar.querySelector<HTMLElement>('button[aria-haspopup="dialog"]:not([data-ccgui-plugin-btn])');
+    for (const button of toolbar.querySelectorAll<HTMLElement>('button:not([data-ccgui-plugin-btn])')) {
+      if (isCliTrigger(button)) return button;
+    }
+    return null;
   }
 
   // 1. 通过选择器直接查找紧随在插件按钮前面的同级原生按钮
@@ -170,19 +191,14 @@ export function findBuiltinTriggerButton(anchor?: HTMLElement | null): HTMLEleme
 
   for (const sel of selectorCandidates) {
     const el = document.querySelector<HTMLElement>(sel);
-    if (el) return el;
+    if (isCliTrigger(el)) return el;
   }
 
-  // 2. 从插件根元素同级向前查找
+  // Wrapped/mobile toolbars do not keep the native button as a direct sibling.
   const pluginRoot = document.querySelector('[data-ccgui-plugin-model-switcher="true"]');
-  if (pluginRoot) {
-    let curr: HTMLElement | null = pluginRoot as HTMLElement;
-    while (curr && curr.parentElement && !curr.parentElement.classList.contains("select-none")) {
-      curr = curr.parentElement;
-    }
-    if (curr && curr.previousElementSibling instanceof HTMLElement) {
-      return curr.previousElementSibling;
-    }
+  const scope = pluginRoot?.closest("div.select-none");
+  for (const button of scope?.querySelectorAll<HTMLElement>('button:not([data-ccgui-plugin-btn])') || []) {
+    if (isCliTrigger(button)) return button;
   }
 
   return null;
@@ -195,19 +211,7 @@ export function getHostCliMenuProps(anchor?: HTMLElement | null): HostCliMenuPro
   const btn = findBuiltinTriggerButton(anchor);
   if (!btn) return null;
 
-  const fiberKey = Object.keys(btn).find(
-    (k) => k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$")
-  );
-  if (!fiberKey) return null;
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let fiber = (btn as any)[fiberKey];
-  // DOM nodes retain their original Fiber while React alternates committed trees.
-  let root = fiber;
-  while (root?.return) root = root.return;
-  if (root?.stateNode?.current && root.stateNode.current !== root) {
-    fiber = fiber.alternate;
-  }
+  let fiber = committedFiber(btn);
   let depth = 0;
   let result: HostCliMenuProps | null = null;
   let lastUsedModel: string | undefined;
@@ -328,11 +332,8 @@ function syncLocalStorage(engine: string, model: string, effort: string) {
  */
 async function syncAppSettings(engine: string, model: string, effort: string) {
   try {
-    const internals = (window as unknown as { __TAURI_INTERNALS__?: { invoke?: (cmd: string, args?: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__;
-    if (!internals?.invoke) return;
-
     // 获取当前设置
-    const settings = (await internals.invoke("get_app_settings")) as {
+    const settings = (await invokeHost("get_app_settings")) as {
       defaultModels?: Record<string, string>;
       defaultEfforts?: Record<string, string>;
       [key: string]: unknown;
@@ -354,7 +355,7 @@ async function syncAppSettings(engine: string, model: string, effort: string) {
       settings.defaultModels = defaultModels;
       settings.defaultEfforts = defaultEfforts;
 
-      await internals.invoke("update_app_settings", { settings });
+      await invokeHost("update_app_settings", { settings });
     }
   } catch (err) {
     throw new Error(`保存 CLI 默认配置失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -451,9 +452,7 @@ export async function repairLegacyContextSelections(): Promise<void> {
       } catch { /* Leave malformed persisted sessions to the host's recovery path. */ }
     }
   }
-  const invoke = (window as unknown as { __TAURI_INTERNALS__?: { invoke?: (cmd: string, args?: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__?.invoke;
-  if (!invoke) return;
-  const settings = await invoke("get_app_settings") as { defaultModels?: Record<string, string> } | null;
+  const settings = await invokeHost("get_app_settings") as { defaultModels?: Record<string, string> } | null;
   if (!settings?.defaultModels) return;
   let changed = false;
   const defaultModels = { ...settings.defaultModels };
@@ -461,7 +460,7 @@ export async function repairLegacyContextSelections(): Promise<void> {
     const clean = strip(engine, model) as string;
     if (clean !== model) { defaultModels[engine] = clean; changed = true; }
   }
-  if (changed) await invoke("update_app_settings", { settings: { ...settings, defaultModels } });
+  if (changed) await invokeHost("update_app_settings", { settings: { ...settings, defaultModels } });
 }
 
 /** Mounted tabs may still hold the old selector after storage has been repaired. */

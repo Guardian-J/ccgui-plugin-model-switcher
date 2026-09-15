@@ -2,11 +2,19 @@ import fuzzysort from "fuzzysort";
 import { gunzipSync, strFromU8 } from "fflate";
 import source from "../scripts/file-index.cjs?raw";
 import type { PluginContext } from "./ccgui-plugin";
+import { invokeHost, isRemoteHost } from "./host-transport";
 
 export interface FileIndex { root: string; files: string[]; unreadable: number; truncated: boolean }
 export interface FileMatch { path: string; indexes: readonly number[] }
 
 export async function loadFileIndex(ctx: PluginContext, root: string, includeGenerated: boolean): Promise<FileIndex> {
+  if (isRemoteHost()) {
+    const entries = await invokeHost<{ rel: string; isDir: boolean }[]>("list_file_index", { path: root });
+    if (!Array.isArray(entries) || !entries.every(entry => entry && typeof entry.rel === "string" &&
+        typeof entry.isDir === "boolean" && safeRelativePath(entry.rel))) throw new Error("文件索引返回格式异常");
+    return { root, files: entries.filter(entry => !entry.isDir).map(entry => entry.rel).sort(), unreadable: 0,
+      truncated: entries.length >= 20000 };
+  }
   const result = await ctx.bridge.invoke("plugin_exec_run", {
     bin: "node", args: ["-e", source, "--", root, includeGenerated ? "all" : "project"], timeoutMs: 20000,
   }) as { code: number; stdout: string; stderr: string };

@@ -20,9 +20,9 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
   if (!engine) return null;
   // The host has already resolved tab override -> runtime/history -> engine default.
   const matchingHost = host?.value === engine ? host : null;
-  // 优先级：Tab 显式指定模型/推理强度 -> 会话历史最后一次请求/运行记录 -> 引擎全局默认
-  const model = session?.model || host?.lastUsedModel || matchingHost?.models?.[engine] || "";
-  const effort = (session?.effort as EffortLevel) || host?.lastUsedEffort || (matchingHost?.efforts?.[engine] as EffortLevel) || "high";
+  // Prefer the mounted tab and the host's resolved selection; raw history is a fallback.
+  const model = session?.model || matchingHost?.models?.[engine] || host?.lastUsedModel || "";
+  const effort = (session?.effort as EffortLevel) || (matchingHost?.models?.[engine] ? matchingHost?.efforts?.[engine] as EffortLevel : undefined) || host?.lastUsedEffort || (matchingHost?.efforts?.[engine] as EffortLevel) || "high";
   const selectedProviderId = session?.provider || matchingHost?.selectedChannels?.[engine] || "";
   return {
     // Selection updates must not remount a flyout whose host/storage writes are still in flight.
