@@ -2,6 +2,7 @@ import type { CliEngineId, EffortLevel } from "./types";
 import { getHostSession, sessionSelectionError, modelSelectionError } from "./selection-policy";
 import type { HostSession, ModelCompatibility } from "./selection-policy";
 import { invokeHost } from "./host-transport";
+import { independentChannelError, NATIVE_PROVIDER_ID } from "./system-bridge";
 
 interface HostCliMenuCallbacks {
   onModelChange?: (engine: string, model: string) => void;
@@ -531,6 +532,8 @@ export async function applyChannelSelectionToHost(params: {
   providerId: string;
 }): Promise<void> {
   const { engine, providerId } = params;
+  const channelError = independentChannelError(engine);
+  if (channelError && providerId && ![NATIVE_PROVIDER_ID, "__local_config_toml__"].includes(providerId)) throw new Error(channelError);
   const error = hostSessionSelectionError(engine);
   if (error) throw new Error(error);
   const callbacks = getHostCliMenuProps();

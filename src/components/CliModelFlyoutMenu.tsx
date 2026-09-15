@@ -19,6 +19,7 @@ import {
   getSystemProviderChannels,
   isPluginProviderId,
   applyCustomPluginChannelToEngine,
+  independentChannelError,
   deleteCustomPluginChannel,
   pluginProviderId,
   qualifyEngineModel,
@@ -547,7 +548,8 @@ export function CliModelFlyoutMenu({
     if (busy || fetchingModels || selectionPending.current) return false;
     const targetModel = (nextState.selectedModel || activeChannel?.model || "").trim();
     const hostModel = qualifyEngineModel(activeEngine, activeChannel, targetModel);
-    const error = selectionError(targetModel) || (hostModel ? selectionError(hostModel) : null);
+    const error = (activeChannel && !nativeActive ? independentChannelError(activeEngine) : null) ||
+      selectionError(targetModel) || (hostModel ? selectionError(hostModel) : null);
     if (error) { setStatusMsg(error); return false; }
     selectionPending.current = true;
     setSwitching(true);
@@ -848,7 +850,8 @@ export function CliModelFlyoutMenu({
     selectionPending.current = true;
     setSwitching(true);
     try {
-      const fallbackId = currentChannelId && !isPluginProviderId(currentChannelId) ? currentChannelId : NATIVE_PROVIDER_ID;
+      const fallbackId = !independentChannelError(activeEngine) && currentChannelId && !isPluginProviderId(currentChannelId)
+        ? currentChannelId : NATIVE_PROVIDER_ID;
       const nextState: PluginState = {
         ...state,
         activeChannelType: isDeletingCurrent ? "system" : state.activeChannelType,
@@ -970,6 +973,7 @@ export function CliModelFlyoutMenu({
         ) : (
           <div className="ms-body">
               <ChannelSection
+                channelSupportError={independentChannelError(activeEngine)}
                 channelTab={channelTab}
                 onTabChange={(tab) => {
                   if (tab !== channelTab) closeChannelForm();

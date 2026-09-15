@@ -10,7 +10,7 @@
   import { CliModelFlyoutMenu } from '../src/components/CliModelFlyoutMenu.tsx';
   import { useSessionDisplay, withSessionDisplay } from '../src/session-display.ts';
   import { DEFAULT_STATE } from '../src/constants.ts';
-  import { pluginProviderId } from '../src/system-bridge.ts';
+  import { independentChannelError, NATIVE_PROVIDER_ID, pluginProviderId } from '../src/system-bridge.ts';
   initReact(React);
   localStorage.clear();
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -22,14 +22,17 @@
       await delay(20);
     }
   };
+  const engine = new URLSearchParams(location.search).get('engine') || 'codex';
+  const unsupported = !!independentChannelError(engine);
   const pluginId = pluginProviderId('b');
-  const configs = { codex: { current: 'a', providers: {
+  const configs = { [engine]: { current: 'a', providers: {
     a: { name: 'Channel A', baseUrl: 'https://a.example.invalid', apiKey: 'test-a', model: 'model-a' },
     rejected: { name: 'Rejected', model: 'model-rejected' },
   } } };
-  let saved = { ...DEFAULT_STATE, selectedCli: 'codex', selectedProviderId: 'a', selectedModel: 'model-a',
-    fetchedModels: { 'codex:a': ['model-a'] }, customModels: { 'codex:b': ['model-b'] },
-    pluginChannels: { codex: [{ id: 'b', name: 'Channel B', baseUrl: 'https://b.example.invalid',
+  let saved = { ...DEFAULT_STATE, selectedCli: engine, selectedProviderId: 'a', selectedModel: 'model-a',
+    ...(unsupported ? { activeChannelType: 'plugin', activePluginChannelId: 'b', selectedProviderId: 'b' } : {}),
+    fetchedModels: { [`${engine}:a`]: ['model-a'] }, customModels: { [`${engine}:b`]: ['model-b'] },
+    pluginChannels: { [engine]: [{ id: 'b', name: 'Channel B', baseUrl: 'https://b.example.invalid',
       apiKey: 'test-b', model: 'model-b' }] } };
   const calls = [];
   let saves = 0, saving = 0, maxSaving = 0, host;
@@ -38,17 +41,19 @@
     switch (cmd) {
       case 'get_cli_config': return configs;
       case 'official_config_read': return [];
-      case 'list_engines': return [{ id: 'codex', available: true, enabled: true }];
+      case 'list_engines': return [{ id: engine, available: true, enabled: true }];
+      case 'list_engine_models': return [{ id: 'model-a', name: 'Model A' }];
       case 'get_app_settings': return {};
       case 'update_app_settings': await delay(160); return;
       case 'upsert_provider': configs[args.engine].providers[args.id] = args.json; return;
+      case 'delete_provider': delete configs[args.engine].providers[args.id]; return;
       case 'fetch_provider_models': await delay(15); return { models: ['model-b', 'model-c'] };
       default: throw Error(`Unexpected IPC: ${cmd}`);
     }
   } };
   const ctx = { bridge: { invoke: async () => { throw Error('Unexpected bridge call'); } } };
   function HostMenu(props) {
-    return React.createElement('button', { 'aria-haspopup': 'dialog', 'aria-label': props.selectedChannels.codex }, 'Host');
+    return React.createElement('button', { 'aria-haspopup': 'dialog', 'aria-label': props.selectedChannels[engine] }, 'Host');
   }
   function Plugin() {
     const display = useSessionDisplay();
@@ -59,8 +64,8 @@
       } });
   }
   function App() {
-    const [active, setActive] = React.useState({ engine: 'codex', sessionId: 'test-session',
-      workspacePath: '/test', model: 'model-a', provider: 'a' });
+    const [active, setActive] = React.useState({ engine, sessionId: 'test-session',
+      workspacePath: '/test', model: 'model-a', provider: unsupported ? pluginId : 'a' });
     host = active;
     const update = patch => setActive(previous => {
       const next = { ...previous, ...patch };
@@ -69,7 +74,7 @@
     });
     return React.createElement(React.Fragment, null,
       React.createElement('div', { className: 'select-none' }, React.createElement(HostMenu, {
-        value: 'codex', active, models: { codex: active.model }, selectedChannels: { codex: active.provider },
+        value: engine, active, models: { [engine]: active.model }, selectedChannels: { [engine]: active.provider },
         onChannelChange: (engine, id) => {
           calls.push(`channel:${id}`);
           // Match the host: no Promise returned, and backend failures are swallowed.
@@ -85,6 +90,35 @@
   const ready = () => !document.querySelector('.ms-loading-overlay') && !document.querySelector('.ms-model-picker input')?.disabled;
   try {
     createRoot(document.querySelector('#root')).render(React.createElement(App));
+    if (unsupported) {
+      await waitFor(() => button('Channel B') && saved.fetchedModels[`${engine}:b`] && ready(), 'legacy plugin channel');
+      assert(document.querySelector('[role="status"]')?.textContent.includes('暂不支持独立渠道'), 'Explain the unsupported channel');
+      assert(button('Channel B').disabled, 'Legacy independent channel cannot be selected');
+      assert(document.querySelector('[aria-label="新增渠道"]').disabled, 'Cannot create an ineffective channel');
+      const callsBefore = calls.length;
+      button('Channel B').click();
+      assert(calls.length === callsBefore, 'Disabled channel cannot mutate the host');
+      const row = button('Channel B').parentElement;
+      assert(!row.querySelector('[aria-label="编辑渠道"]'), 'Unsupported channel is not editable');
+      const remove = row.querySelector('[aria-label="删除渠道"]');
+      assert(remove && !remove.disabled, 'Legacy channel remains removable');
+      document.querySelector('.ms-model-row > button').click();
+      await waitFor(() => document.querySelector('.ms-status')?.textContent.includes('暂不支持独立渠道'), 'legacy model selection rejected');
+      assert(!calls.some(cmd => cmd.startsWith('model:')), 'Legacy channel cannot report a successful model change');
+      tab(0);
+      await waitFor(() => button('Channel A'), 'unsupported system channels');
+      assert(button('Channel A').disabled, 'Unsupported system custom channel cannot be selected');
+      assert(!button(engine === 'dsh' ? '宿主服务配置' : 'CLI 原生配置').disabled, 'Native configuration remains selectable');
+      tab(1);
+      await waitFor(() => button('Channel B'), 'legacy channel removal');
+      button('Channel B').parentElement.querySelector('[aria-label="删除渠道"]').click();
+      await waitFor(() => saved.pluginChannels[engine].length === 0 && ready(), 'delete the last active legacy channel');
+      assert(host.provider === NATIVE_PROVIDER_ID && saved.selectedProviderId === NATIVE_PROVIDER_ID,
+        'Deleting an active legacy channel returns to native instead of an unsupported system channel');
+      assert(saved.activeChannelType === 'system', 'Legacy selection is cleared');
+      assert(!calls.includes('upsert_provider'), 'Unsupported channel never writes endpoint or credentials');
+      document.querySelector('#result').textContent = `PASS: ${engine} unsupported channels blocked, native selection available, last active legacy channel deleted`;
+    } else {
     await waitFor(() => button('Channel A') && ready(), 'initial channels');
     const dialog = document.querySelector('.ms-flyout');
     tab(1);
@@ -93,11 +127,11 @@
     await delay(40);
     assert(!calls.includes('model:model-b'), 'Model waits for channel acknowledgement');
     button('Channel B').click();
-    await waitFor(() => saved.activePluginChannelId === 'b' && saved.fetchedModels['codex:b'] && ready(), 'switch and catalog save');
+    await waitFor(() => saved.activePluginChannelId === 'b' && saved.fetchedModels[`${engine}:b`] && ready(), 'switch and catalog save');
     assert(calls.filter(cmd => cmd === `channel:${pluginId}`).length === 1, 'Rapid duplicate click cannot start a second switch');
     assert(document.querySelector('.ms-flyout') === dialog, 'Channel switch preserves the mounted dialog');
     assert(host.provider === pluginId && host.model === 'model-b', 'Host channel and model agree');
-    assert(saved.customModels['codex:b'].includes('model-b'), 'Favorites preserved');
+    assert(saved.customModels[`${engine}:b`].includes('model-b'), 'Favorites preserved');
     assert(maxSaving === 1, 'Catalog save cannot race with channel save');
     tab(0);
     await waitFor(() => button('Channel A'), 'system tab');
@@ -118,6 +152,7 @@
     await waitFor(() => saved.activePluginChannelId === 'b' && ready(), 'retry after rejection');
     assert(host.provider === pluginId && host.model === 'model-b', 'Retry succeeds after a rejected switch');
     document.querySelector('#result').textContent = 'PASS: delayed host confirmation, duplicate clicks, stable dialog, serialized catalog/save, system/plugin round trip, rejection, retry, preserved favorites';
+    }
     document.title = 'PASS';
   } catch (error) {
     document.querySelector('#result').textContent = error.stack;

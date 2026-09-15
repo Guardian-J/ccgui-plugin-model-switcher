@@ -233,10 +233,11 @@ assert.equal(ompChannels.some((c) => c.isNative), true, "OMP built-in providers 
 const piChannels = (await bridge.getSystemProviderChannels("pi")).channels;
 assert.ok(piChannels.some((c) => c.id === "custom-pi" && c.baseUrl === "https://pi-relay.example.com"), "pi must load custom-pi provider channel from models.json");
 assert.equal(piChannels.some((c) => c.isNative), true, "PI built-in providers must remain selectable alongside custom providers");
-assert.equal(
-  (await bridge.getSystemProviderChannels("dsh")).channels.length,
-  0,
-);
+const dshChannels = await bridge.getSystemProviderChannels("dsh");
+assert.equal(dshChannels.current, bridge.NATIVE_PROVIDER_ID);
+assert.deepEqual(dshChannels.channels.map(({ id, name, isNative }) => ({ id, name, isNative })),
+  [{ id: bridge.NATIVE_PROVIDER_ID, name: '宿主服务配置', isNative: true }],
+  'DSH needs a native service entry to recover from legacy independent channels');
 const nativeClaude = (await bridge.getSystemProviderChannels("claude")).channels[0];
 assert.equal(nativeClaude.baseUrl, "https://api.anthropic.com");
 assert.equal(nativeClaude.apiKey, "sk-native");
@@ -423,6 +424,7 @@ window.__TAURI_INTERNALS__.invoke = originalInvoke;
 console.log("Native provider compatibility and scrub status checks passed.");
 
 for (const engine of ["claude", "codex", "kimi", "grok", "pi", "omp"]) {
+  assert.equal(bridge.independentChannelError(engine), null);
   for (const model of ["relay/custom", "claude-via-responses", "gpt-via-messages", "模型别名"]) {
     assert.equal(policy.modelSelectionError(engine, model), null, "Names cannot prove a wire protocol mismatch");
     assert.equal(policy.modelSelectionError(engine, model, { nativeIds: [], authoritative: false }), null);
@@ -867,6 +869,30 @@ menu.memoizedProps.onChannelChange = (engine, providerId) => {
   // The host callback returns void while its backend mutation is still pending.
   setTimeout(() => { menu.memoizedProps.selectedChannels = { [engine]: providerId }; }, 40);
 };
+for (const engine of ['dsh', 'agy', 'opencode', 'qoder', 'qoder-cn']) {
+  footer.memoizedProps.active = null;
+  storage.set(activeKey, 'null');
+  const storedBefore = [...storage];
+  const before = calls.length;
+  const callbacksBefore = channelCalls.length;
+  const channel = { id: 'unsupported', name: 'Unsupported', baseUrl: 'https://example.invalid', apiKey: 'test-only', model: 'model' };
+  for (const operation of [
+    () => bridge.applyCustomPluginChannelToEngine(ctx, engine, channel),
+    () => bridge.setSystemCurrentProvider(engine, bridge.pluginProviderId(channel.id)),
+    () => sync.applyChannelSelectionToHost({ engine, providerId: bridge.pluginProviderId(channel.id) }),
+    () => sync.applyChannelSelectionToHost({ engine, providerId: 'system-custom' }),
+  ]) {
+    await assert.rejects(operation, /暂不支持独立渠道/);
+  }
+  assert.equal(calls.length, before, `${engine}: unsupported channels must fail before IPC`);
+  assert.equal(channelCalls.length, callbacksBefore, `${engine}: unsupported channels must not call the host`);
+  assert.deepEqual([...storage], storedBefore, `${engine}: failed selection must not change storage`);
+  for (const providerId of [bridge.NATIVE_PROVIDER_ID, '__local_config_toml__', '']) {
+    await sync.applyChannelSelectionToHost({ engine, providerId });
+    assert.deepEqual(channelCalls.at(-1), [engine, providerId], `${engine}: native selection remains available`);
+  }
+}
+console.log('Unsupported independent channels are rejected before mutations; native channels remain selectable.');
 for (const session of [pending, history, null]) {
   menu.memoizedProps.selectedChannels = { codex: 'before' };
   footer.memoizedProps.active = session;

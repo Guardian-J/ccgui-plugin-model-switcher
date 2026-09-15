@@ -6,7 +6,7 @@
 
 插件使用宿主发现的 CLI 和供应商配置，不内置个人供应商 ID、API Key 或本机路径。面向 Windows、macOS、Linux，使用同一份构建产物，安装时无需修改宿主源代码。
 
-> **供应商切换：** 插件内选择系统渠道或独立渠道会同步宿主当前供应商（`set_current_provider`）；创建或编辑独立渠道会写入宿主供应商列表（`upsert_provider`）；删除独立渠道会调用 `delete_provider`。对 Claude / Codex / Kimi / Grok，这会改写 CLI 原生配置文件（`settings.json` / `config.toml` / `auth.json`），与宿主设置页渠道切换相同。Codex 独立渠道会写入 `settingsConfig`（`requires_openai_auth` + `auth.json` 的 `OPENAI_API_KEY`），不能只写扁平字段，否则 CLI 会按 `env_key` 去找环境变量并报 `Missing environment variable: OPENAI_API_KEY`。系统渠道详情只读，不在插件内编辑或删除。omp / pi 的独立渠道还会写入 `models.yml` / `models.json`，并必须指定协议类型（`api`：`openai-completions` / `openai-responses` / `anthropic-messages` / `google-generative-ai`），否则 CLI 会报错。dsh 的供应商在宿主侧多为仅展示。
+> **供应商切换：** 插件通过宿主会话回调切换渠道，等待宿主确认后再应用模型；创建、编辑和删除独立渠道会同步宿主供应商列表。独立渠道支持 Claude / Codex / Kimi / Grok / OMP / PI。DSH、AGY、OpenCode、Qoder 等使用自身账号或服务配置，插件会明确提示暂不支持独立渠道。系统渠道详情只读。OMP / PI 的独立渠道还会写入 `models.yml` / `models.json`，并需指定 `api` 协议。
 
 ## 目录
 
@@ -44,12 +44,12 @@
 | 渠道来源或操作 | 当前行为 |
 | --- | --- |
 | 系统渠道 | 显示并可选中宿主已配置的供应商；详情只读，不可编辑或保存；API Key 默认掩码，可点眼睛查看明文；选中后同步宿主当前供应商 |
-| CLI 原生配置 | 为适用的 CLI 显示原生配置入口；详情只读，从 CLI 原生文件读取 Base URL、API Key 和模型，Key 默认掩码，可点眼睛查看；模型列表优先按 Base URL 接口获取；选中后恢复官方配置备份 |
+| CLI 原生配置 | 显示原生配置入口（DSH 为宿主服务配置）；详情只读，从宿主提供的 CLI 原生文件读取 Base URL、API Key 和模型，Key 默认掩码，可点眼睛查看；选中后按原生账号或配置发送 |
 | 独立渠道 | 在插件中创建、编辑、保存名称、Base URL、API Key 和可选默认模型；同步到宿主供应商列表（ID 前缀 `plugin_model-switcher_`）；Key 同样默认掩码、可点眼睛查看。omp / pi 还需选择协议类型，并写入 `models.yml` / `models.json` |
-| 切换渠道 | 同步宿主当前启用渠道；Claude / Codex / Kimi / Grok 会写入 CLI 原生配置，随后对话使用该渠道；omp / pi 独立渠道写入对应 models 配置 |
-| 删除独立渠道 | 删除插件记录，并从宿主供应商列表移除；omp / pi 同时从 `models.yml` / `models.json` 去掉该供应商；若删的是当前项，再切回上次系统渠道或官方配置备份 |
+| 切换渠道 | 同步宿主当前会话渠道；新版宿主在发送时将 Claude / Codex / Kimi / Grok 的渠道配置应用到本次 CLI 进程；OMP / PI 使用完整的供应商/模型 ID |
+| 删除独立渠道 | 删除插件记录，并从宿主供应商列表移除；OMP / PI 同时从模型配置移除该供应商；若删的是当前项，切回可用的系统渠道或原生配置 |
 
-插件内切换、创建或删除渠道会改写 Claude / Codex / Kimi / Grok 的 `settings.json` / `config.toml` / `auth.json`，与宿主设置页渠道切换相同。omp / pi 独立渠道会改写 `models.yml` / `models.json` 并写入 `api` 协议。dsh 的供应商在宿主侧多为仅展示。写入失败会提示错误，不会假装已生效。用户主动执行的提示词清洗另见下文。
+CLI 配置如何应用取决于宿主版本：早期宿主可能改写原生文件，新版宿主在发送时注入渠道配置。Claude 的原生 settings 覆盖问题、Kimi 的环境变量及原生模型别名覆盖问题，需要宿主包含对应修复；仅更新插件无法修正旧宿主启动的 CLI 请求。OMP / PI 独立渠道仍会改写模型配置文件。暂不支持独立渠道的 CLI 可选择原生配置，并删除旧版保存的独立渠道。用户主动执行的提示词清洗另见下文。
 
 ### 全局主题与自由选色
 
@@ -230,6 +230,8 @@ pnpm preview:ui
 上述脚本位于本地 `preview/`。预览使用模拟宿主接口；链接预览不会实际启动桌面浏览器，不能替代真实宿主集成验证。
 
 仓库中的 `/scripts/check-remote-host.html` 可直接在 Vite 预览服务器中运行，覆盖无 Tauri 接口的远程读取、文本及二进制消息、断线重连、会话定位、浏览器保存回退和窄屏弹窗；使用模拟通道和假凭据，不连接真实宿主。
+
+`/scripts/check-channel-switch.html` 验证渠道确认、重复点击、失败重试和保存顺序；加上 `?engine=dsh`（或 `agy`、`opencode`、`qoder`、`qoder-cn`）验证不支持的渠道被禁用、原生入口可选及最后一个旧渠道可删除。
 
 安装 `agent-browser` 并准备浏览器后，可执行：
 

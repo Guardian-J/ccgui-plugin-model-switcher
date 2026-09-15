@@ -26,9 +26,18 @@ export const CLI_DISPLAY_NAMES: Record<string, string> = {
   omp: "OMP CLI",
   dsh: "DeepSeek Harness",
   agy: "Antigravity CLI",
+  opencode: "OpenCode",
+  qoder: "Qoder CLI",
+  "qoder-cn": "Qoder CLI CN",
 };
 
 export const NATIVE_PROVIDER_ID = "__local_settings_json__";
+export function independentChannelError(engine: string): string | null {
+  return ["claude", "codex", "kimi", "grok", "pi", "omp"].includes(engine)
+    ? null
+    : `${CLI_DISPLAY_NAMES[engine] || engine} 使用自身的账号或服务配置，暂不支持独立渠道，请在对应 CLI 中配置`;
+}
+
 const PLUGIN_PROVIDER_PREFIX = "plugin_model-switcher_";
 const NATIVE_CONFIG_NAMES: Partial<Record<CliEngineId, string>> = {
   claude: "settings.json",
@@ -470,11 +479,9 @@ export async function getSystemProviderChannels(
 
     const section = config?.[engine];
     const configuredId = section?.current;
-    let currentId =
+    const currentId =
       !configuredId || configuredId === "__local_config_toml__"
-        ? engine === "dsh"
-          ? null
-          : NATIVE_PROVIDER_ID
+        ? NATIVE_PROVIDER_ID
         : configuredId;
     const channels: SystemProviderChannel[] = Object.entries(
       section?.providers || {},
@@ -546,19 +553,17 @@ export async function getSystemProviderChannels(
       }
     }
 
-    // OMP/PI built-in providers remain usable alongside custom models configs.
-    if (engine !== "dsh") {
-      channels.unshift({
-        id: NATIVE_PROVIDER_ID,
-        name: "CLI 原生配置",
-        remark: NATIVE_CONFIG_NAMES[engine],
-        baseUrl: nativeFields.baseUrl,
-        apiKey: nativeFields.apiKey,
-        model: nativeFields.model,
-        isNative: true,
-        isCurrent: currentId === NATIVE_PROVIDER_ID,
-      });
-    }
+    // Every engine can return to its native account/service configuration.
+    channels.unshift({
+      id: NATIVE_PROVIDER_ID,
+      name: engine === "dsh" ? "宿主服务配置" : "CLI 原生配置",
+      remark: NATIVE_CONFIG_NAMES[engine],
+      baseUrl: nativeFields.baseUrl,
+      apiKey: nativeFields.apiKey,
+      model: nativeFields.model,
+      isNative: true,
+      isCurrent: currentId === NATIVE_PROVIDER_ID,
+    });
 
     return { current: currentId, channels };
   } catch (error) {
@@ -585,6 +590,8 @@ export async function setSystemCurrentProvider(
   engine: CliEngineId,
   providerId: string,
 ): Promise<void> {
+  const error = independentChannelError(engine);
+  if (error && providerId && ![NATIVE_PROVIDER_ID, "__local_config_toml__"].includes(providerId)) throw new Error(error);
   if (engine !== "pi" && engine !== "omp") {
     await invokeTauri("set_current_provider", { engine, id: providerId });
     invalidateCliConfig();
@@ -798,6 +805,8 @@ export async function applyCustomPluginChannelToEngine(
   engine: CliEngineId,
   channel: CustomPluginChannel,
 ): Promise<void> {
+  const error = independentChannelError(engine);
+  if (error) throw new Error(error);
   const id = pluginProviderId(channel.id);
   const json: Record<string, unknown> = {
     name: channel.name,

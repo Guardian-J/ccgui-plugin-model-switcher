@@ -94,6 +94,7 @@ function ChannelRow({
   onEdit,
   onView,
   disabled,
+  selectDisabled,
 }: {
   name: string;
   url?: string;
@@ -105,6 +106,7 @@ function ChannelRow({
   onEdit?: (e: React.MouseEvent) => void;
   onView?: (e: React.MouseEvent) => void;
   disabled?: boolean;
+  selectDisabled?: boolean;
 }) {
   return (
     <div className={`ms-channel-row ${selected ? ROW_ON : ROW_OFF}`}>
@@ -112,7 +114,7 @@ function ChannelRow({
         type="button"
         className={ROW}
         onClick={onSelect}
-        disabled={disabled}
+        disabled={disabled || selectDisabled}
         aria-pressed={selected}
         title={url || detail ? `${name}\n${url || detail}` : name}
       >
@@ -168,6 +170,7 @@ function ChannelRow({
 }
 
 interface ChannelSectionProps {
+  channelSupportError?: string | null;
   channelTab: "system" | "plugin";
   onTabChange: (tab: "system" | "plugin") => void;
   systemChannels: SystemProviderChannel[];
@@ -195,6 +198,7 @@ interface ChannelSectionProps {
 }
 
 export function ChannelSection({
+  channelSupportError,
   channelTab,
   onTabChange,
   systemChannels,
@@ -252,7 +256,8 @@ export function ChannelSection({
             <button
               type="button"
               aria-label={showAddChannel ? "收起" : "新增渠道"}
-              title={showAddChannel ? "收起" : "新增独立渠道"}
+              title={channelSupportError || (showAddChannel ? "收起" : "新增独立渠道")}
+              disabled={!!channelSupportError}
               onClick={onToggleAddChannel}
               aria-expanded={showAddChannel}
               className={ICON_BTN}
@@ -263,7 +268,9 @@ export function ChannelSection({
         </span>
       </div>
 
-      {showAddChannel ? (
+      {channelSupportError ? <p className="ms-empty" role="status">{channelSupportError}</p> : null}
+
+      {showAddChannel && (!channelSupportError || viewingChannelId) ? (
         <div className="ms-channel-form">
           <label>
             渠道名称
@@ -356,6 +363,7 @@ export function ChannelSection({
               <ChannelRow
                 key={ch.id}
                 disabled={fetchingModels}
+                selectDisabled={!!channelSupportError && !ch.isNative}
                 name={ch.name}
                 url={ch.baseUrl}
                 detail={ch.remark}
@@ -373,13 +381,14 @@ export function ChannelSection({
             <ChannelRow
               key={ch.id}
               disabled={fetchingModels}
+              selectDisabled={!!channelSupportError}
               name={ch.name}
               url={ch.baseUrl}
               brand={channelBrand(ch.name, ch.model, ch.baseUrl)}
               selected={isPluginActive && ch.id === selectedChannelId}
               onSelect={() => onSelectPluginChannel(ch)}
               onDelete={(e) => onDeletePluginChannel(ch.id, e)}
-              onEdit={(e) => onEditPluginChannel(ch, e)}
+              onEdit={channelSupportError ? undefined : (e) => onEditPluginChannel(ch, e)}
             />
           ))
         )}
