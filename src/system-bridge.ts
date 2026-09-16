@@ -850,7 +850,7 @@ export async function applyCustomPluginChannelToEngine(
     json.settingsConfig = {
       ...(json.settingsConfig as Record<string, unknown> || {}),
       attribution: { commit: "", pr: "" },
-      ENABLE_TOOL_SEARCH: "true",
+      env: { ENABLE_TOOL_SEARCH: "true" },
     };
   }
   if (isPiFamilyEngine(engine)) {
