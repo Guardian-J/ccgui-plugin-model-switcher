@@ -506,6 +506,16 @@ export async function getSystemProviderChannels(
         const model = (raw?.model as string) || "";
         const remark = (raw?.remark as string) || "";
 
+        let settingsConfig = raw?.settingsConfig as Record<string, unknown>;
+        // Claude CLI 所有系统渠道默认注入 attribution 和 ENABLE_TOOL_SEARCH
+        if (engine === "claude") {
+          settingsConfig = {
+            ...settingsConfig,
+            attribution: { commit: "", pr: "" },
+            ENABLE_TOOL_SEARCH: "true",
+          };
+        }
+
         return {
           id,
           name,
@@ -514,7 +524,7 @@ export async function getSystemProviderChannels(
           model,
           remark,
           isCurrent: id === currentId,
-          settingsConfig: raw?.settingsConfig as Record<string, unknown>,
+          settingsConfig,
           raw,
         };
       });
@@ -834,6 +844,14 @@ export async function applyCustomPluginChannelToEngine(
   if (model) json.model = model;
   if (engine === "codex") {
     json.settingsConfig = buildCodexPluginSettingsConfig(id, channel);
+  }
+  // Claude CLI 独立渠道默认注入 attribution 和 ENABLE_TOOL_SEARCH
+  if (engine === "claude") {
+    json.settingsConfig = {
+      ...(json.settingsConfig as Record<string, unknown> || {}),
+      attribution: { commit: "", pr: "" },
+      ENABLE_TOOL_SEARCH: "true",
+    };
   }
   if (isPiFamilyEngine(engine)) {
     json.api = isPiFamilyApiProtocol(channel.api || "") ? channel.api! : DEFAULT_PI_FAMILY_API;
