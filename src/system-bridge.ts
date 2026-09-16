@@ -559,7 +559,7 @@ export async function getSystemProviderChannels(
     }
 
     // Every engine can return to its native account/service configuration.
-    channels.unshift({
+    const nativeChannel: SystemProviderChannel = {
       id: NATIVE_PROVIDER_ID,
       name: engine === "dsh" ? "宿主服务配置" : "CLI 原生配置",
       remark: NATIVE_CONFIG_NAMES[engine],
@@ -568,7 +568,18 @@ export async function getSystemProviderChannels(
       model: nativeFields.model,
       isNative: true,
       isCurrent: currentId === NATIVE_PROVIDER_ID,
-    });
+    };
+
+    // Claude CLI 原生渠道默认注入 attribution 和 ENABLE_TOOL_SEARCH
+    if (engine === "claude" && nativeChannel.id === NATIVE_PROVIDER_ID) {
+      nativeChannel.settingsConfig = {
+        ...nativeChannel.settingsConfig,
+        attribution: { commit: "", pr: "" },
+        ENABLE_TOOL_SEARCH: "true",
+      };
+    }
+
+    channels.unshift(nativeChannel);
 
     return { current: currentId, channels };
   } catch (error) {
