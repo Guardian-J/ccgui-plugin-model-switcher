@@ -537,38 +537,57 @@ export async function applyChannelSelectionToHost(params: {
   const error = hostSessionSelectionError(engine);
   if (error) throw new Error(error);
   const callbacks = getHostCliMenuProps();
-
-  if (!callbacks?.onChannelChange) {
+  if (!callbacks) {
     throw new Error("无法连接宿主渠道切换入口，请重载插件后重试");
   }
-  const sessionIdentity = (host: HostCliMenuProps | null) => {
-    const session = host?.session !== undefined ? host.session : getHostSession();
-    return JSON.stringify([session?.engine, session?.sessionId, session?.workspacePath]);
-  };
-  const originalSession = sessionIdentity(callbacks);
-  await callbacks.onChannelChange(engine, providerId);
 
-  // The host wraps its asynchronous setProvider in a void callback and catches
-  // backend failures internally. Only its committed selection acknowledges success.
-  const deadline = Date.now() + 5000;
-  while (true) {
-    const current = getHostCliMenuProps();
-    if (sessionIdentity(current) !== originalSession) {
-      throw new Error("当前会话已变化，已停止后续模型切换，请在目标会话重试");
+  if (callbacks.onChannelChange) {
+    const sessionIdentity = (host: HostCliMenuProps | null) => {
+      const session = host?.session !== undefined ? host.session : getHostSession();
+      return JSON.stringify([session?.engine, session?.sessionId, session?.workspacePath]);
+    };
+    const originalSession = sessionIdentity(callbacks);
+    await callbacks.onChannelChange(engine, providerId);
+
+    // The host wraps its asynchronous setProvider in a void callback and catches
+    // backend failures internally. Only its committed selection acknowledges success.
+    const deadline = Date.now() + 5000;
+    while (true) {
+      const current = getHostCliMenuProps();
+      if (sessionIdentity(current) !== originalSession) {
+        throw new Error("当前会话已变化，已停止后续模型切换，请在目标会话重试");
+      }
+      const selectionError = hostSessionSelectionError(engine);
+      if (selectionError) throw new Error(selectionError);
+      const confirmedProvider = current?.selectedChannels?.[engine] ?? current?.session?.provider;
+      if (confirmedProvider === providerId) break;
+      if (Date.now() >= deadline) {
+        throw new Error("宿主未确认渠道切换，请检查渠道配置或宿主错误提示后重试");
+      }
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
-    const selectionError = hostSessionSelectionError(engine);
-    if (selectionError) throw new Error(selectionError);
-    const confirmedProvider = current?.selectedChannels?.[engine] ?? current?.session?.provider;
-    if (confirmedProvider === providerId) break;
-    if (Date.now() >= deadline) {
-      throw new Error("宿主未确认渠道切换，请检查渠道配置或宿主错误提示后重试");
+  } else {
+    // 新版 CC GUI（CliMenu 已移除 onChannelChange，渠道通过 set_current_provider 原生命令切换）
+    let targetId = providerId;
+    if (!targetId || targetId === NATIVE_PROVIDER_ID || targetId === "__local_config_toml__") {
+      targetId = "local";
     }
-    await new Promise(resolve => setTimeout(resolve, 50));
+    try {
+      await invokeHost("set_current_provider", { engine, id: targetId });
+    } catch (err) {
+      console.warn("[model-switcher] set_current_provider 失败，尝试原 ID:", err);
+      if (targetId === "local" && providerId !== "local") {
+        try {
+          await invokeHost("set_current_provider", { engine, id: providerId || "" });
+        } catch {}
+      }
+    }
   }
 
   syncSessionProviderToLocalStorage(engine, providerId);
 
   if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("ccgui:cli-config-changed"));
     window.dispatchEvent(
       new CustomEvent("ccgui:channel-changed", { detail: { engine, providerId } }),
     );
