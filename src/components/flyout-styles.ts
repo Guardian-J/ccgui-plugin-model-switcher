@@ -163,9 +163,12 @@ export const flyoutStyles = `
 .ms-confirm-dialog p { margin: 0 0 16px; color: var(--ms-muted); font-size: 12px; overflow-wrap: anywhere; }
 .ms-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .ms-danger { background: #c43d4b; border-color: #c43d4b; color: #fff !important; }
-.ms-engines { display: flex; align-items: center; flex-shrink: 0; gap: 4px; padding: 10px 12px; border-top: 1px solid var(--ms-border); overflow-x: auto; }
-.ms-engines .ms-row { width: auto; flex-shrink: 0; padding: 6px 9px; gap: 6px; font-size: 11px; white-space: nowrap; }
-.ms-online { width: 5px; height: 5px; flex-shrink: 0; border-radius: 50%; background: #25a078; }
+.ms-engines { display: flex; align-items: center; flex-shrink: 0; gap: 6px; padding: 12px 14px; border-top: 1px solid var(--ms-border); overflow-x: auto; background: var(--ms-surface); }
+.ms-engines .ms-row { position: relative; width: auto; flex-shrink: 0; padding: 7px 11px; gap: 7px; font-size: 12px; font-weight: 500; white-space: nowrap; border-radius: 7px; transition: all 140ms ease-out; }
+.ms-engines .ms-row:hover:not(:disabled) { background: var(--ms-hover); transform: translateY(-1px); box-shadow: 0 2px 8px #00000012; }
+.ms-engines .ms-row.is-selected { background: var(--ms-bg); border-color: color-mix(in srgb, var(--ms-accent) 35%, var(--ms-border)); box-shadow: 0 1px 3px #00000010, inset 0 0 0 1px color-mix(in srgb, var(--ms-accent) 12%, transparent); }
+.ms-engines .ms-row:disabled { transform: none; }
+.ms-online { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: #25a078; box-shadow: 0 0 0 2px color-mix(in srgb, #25a078 20%, transparent); }
 .ms-theme-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .ms-theme { padding: 16px 18px; }
 .ms-theme-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }

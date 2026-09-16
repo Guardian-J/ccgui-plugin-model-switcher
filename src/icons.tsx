@@ -244,6 +244,53 @@ const OPENAI_PATH =
 const DEEPSEEK_PATH =
   "M23.748 4.482c-.254-.124-.364.113-.512.234-.051.039-.094.09-.137.136-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.156-.708-.311-.955-.65-.172-.241-.219-.51-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434 1.202-.422 1.84.027 1.436.633 2.58 1.838 3.393.137.093.172.187.129.323-.082.28-.18.552-.266.833-.055.179-.137.217-.329.14a5.526 5.526 0 01-1.736-1.18c-.857-.828-1.631-1.742-2.597-2.458a11.365 11.365 0 00-.689-.471c-.985-.957.13-1.743.388-1.836.27-.098.093-.432-.779-.428-.872.004-1.67.295-2.687.684a3.055 3.055 0 01-.465.137 9.597 9.597 0 00-2.883-.102c-1.885.21-3.39 1.102-4.497 2.623C.082 8.606-.231 10.684.152 12.85c.403 2.284 1.569 4.175 3.36 5.653 1.858 1.533 3.997 2.284 6.438 2.14 1.482-.085 3.133-.284 4.994-1.86.47.234.962.327 1.78.397.63.059 1.236-.03 1.705-.128.735-.156.684-.837.419-.961-2.155-1.004-1.682-.595-2.113-.926 1.096-1.296 2.746-2.642 3.392-7.003.05-.347.007-.565 0-.845-.004-.17.035-.237.23-.256a4.173 4.173 0 001.545-.475c1.396-.763 1.96-2.015 2.093-3.517.02-.23-.004-.467-.247-.588zM11.581 18c-2.089-1.642-3.102-2.183-3.52-2.16-.392.024-.321.471-.235.763.09.288.207.486.371.739.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.167-1.361-.802-2.5-1.86-3.301-3.307-.774-1.393-1.224-2.887-1.298-4.482-.02-.386.093-.522.477-.592a4.696 4.696 0 011.529-.039c2.132.312 3.946 1.265 5.468 2.774.868.86 1.525 1.887 2.202 2.891.72 1.066 1.494 2.082 2.48 2.914.348.292.625.514.891.677-.802.09-2.14.11-3.054-.614zm1-6.44a.306.306 0 01.415-.287.302.302 0 01.2.288.306.306 0 01-.31.307.303.303 0 01-.304-.308zm3.11 1.596c-.2.081-.399.151-.59.16a1.245 1.245 0 01-.798-.254c-.274-.23-.47-.358-.552-.758a1.73 1.73 0 01.016-.588c.07-.327-.008-.537-.239-.727-.187-.156-.426-.199-.688-.199a.559.559 0 01-.254-.078c-.11-.054-.2-.19-.114-.358.028-.054.16-.186.192-.21.356-.202.767-.136 1.146.016.352.144.618.408 1.001.782.391.451.462.576.685.914.176.265.336.537.445.848.067.195-.019.354-.25.452z";
 
+const DOUBAO_PATHS = [
+  "M5.31 15.756c.172-3.75 1.883-5.999 2.549-6.739-3.26 2.058-5.425 5.658-6.358 8.308v1.12C1.501 21.513 4.226 24 7.59 24a6.59 6.59 0 002.2-.375c.353-.12.7-.248 1.039-.378.913-.899 1.65-1.91 2.243-2.992-4.877 2.431-7.974.072-7.763-4.5l.002.001z",
+  "M22.57 10.283c-1.212-.901-4.109-2.404-7.397-2.8.295 3.792.093 8.766-2.1 12.773a12.782 12.782 0 01-2.244 2.992c3.764-1.448 6.746-3.457 8.596-5.219 2.82-2.683 3.353-5.178 3.361-6.66a2.737 2.737 0 00-.216-1.084v-.002z",
+  "M14.303 1.867C12.955.7 11.248 0 9.39 0 7.532 0 5.883.677 4.545 1.807 2.791 3.29 1.627 5.557 1.5 8.125v9.201c.932-2.65 3.097-6.25 6.357-8.307.5-.318 1.025-.595 1.569-.829 1.883-.801 3.878-.932 5.746-.706-.222-2.83-.718-5.002-.87-5.617h.001z",
+  "M17.305 4.961a199.47 199.47 0 01-1.08-1.094c-.202-.213-.398-.419-.586-.622l-1.333-1.378c.151.615.648 2.786.869 5.617 3.288.395 6.185 1.898 7.396 2.8-1.306-1.275-3.475-3.487-5.266-5.323z",
+] as const;
+const DOUBAO_FILLS = ["#1E37FC", "#37E1BE", "#A569FF", "#1E37FC"] as const;
+
+const MINIMAX_GRAD_ID = "plugin-minimax-grad";
+const MINIMAX_PATH =
+  "M16.278 2c1.156 0 2.093.927 2.093 2.07v12.501a.74.74 0 00.744.709.74.74 0 00.743-.709V9.099a2.06 2.06 0 012.071-2.049A2.06 2.06 0 0124 9.1v6.561a.649.649 0 01-.652.645.649.649 0 01-.653-.645V9.1a.762.762 0 00-.766-.758.762.762 0 00-.766.758v7.472a2.037 2.037 0 01-2.048 2.026 2.037 2.037 0 01-2.048-2.026v-12.5a.785.785 0 00-.788-.753.785.785 0 00-.789.752l-.001 15.904A2.037 2.037 0 0113.441 22a2.037 2.037 0 01-2.048-2.026V18.04c0-.356.292-.645.652-.645.36 0 .652.289.652.645v1.934c0 .263.142.506.372.638.23.131.514.131.744 0a.734.734 0 00.372-.638V4.07c0-1.143.937-2.07 2.093-2.07zm-5.674 0c1.156 0 2.093.927 2.093 2.07v11.523a.648.648 0 01-.652.645.648.648 0 01-.652-.645V4.07a.785.785 0 00-.789-.78.785.785 0 00-.789.78v14.013a2.06 2.06 0 01-2.07 2.048 2.06 2.06 0 01-2.071-2.048V9.1a.762.762 0 00-.766-.758.762.762 0 00-.766.758v3.8a2.06 2.06 0 01-2.071 2.049A2.06 2.06 0 010 12.9v-1.378c0-.357.292-.646.652-.646.36 0 .653.29.653.646V12.9c0 .418.343.757.766.757s.766-.339.766-.757V9.099a2.06 2.06 0 012.07-2.048 2.06 2.06 0 012.071 2.048v8.984c0 .419.343.758.767.758.423 0 .766-.339.766-.758V4.07c0-1.143.937-2.07 2.093-2.07z";
+
+const YI_PATH =
+  "M18.62 13.927c.611 0 1.107.505 1.107 1.128v5.817c0 .623-.496 1.128-1.108 1.128a1.118 1.118 0 01-1.108-1.128v-5.817c0-.623.496-1.128 1.108-1.128zM16.59 3.052a1.094 1.094 0 011.562-.129c.466.404.522 1.116.126 1.59l-5.938 7.111v9.147c0 .624-.496 1.129-1.108 1.129a1.118 1.118 0 01-1.108-1.129v-9.477l.003-.088.01-.087c.015-.232.102-.462.261-.654l6.192-7.413zM2.906 2.256a1.094 1.094 0 011.559.157l4.387 5.45a1.142 1.142 0 01-.155 1.587 1.094 1.094 0 01-1.559-.157l-4.387-5.45a1.144 1.144 0 01.06-1.498l.095-.09z";
+
+const BAICHUAN_GRAD_ID = "plugin-baichuan-grad";
+const BAICHUAN_PATH =
+  "M7.333 2h-3.2l-2 4.333V17.8L0 22h5.2l2.028-4.2L7.333 2zm7.334 0h-5.2v20h5.2V2zM16.8 7.733H22V22h-5.2V7.733zM22 2h-5.2v4.133H22V2z";
+
+const HUNYUAN_PATHS = [
+  { d: "M12 0c.518 0 1.028.033 1.528.096A6.188 6.188 0 0112.12 12.28l-.12.001c-2.99 0-5.242 2.179-5.554 5.11-.223 2.086.353 4.412 2.242 6.146C3.672 22.1 0 17.479 0 12 0 5.373 5.373 0 12 0z", fill: "#A8DFF5" },
+  { d: "M5.286 5a2.438 2.438 0 01.682 3.38c-3.962 5.966-3.215 10.743 2.648 15.136C3.636 22.056 0 17.452 0 12c0-1.787.39-3.482 1.09-5.006.253-.435.525-.872.817-1.311A2.438 2.438 0 015.286 5z", fill: "#0055E9" },
+  { d: "M12.98.04c.272.021.543.053.81.093.583.106 1.117.254 1.538.44 6.638 2.927 8.07 10.052 1.748 15.642a4.125 4.125 0 01-5.822-.358c-1.51-1.706-1.3-4.184.357-5.822.858-.848 3.108-1.223 4.045-2.441 1.257-1.634 2.122-6.009-2.523-7.506L12.98.039z", fill: "#00BCFF" },
+  { d: "M13.528.096A6.187 6.187 0 0112 12.281a5.75 5.75 0 00-1.71.255c.147-.905.595-1.784 1.321-2.501.858-.848 3.108-1.223 4.045-2.441 1.27-1.651 2.14-6.104-2.676-7.554.184.014.367.033.548.056z", fill: "#ECECEE" },
+] as const;
+
+const STEPFUN_GRAD_ID = "plugin-stepfun-grad";
+const STEPFUN_PATH =
+  "M22.012 0h1.032v.927H24v.968h-.956V3.78h-1.032V1.896h-1.878v-.97h1.878V0zM2.6 12.371V1.87h.969v10.502h-.97zm10.423.66h10.95v.918h-6.208v9.579h-4.742V13.03zM5.629 3.333v12.356H0v4.51h10.386V8L20.859 8l-.003-4.668-15.227.001z";
+
+const MISTRAL_PATHS = [
+  { d: "M3.428 3.4h3.429v3.428H3.428V3.4zm13.714 0h3.43v3.428h-3.43V3.4z", fill: "gold" },
+  { d: "M3.428 6.828h6.857v3.429H3.429V6.828zm10.286 0h6.857v3.429h-6.857V6.828z", fill: "#FFAF00" },
+  { d: "M3.428 10.258h17.144v3.428H3.428v-3.428z", fill: "#FF8205" },
+  { d: "M3.428 13.686h3.429v3.428H3.428v-3.428zm6.858 0h3.429v3.428h-3.429v-3.428zm6.856 0h3.43v3.428h-3.43v-3.428z", fill: "#FA500F" },
+  { d: "M0 17.114h10.286v3.429H0v-3.429zm13.714 0H24v3.429H13.714v-3.429z", fill: "#E10500" },
+] as const;
+
+const COHERE_PATHS = [
+  { d: "M8.128 14.099c.592 0 1.77-.033 3.398-.703 1.897-.781 5.672-2.2 8.395-3.656 1.905-1.018 2.74-2.366 2.74-4.18A4.56 4.56 0 0018.1 1H7.549A6.55 6.55 0 001 7.55c0 3.617 2.745 6.549 7.128 6.549z", fill: "#39594D" },
+  { d: "M9.912 18.61a4.387 4.387 0 012.705-4.052l3.323-1.38c3.361-1.394 7.06 1.076 7.06 4.715a5.104 5.104 0 01-5.105 5.104l-3.597-.001a4.386 4.386 0 01-4.386-4.387z", fill: "#D18EE2" },
+  { d: "M4.776 14.962A3.775 3.775 0 001 18.738v.489a3.776 3.776 0 007.551 0v-.49a3.775 3.775 0 00-3.775-3.775z", fill: "#FF7759" },
+] as const;
+
+const PERPLEXITY_PATH =
+  "M19.785 0v7.272H22.5V17.62h-2.935V24l-7.037-6.194v6.145h-1.091v-6.152L4.392 24v-6.465H1.5V7.188h2.884V0l7.053 6.494V.19h1.09v6.49L19.786 0zm-7.257 9.044v7.319l5.946 5.234V14.44l-5.946-5.397zm-1.099-.08l-5.946 5.398v7.235l5.946-5.234V8.965zm8.136 7.58h1.844V8.349H13.46l6.105 5.54v2.655zm-8.982-8.28H2.59v8.195h1.8v-2.576l6.192-5.62zM5.475 2.476v4.71h5.115l-5.115-4.71zm13.219 0l-5.115 4.71h5.115v-4.71z";
+
 const KIMI_PATHS = [
   "M21.846 0a1.923 1.923 0 110 3.846H20.15a.226.226 0 01-.227-.226V1.923C19.923.861 20.784 0 21.846 0z",
   "M11.065 11.199l7.257-7.2c.137-.136.06-.41-.116-.41H14.3a.164.164 0 00-.117.051l-7.82 7.756c-.122.12-.302.013-.302-.179V3.82c0-.127-.083-.23-.185-.23H3.186c-.103 0-.186.103-.186.23V19.77c0 .128.083.23.186.23h2.69c.103 0 .186-.102.186-.23v-3.25c0-.069.025-.135.069-.178l2.424-2.406a.158.158 0 01.205-.023l6.484 4.772a7.677 7.677 0 003.453 1.283c.108.012.2-.095.2-.23v-3.06c0-.117-.07-.212-.164-.227a5.028 5.028 0 01-2.027-.807l-5.613-4.064c-.117-.078-.132-.279-.028-.381z",
@@ -386,6 +433,106 @@ function DeepSeekEngineIcon({ size }: { size: number }) {
   );
 }
 
+function DoubaoEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
+      {DOUBAO_PATHS.map((path, i) => (
+        <path key={i} d={path} fill={DOUBAO_FILLS[i]} />
+      ))}
+    </svg>
+  );
+}
+
+function MinimaxEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
+      <defs>
+        <linearGradient id={MINIMAX_GRAD_ID} x1="0%" x2="100.182%" y1="50.057%" y2="50.057%">
+          <stop offset="0%" stopColor="#E2167E" />
+          <stop offset="100%" stopColor="#FE603C" />
+        </linearGradient>
+      </defs>
+      <path d={MINIMAX_PATH} fill={`url(#${MINIMAX_GRAD_ID})`} fillRule="nonzero" />
+    </svg>
+  );
+}
+
+function YiEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" className="shrink-0 text-foreground-icon-primary" aria-hidden>
+      <path d={YI_PATH} />
+      <ellipse cx="20.146" cy="10.692" fill="#00FF25" rx="1.354" ry="1.379" />
+    </svg>
+  );
+}
+
+function BaichuanEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
+      <defs>
+        <linearGradient id={BAICHUAN_GRAD_ID} x1="17.764%" x2="100%" y1="8.678%" y2="91.322%">
+          <stop offset="0%" stopColor="#FEC13E" />
+          <stop offset="100%" stopColor="#FF6933" />
+        </linearGradient>
+      </defs>
+      <path d={BAICHUAN_PATH} fill={`url(#${BAICHUAN_GRAD_ID})`} fillRule="nonzero" />
+    </svg>
+  );
+}
+
+function HunyuanEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
+      <circle cx="12" cy="12" fill="#0055E9" r="12" />
+      {HUNYUAN_PATHS.map((path, i) => (
+        <path key={i} d={path.d} fill={path.fill} />
+      ))}
+    </svg>
+  );
+}
+
+function StepfunEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
+      <defs>
+        <linearGradient gradientUnits="userSpaceOnUse" id={STEPFUN_GRAD_ID} x1="1.646" x2="18.342" y1="1.916" y2="22.091">
+          <stop stopColor="#01A9FF" />
+          <stop offset="1" stopColor="#0160FF" />
+        </linearGradient>
+      </defs>
+      <path d={STEPFUN_PATH} fill={`url(#${STEPFUN_GRAD_ID})`} fillRule="evenodd" />
+    </svg>
+  );
+}
+
+function MistralEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
+      {MISTRAL_PATHS.map((path, i) => (
+        <path key={i} d={path.d} fill={path.fill} />
+      ))}
+    </svg>
+  );
+}
+
+function CohereEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
+      {COHERE_PATHS.map((path, i) => (
+        <path key={i} d={path.d} fill={path.fill} clipRule="evenodd" fillRule="evenodd" />
+      ))}
+    </svg>
+  );
+}
+
+function PerplexityEngineIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="#22B8CD" fillRule="nonzero" className="shrink-0" aria-hidden>
+      <path d={PERPLEXITY_PATH} />
+    </svg>
+  );
+}
+
 function GrokEngineIcon({ size }: { size: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" className="shrink-0 text-foreground-icon-primary" aria-hidden>
@@ -492,6 +639,15 @@ function resolveEngineIcon(norm: string, size: number) {
   if (norm.includes("omp")) return <OmpEngineIcon size={size} />;
   if (norm.includes("qwen")) return <QwenEngineIcon size={size} />;
   if (norm.includes("glm") || norm.includes("chatglm")) return <ChatGlmEngineIcon size={size} />;
+  if (norm.includes("doubao") || norm.includes("volc")) return <DoubaoEngineIcon size={size} />;
+  if (norm.includes("minimax") || norm.includes("abab")) return <MinimaxEngineIcon size={size} />;
+  if (norm.includes("yi")) return <YiEngineIcon size={size} />;
+  if (norm.includes("baichuan")) return <BaichuanEngineIcon size={size} />;
+  if (norm.includes("hunyuan")) return <HunyuanEngineIcon size={size} />;
+  if (norm.includes("step") || norm.includes("stepfun")) return <StepfunEngineIcon size={size} />;
+  if (norm.includes("mistral") || norm.includes("mixtral") || norm.includes("codestral")) return <MistralEngineIcon size={size} />;
+  if (norm.includes("cohere") || norm.includes("command-r")) return <CohereEngineIcon size={size} />;
+  if (norm.includes("perplexity") || norm.includes("sonar")) return <PerplexityEngineIcon size={size} />;
   if (norm.includes("agy") || norm.includes("antigravity")) return <GeminiEngineIcon size={size} gradPrefix="agy-gemini" />;
   return <FallbackEngineIcon size={size} />;
 }
