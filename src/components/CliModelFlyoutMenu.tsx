@@ -801,15 +801,9 @@ export function CliModelFlyoutMenu({
       createdAt: Date.now(),
     };
 
-    const pluginChannel = { ...newChan, isPlugin: true as const };
-    const hostModel = qualifyEngineModel(activeEngine, pluginChannel, newChan.model || "");
     const currentList = state.pluginChannels?.[activeEngine] || [];
     const nextState: PluginState = {
       ...state,
-      activeChannelType: "plugin",
-      activePluginChannelId: newChan.id,
-      selectedProviderId: newChan.id,
-      selectedModel: displayEngineModel(activeEngine, pluginChannel, hostModel),
       pluginChannels: {
         ...state.pluginChannels,
         [activeEngine]: editingChannelId ? currentList.map((c) => (c.id === editingChannelId ? newChan : c)) : [newChan, ...currentList],
@@ -820,15 +814,11 @@ export function CliModelFlyoutMenu({
     setSwitching(true);
     try {
       await applyCustomPluginChannelToEngine(ctx, activeEngine, newChan);
-      await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(newChan.id) });
-      if (hostModel) {
-        await applyModelSelectionToHost({ engine: activeEngine, model: hostModel, effort: state.effort, enable1M: state.enable1MContext });
-      }
       await onSave(nextState);
       setState(nextState);
       setChannelTab("plugin");
       closeChannelForm();
-      setStatusMsg(`已保存并应用渠道: ${newChan.name}`);
+      setStatusMsg(`已保存渠道: ${newChan.name}`);
       setTimeout(() => setStatusMsg(null), 2000);
     } catch (e) {
       setStatusMsg(`保存渠道失败: ${e instanceof Error ? e.message : String(e)}`);
