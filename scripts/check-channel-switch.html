@@ -154,7 +154,10 @@
       assert(writes() === editWrites, 'Editing current provider cannot upsert before confirmation');
       await decide(false);
       assert(writes() === editWrites, 'Cancelled edit cannot overwrite native files');
-      [...document.querySelectorAll('.ms-channel-form button')].find(el => el.textContent.trim() === '取消').click();
+      const formCancelButtons = [...document.querySelectorAll('.ms-channel-form button')];
+      const cancelButton = formCancelButtons.find(el => el.textContent.trim() === '取消');
+      if (!cancelButton) throw new Error('Cannot find 取消 button');
+      cancelButton.click();
       tab(0);
       await waitFor(() => button('Rejected') && ready(), 'native system tab');
       const beforeReject = saves;
