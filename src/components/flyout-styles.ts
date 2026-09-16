@@ -163,7 +163,11 @@ export const flyoutStyles = `
 .ms-confirm-dialog p { margin: 0 0 16px; color: var(--ms-muted); font-size: 12px; overflow-wrap: anywhere; }
 .ms-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .ms-danger { background: #c43d4b; border-color: #c43d4b; color: #fff !important; }
-.ms-engines { display: flex; align-items: center; flex-shrink: 0; gap: 6px; padding: 12px 14px; border-top: 1px solid var(--ms-border); overflow-x: auto; background: var(--ms-surface); }
+.ms-engines { display: flex; align-items: center; flex-shrink: 0; gap: 6px; padding: 12px 14px; border-top: 1px solid var(--ms-border); overflow-x: auto; overflow-y: hidden; background: var(--ms-surface); scrollbar-width: thin; scrollbar-color: var(--ms-border) transparent; }
+.ms-engines::-webkit-scrollbar { height: 8px; }
+.ms-engines::-webkit-scrollbar-track { background: transparent; }
+.ms-engines::-webkit-scrollbar-thumb { background: var(--ms-border); border-radius: 4px; }
+.ms-engines::-webkit-scrollbar-thumb:hover { background: var(--ms-muted); }
 .ms-engines .ms-row { position: relative; width: auto; flex-shrink: 0; padding: 7px 11px; gap: 7px; font-size: 12px; font-weight: 500; white-space: nowrap; border-radius: 7px; transition: all 140ms ease-out; }
 .ms-engines .ms-row:hover:not(:disabled) { background: var(--ms-hover); transform: translateY(-1px); box-shadow: 0 2px 8px #00000012; }
 .ms-engines .ms-row.is-selected { background: var(--ms-bg); border-color: color-mix(in srgb, var(--ms-accent) 35%, var(--ms-border)); box-shadow: 0 1px 3px #00000010, inset 0 0 0 1px color-mix(in srgb, var(--ms-accent) 12%, transparent); }
