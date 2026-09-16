@@ -36,3 +36,4 @@ Desktop.ini
 # Local code index and editor sessions
 .codegraph/
 .claude/
+!.claude/agents.md
