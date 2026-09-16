@@ -1,4 +1,18 @@
 import { React } from "./react-context";
+import claudeIcon from "./assets/model-icons/claude.svg";
+import deepseekIcon from "./assets/model-icons/deepseek.svg";
+import chatglmIcon from "./assets/model-icons/chatglm.svg";
+import qwenIcon from "./assets/model-icons/qwen.svg";
+import doubaoIcon from "./assets/model-icons/doubao.svg";
+import minimaxIcon from "./assets/model-icons/minimax.svg";
+import yiIcon from "./assets/model-icons/yi.svg";
+import baichuanIcon from "./assets/model-icons/baichuan.svg";
+import hunyuanIcon from "./assets/model-icons/hunyuan.svg";
+import stepfunIcon from "./assets/model-icons/stepfun.svg";
+import geminiIcon from "./assets/model-icons/gemini.svg";
+import mistralIcon from "./assets/model-icons/mistral.svg";
+import cohereIcon from "./assets/model-icons/cohere.svg";
+import perplexityIcon from "./assets/model-icons/perplexity.svg";
 
 /**
  * CLI Engine Icons
@@ -608,6 +622,25 @@ function ChatGlmEngineIcon({ size }: { size: number }) {
   );
 }
 
+/** Static brand marks rendered as <img> (aligned with host implementation) */
+const RASTER_ICONS: Record<string, { src: string; alt: string }> = {
+  claude: { src: claudeIcon, alt: "Claude" },
+  chatglm: { src: chatglmIcon, alt: "GLM" },
+  qwen: { src: qwenIcon, alt: "Qwen" },
+  doubao: { src: doubaoIcon, alt: "Doubao" },
+  minimax: { src: minimaxIcon, alt: "MiniMax" },
+  yi: { src: yiIcon, alt: "Yi" },
+  baichuan: { src: baichuanIcon, alt: "Baichuan" },
+  hunyuan: { src: hunyuanIcon, alt: "Hunyuan" },
+  stepfun: { src: stepfunIcon, alt: "StepFun" },
+  gemini: { src: geminiIcon, alt: "Gemini" },
+  mistral: { src: mistralIcon, alt: "Mistral" },
+  cohere: { src: cohereIcon, alt: "Cohere" },
+  perplexity: { src: perplexityIcon, alt: "Perplexity" },
+  dsh: { src: deepseekIcon, alt: "DeepSeek Harness" },
+  agy: { src: geminiIcon, alt: "Antigravity CLI" },
+};
+
 function FallbackEngineIcon({ size }: { size: number }) {
   return (
     <svg
@@ -629,26 +662,75 @@ function FallbackEngineIcon({ size }: { size: number }) {
 }
 
 function resolveEngineIcon(norm: string, size: number) {
-  if (norm.includes("gemini")) return <GeminiEngineIcon size={size} />;
-  if (norm.includes("claude")) return <ClaudeEngineIcon size={size} />;
+  // Check RASTER_ICONS first (brand icons loaded as <img>)
+  if (norm.includes("claude")) {
+    const raster = RASTER_ICONS.claude;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("glm") || norm.includes("chatglm")) {
+    const raster = RASTER_ICONS.chatglm;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("qwen")) {
+    const raster = RASTER_ICONS.qwen;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("doubao") || norm.includes("volc")) {
+    const raster = RASTER_ICONS.doubao;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("minimax") || norm.includes("abab")) {
+    const raster = RASTER_ICONS.minimax;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("yi")) {
+    const raster = RASTER_ICONS.yi;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("baichuan")) {
+    const raster = RASTER_ICONS.baichuan;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("hunyuan")) {
+    const raster = RASTER_ICONS.hunyuan;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("step") || norm.includes("stepfun")) {
+    const raster = RASTER_ICONS.stepfun;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("gemini")) {
+    const raster = RASTER_ICONS.gemini;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("mistral") || norm.includes("mixtral") || norm.includes("codestral")) {
+    const raster = RASTER_ICONS.mistral;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("cohere") || norm.includes("command-r")) {
+    const raster = RASTER_ICONS.cohere;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("perplexity") || norm.includes("sonar")) {
+    const raster = RASTER_ICONS.perplexity;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("dsh") || norm.includes("deepseek")) {
+    const raster = RASTER_ICONS.dsh;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("agy") || norm.includes("antigravity")) {
+    const raster = RASTER_ICONS.agy;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+
+  // Inline SVG for OMP, Qoder, and monochrome icons
   if (norm.includes("codex") || norm.includes("gpt") || norm.includes("openai")) return <CodexEngineIcon size={size} />;
-  if (norm.includes("dsh") || norm.includes("deepseek")) return <DeepSeekEngineIcon size={size} />;
   if (norm.includes("grok")) return <GrokEngineIcon size={size} />;
   if (norm.includes("kimi")) return <KimiEngineIcon size={size} />;
   if (norm.includes("pi")) return <PiEngineIcon size={size} />;
   if (norm.includes("omp")) return <OmpEngineIcon size={size} />;
-  if (norm.includes("qwen")) return <QwenEngineIcon size={size} />;
-  if (norm.includes("glm") || norm.includes("chatglm")) return <ChatGlmEngineIcon size={size} />;
-  if (norm.includes("doubao") || norm.includes("volc")) return <DoubaoEngineIcon size={size} />;
-  if (norm.includes("minimax") || norm.includes("abab")) return <MinimaxEngineIcon size={size} />;
-  if (norm.includes("yi")) return <YiEngineIcon size={size} />;
-  if (norm.includes("baichuan")) return <BaichuanEngineIcon size={size} />;
-  if (norm.includes("hunyuan")) return <HunyuanEngineIcon size={size} />;
-  if (norm.includes("step") || norm.includes("stepfun")) return <StepfunEngineIcon size={size} />;
-  if (norm.includes("mistral") || norm.includes("mixtral") || norm.includes("codestral")) return <MistralEngineIcon size={size} />;
-  if (norm.includes("cohere") || norm.includes("command-r")) return <CohereEngineIcon size={size} />;
-  if (norm.includes("perplexity") || norm.includes("sonar")) return <PerplexityEngineIcon size={size} />;
-  if (norm.includes("agy") || norm.includes("antigravity")) return <GeminiEngineIcon size={size} gradPrefix="agy-gemini" />;
+
   return <FallbackEngineIcon size={size} />;
 }
 
