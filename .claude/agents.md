@@ -109,9 +109,10 @@ gh release create 1.0.x dist.zip --title "v1.0.x" --notes "..."
 ## 注意事项
 
 ### 版本号规范
-- manifest.json 中的 `version` 字段**不带 v 前缀**（如 `1.0.10`）
+- manifest.json 中的 `version` 字段不带 v 前缀（如 `1.0.10`）
 - Git tag 使用纯数字版本号（如 `1.0.10`）
-- Release 标题可以带 v（如 `v1.0.10`）
+- GitHub Release 标题也使用纯数字（如 `1.0.10`）
+- **铁律：任何地方都不带 v 前缀**
 
 ### 渠道注入格式
 Claude CLI 的渠道配置必须包含：
