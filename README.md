@@ -6,7 +6,7 @@
 
 插件使用宿主发现的 CLI 和供应商配置，不内置个人供应商 ID、API Key 或本机路径。面向 Windows、macOS、Linux，使用同一份构建产物，安装时无需修改宿主源代码。
 
-> **供应商切换：** 插件通过宿主会话回调切换渠道，等待宿主确认后再应用模型；创建、编辑和删除独立渠道会同步宿主供应商列表。独立渠道支持 Claude / Codex / Kimi / Grok / OMP / PI。DSH、AGY、OpenCode、Qoder 等使用自身账号或服务配置，插件会明确提示暂不支持独立渠道。系统渠道详情只读。OMP / PI 的独立渠道还会写入 `models.yml` / `models.json`，并需指定 `api` 协议。
+> **供应商切换：** 插件切换渠道时，新版宿主使用 `set_current_provider` 命令，旧版宿主使用 `onChannelChange` 回调；等待宿主确认后再应用模型。创建、编辑和删除独立渠道会同步宿主供应商列表。独立渠道支持 Claude / Codex / Kimi / Grok / OMP / PI。DSH、AGY、OpenCode、Qoder 等使用自身账号或服务配置，插件会明确提示暂不支持独立渠道。系统渠道详情只读。OMP / PI 的独立渠道还会写入 `models.yml` / `models.json`，并需指定 `api` 协议。
 
 ## 目录
 
@@ -25,7 +25,7 @@
 
 从聊天输入框的模型按钮打开“模型与渠道”弹窗。
 
-- 识别宿主提供的 Claude Code、Codex CLI、Kimi CLI、Grok CLI、PI CLI、OMP CLI 和 DeepSeek Harness；实际可用项取决于宿主及本机安装状态。
+- 识别宿主提供的 11 种 CLI：Claude Code、Codex CLI、Kimi CLI、Grok CLI、PI CLI、OMP CLI、DeepSeek Harness、Antigravity CLI、OpenCode、Qoder CLI、Qoder CLI CN；实际可用项取决于宿主及本机安装状态。
 - 根据当前会话展示 CLI、模型、推理强度和 1M 上下文标记，状态栏同步显示当前会话信息。
 - 尚未发送消息的新会话可以选择其他已安装的 CLI，选择模型后应用到该会话；已有会话或首条消息发送中禁止切换 CLI 类型，未安装的 CLI 不可选。
 - 按当前渠道的 API Key 拉取模型，在可搜索下拉框中选择后点击“加入自选”，模型才计入下方自选列表；也支持手动添加模型 ID，不展示 `default` 占位模型。
@@ -108,7 +108,7 @@ CLI 配置如何应用取决于宿主版本：早期宿主可能改写原生文�
 
 | 项目 | 要求 |
 | --- | --- |
-| 宿主 | CC GUI，清单声明最低版本 `1.0.0`，插件 SDK 范围 `^0.3.1` |
+| 宿主 | CC GUI，清单声明最低版本 `1.0.0`，插件 SDK 范围 `*`（兼容所有版本） |
 | 平台 | Windows、macOS、Linux 桌面版；Web 模式不具备桌面执行桥能力 |
 | Node.js | 文件索引、桌面浏览器跳转、提示词清洗需要宿主能从 PATH 找到 `node`，并授予 `exec:node` 权限 |
 | 浏览器跳转 | Windows 使用 PowerShell，macOS 使用 `open`，Linux 使用 `xdg-open`；需配置默认浏览器 |
