@@ -1,4 +1,4 @@
-export type CliEngineId = "claude" | "codex" | "omp" | "kimi" | "grok" | "pi" | "dsh" | "agy";
+export type CliEngineId = "claude" | "codex" | "omp" | "kimi" | "grok" | "pi" | "dsh" | "agy" | "opencode" | "qoder" | "qoder-cn";
 
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
