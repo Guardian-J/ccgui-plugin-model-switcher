@@ -762,6 +762,7 @@ function resolveEngineIcon(norm: string, size: number) {
   if (norm.includes("kimi")) return <KimiEngineIcon size={size} />;
   if (norm.includes("pi")) return <PiEngineIcon size={size} />;
   if (norm.includes("omp")) return <OmpEngineIcon size={size} />;
+  if (norm.includes("qoder-cn")) return <QoderEngineIcon size={size} />;
   if (norm.includes("qoder")) return <QoderEngineIcon size={size} />;
   if (norm.includes("opencode")) return <OpenCodeEngineIcon size={size} />;
 
