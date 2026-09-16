@@ -82,11 +82,11 @@
     const [active, setActive] = React.useState({ engine, sessionId: 'test-session',
       workspacePath: '/test', model: 'model-a', provider: unsupported ? pluginId : 'a' });
     host = active;
-    const update = patch => setActive(previous => {
-      const next = { ...previous, ...patch };
+    const update = patch => {
+      const next = { ...active, ...patch };
       localStorage.setItem('ccgui-next.activeSession:v1', JSON.stringify(next));
-      return next;
-    });
+      setActive(next);
+    };
     updateSession = update;
     return React.createElement(React.Fragment, null,
       React.createElement('div', { className: 'select-none' }, React.createElement(HostMenu, {
@@ -115,9 +115,14 @@
       const confirmation = () => document.querySelector('[aria-labelledby="ms-native-confirm-title"]');
       const decide = async accepted => {
         await waitFor(confirmation, 'native file confirmation');
-        assert(paths.every(path => confirmation().textContent.includes(path)), 'Confirmation lists host-supplied paths');
-        assert(confirmation().textContent.includes('全局'), 'Confirmation states global impact');
-        [...confirmation().querySelectorAll('button')].find(el => el.textContent.trim() === (accepted ? '确认应用' : '取消')).click();
+        const confirmEl = confirmation();
+        if (!confirmEl) throw new Error('Confirmation dialog not found');
+        assert(paths.every(path => confirmEl.textContent.includes(path)), 'Confirmation lists host-supplied paths');
+        assert(confirmEl.textContent.includes('全局'), 'Confirmation states global impact');
+        const buttons = [...confirmEl.querySelectorAll('button')];
+        const confirmButton = buttons.find(el => el.textContent.trim() === (accepted ? '确认应用' : '取消'));
+        if (!confirmButton) throw new Error(`Cannot find ${accepted ? '确认应用' : '取消'} button`);
+        confirmButton.click();
         await waitFor(() => !confirmation() && ready(), 'finish confirmation');
       };
       tab(1);
@@ -134,10 +139,17 @@
       await waitFor(() => saved.activePluginChannelId === 'b' && ready(), 'native plugin switch');
       assert(configs[engine].current === pluginId && host.model === 'model-b', 'Native channel and model apply together');
       assert(host.provider === 'a', 'Native switching does not invent a per-session binding');
-      button('Channel B').parentElement.querySelector('[aria-label="编辑渠道"]').click();
+      const channelRow = button('Channel B')?.parentElement;
+      if (!channelRow) throw new Error('Cannot find Channel B row');
+      const editButton = channelRow.querySelector('[aria-label="编辑渠道"]');
+      if (!editButton) throw new Error('Cannot find 编辑渠道 button');
+      editButton.click();
       await waitFor(() => document.querySelector('.ms-channel-form'), 'edit channel form');
       const editWrites = writes();
-      [...document.querySelectorAll('.ms-channel-form button')].find(el => el.textContent.trim() === '保存修改').click();
+      const formButtons = [...document.querySelectorAll('.ms-channel-form button')];
+      const saveButton = formButtons.find(el => el.textContent.trim() === '保存修改');
+      if (!saveButton) throw new Error('Cannot find 保存修改 button');
+      saveButton.click();
       await waitFor(confirmation, 'editing active provider requires confirmation');
       assert(writes() === editWrites, 'Editing current provider cannot upsert before confirmation');
       await decide(false);

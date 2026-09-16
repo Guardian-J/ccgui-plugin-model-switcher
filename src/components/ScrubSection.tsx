@@ -16,6 +16,73 @@ interface ScrubSectionProps {
   activeEngine: string;
 }
 
+interface ScrubStatusDisplayProps {
+  status: ScrubStatus;
+  scrubbing: boolean;
+}
+
+function ScrubStatusDisplay({ status, scrubbing }: ScrubStatusDisplayProps) {
+  if (scrubbing) return <>处理中…</>;
+
+  switch (status) {
+    case "clean":
+      return <>本地特征已替换</>;
+    case "unscrubbed":
+      return <>未清洗</>;
+    case "not_found":
+      return <>未找到安装文件</>;
+    default:
+      return <>未检测（默认关闭）</>;
+  }
+}
+
+interface ScrubActionsProps {
+  status: ScrubStatus;
+  scrubbing: boolean;
+  onApply: () => void;
+  onRestore: () => void;
+  onCheck: () => void;
+}
+
+function ScrubActions({ status, scrubbing, onApply, onRestore, onCheck }: ScrubActionsProps) {
+  if (status === "unscrubbed") {
+    return (
+      <button
+        type="button"
+        disabled={scrubbing}
+        onClick={onApply}
+        className="ms-button"
+      >
+        {scrubbing ? "…" : "清洗"}
+      </button>
+    );
+  }
+
+  if (status === "clean") {
+    return (
+      <button
+        type="button"
+        disabled={scrubbing}
+        onClick={onRestore}
+        className="ms-button"
+      >
+        恢复
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={scrubbing}
+      onClick={onCheck}
+      className="ms-button"
+    >
+      {scrubbing ? "…" : "检测"}
+    </button>
+  );
+}
+
 export function ScrubSection({ ctx, activeEngine }: ScrubSectionProps) {
   const [scrubStatus, setScrubStatus] = useState<ScrubStatus>("unknown");
   const [scrubbing, setScrubbing] = useState(false);
@@ -65,7 +132,15 @@ export function ScrubSection({ ctx, activeEngine }: ScrubSectionProps) {
     }
   };
 
-  if (isRemoteHost()) return <section className="ms-scrub"><h3>提示词清洗</h3><p className="ms-muted">此操作需要在桌面端执行。</p></section>;
+  if (isRemoteHost()) {
+    return (
+      <section className="ms-scrub">
+        <h3>提示词清洗</h3>
+        <p className="ms-muted">此操作需要在桌面端执行。</p>
+      </section>
+    );
+  }
+
   return (
     <section className="ms-scrub" aria-label="提示词清洗" aria-busy={scrubbing}>
       <div className="ms-scrub-heading">
@@ -83,45 +158,16 @@ export function ScrubSection({ ctx, activeEngine }: ScrubSectionProps) {
       </div>
       <div className="ms-scrub-controls">
         <span className="ms-scrub-state" data-state={scrubStatus} role="status">
-          {scrubbing
-            ? "处理中…"
-            : scrubStatus === "clean"
-              ? "本地特征已替换"
-              : scrubStatus === "unscrubbed"
-                ? "未清洗"
-                : scrubStatus === "not_found"
-                  ? "未找到安装文件"
-                  : "未检测（默认关闭）"}
+          <ScrubStatusDisplay status={scrubStatus} scrubbing={scrubbing} />
         </span>
         <span className="ms-actions">
-          {scrubStatus === "unscrubbed" ? (
-            <button
-              type="button"
-              disabled={scrubbing}
-              onClick={() => void runScrubAction("apply")}
-              className="ms-button"
-            >
-              {scrubbing ? "…" : "清洗"}
-            </button>
-          ) : scrubStatus === "clean" ? (
-            <button
-              type="button"
-              disabled={scrubbing}
-              onClick={() => void runScrubAction("restore")}
-              className="ms-button"
-            >
-              恢复
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={scrubbing}
-              onClick={() => void runScrubAction("check")}
-              className="ms-button"
-            >
-              {scrubbing ? "…" : "检测"}
-            </button>
-          )}
+          <ScrubActions
+            status={scrubStatus}
+            scrubbing={scrubbing}
+            onApply={() => void runScrubAction("apply")}
+            onRestore={() => void runScrubAction("restore")}
+            onCheck={() => void runScrubAction("check")}
+          />
         </span>
       </div>
       {scrubMessage ? (

@@ -43,15 +43,26 @@ class RemoteSocket {
   static OPEN=1; readyState=0;
   constructor(url) { this.url=String(url); sockets.push(this); setTimeout(() => { this.readyState=1; this.onopen?.(); }, 5); }
   send(data) {
-    const { type,id,cmd,args } = JSON.parse(data);
-    assert(type === 'invoke', 'Host request envelope'); calls.push({ cmd,args });
+    let parsed;
+    try {
+      parsed = JSON.parse(data);
+    } catch (e) {
+      console.error('Invalid JSON in WebSocket message:', e);
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object') {
+      console.error('WebSocket message must be an object');
+      return;
+    }
+    const { type, id, cmd, args } = parsed;
+    assert(type === 'invoke', 'Host request envelope'); calls.push({ cmd, args });
     if (cmd === 'pending-until-disconnect') return;
     setTimeout(async () => {
       let response;
-      try { response={ type:'response',id,ok:true,payload:await dispatch(cmd,args) }; }
-      catch(error) { response={ type:'response',id,ok:false,error:error.message }; }
-      const text=JSON.stringify(response);
-      this.onmessage?.({ data:id%2 ? text : new TextEncoder().encode(text).buffer });
+      try { response = { type: 'response', id, ok: true, payload: await dispatch(cmd, args) }; }
+      catch(error) { response = { type: 'response', id, ok: false, error: error.message }; }
+      const text = JSON.stringify(response);
+      this.onmessage?.({ data: id % 2 ? text : new TextEncoder().encode(text).buffer });
     }, cmd === 'get_cli_config' ? 35 : 4);
   }
   close() { if (this.readyState===3) return; this.readyState=3; queueMicrotask(() => this.onclose?.()); }
