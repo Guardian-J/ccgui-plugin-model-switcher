@@ -17,6 +17,11 @@ export interface EngineItemRule {
   supportedProtocols?: string[];
 }
 
+/**
+ * CLI 显示名称映射
+ * 对应宿主的 CLI_DISPLAY_NAMES（engine-brands.ts）
+ * 保持与宿主一致，确保用户看到统一的 CLI 品牌名称
+ */
 export const CLI_DISPLAY_NAMES: Record<string, string> = {
   claude: "Claude Code",
   codex: "Codex CLI",

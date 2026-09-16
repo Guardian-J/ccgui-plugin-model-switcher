@@ -1,5 +1,18 @@
 import { React } from "./react-context";
 
+/**
+ * CLI Engine Icons
+ *
+ * 这些 icon 实现派生自宿主的标准实现：
+ * - 宿主路径：src/components/foundations/icons/engine-icon.tsx
+ * - 宿主品牌定义：src/components/foundations/icons/engine-brands.ts
+ *
+ * 由于插件 SDK 不支持直接导入宿主基础组件，插件维护了这份副本。
+ * 当宿主添加新 CLI 或更新 logo 时，应同步更新此文件。
+ *
+ * 注意：这是技术限制的权宜之计，理想情况下应从宿主 SDK 统一获取。
+ */
+
 interface IconProps {
   size?: number;
   className?: string;
@@ -248,7 +261,10 @@ const PI_PATHS = [
 const GEMINI_PATH =
   "M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z";
 
-/** 推断模型或渠道对应的品牌 */
+/**
+ * 推断模型或渠道对应的品牌
+ * 对应宿主的 inferModelEngine 函数（engine-brands.ts）
+ */
 export function inferModelEngine(name: string): string | null {
   if (!name) return null;
   const lower = name.toLowerCase();
@@ -315,6 +331,11 @@ export function inferModelEngine(name: string): string | null {
   }
   return null;
 }
+
+/**
+ * CLI Engine Icon 组件实现
+ * 这些组件的 SVG path 和渲染逻辑与宿主保持一致
+ */
 
 function GeminiEngineIcon({ size, gradPrefix = "gemini" }: { size: number; gradPrefix?: string }) {
   return (
