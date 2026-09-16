@@ -578,13 +578,14 @@ export async function getSystemProviderChannels(
 export const CLI_CONFIG_CHANGED_EVENT = "ccgui:cli-config-changed";
 
 export function notifyCliConfigChanged(): void {
+  invalidateCliConfig();
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(CLI_CONFIG_CHANGED_EVENT));
   }
 }
 
 /**
- * 把宿主当前供应商切到指定渠道。只改应用内默认渠道，不改写 CLI 自身配置文件。
+ * 把宿主当前供应商切到指定渠道。新宿主会同时改写 CLI 原生配置，调用方须先确认。
  */
 export async function setSystemCurrentProvider(
   engine: CliEngineId,

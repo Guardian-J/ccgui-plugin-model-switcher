@@ -2,7 +2,7 @@ import type { CliEngineId, EffortLevel } from "./types";
 import { getHostSession, sessionSelectionError, modelSelectionError } from "./selection-policy";
 import type { HostSession, ModelCompatibility } from "./selection-policy";
 import { invokeHost } from "./host-transport";
-import { independentChannelError, NATIVE_PROVIDER_ID } from "./system-bridge";
+import { independentChannelError, NATIVE_PROVIDER_ID, notifyCliConfigChanged } from "./system-bridge";
 
 interface HostCliMenuCallbacks {
   onModelChange?: (engine: string, model: string) => void;
@@ -485,12 +485,15 @@ export function syncSessionProviderToLocalStorage(engine: string, providerId: st
 
   const ACTIVE_KEY = "ccgui-next.activeSession:v1";
   const TABS_KEY = "ccgui-next.openTabs:v1";
+  const host = getHostCliMenuProps();
+  const session = host?.session !== undefined ? host.session : getHostSession();
 
   try {
     const activeRaw = localStorage.getItem(ACTIVE_KEY);
     if (activeRaw) {
       const active = JSON.parse(activeRaw);
-      if (active && typeof active === "object" && active.engine === engine) {
+      if (session && active && active.engine === engine &&
+          active.sessionId === session.sessionId && active.workspacePath === session.workspacePath) {
         active.provider = providerId || undefined;
         localStorage.setItem(ACTIVE_KEY, JSON.stringify(active));
       }
@@ -500,15 +503,9 @@ export function syncSessionProviderToLocalStorage(engine: string, providerId: st
     if (tabsRaw) {
       const tabs = JSON.parse(tabsRaw);
       if (Array.isArray(tabs)) {
-        const active = getHostSession();
         for (const tab of tabs) {
-          if (
-            active &&
-            tab &&
-            tab.engine === engine &&
-            tab.sessionId === active.sessionId &&
-            tab.workspacePath === active.workspacePath
-          ) {
+          if (session && tab && tab.engine === engine &&
+              tab.sessionId === session.sessionId && tab.workspacePath === session.workspacePath) {
             tab.provider = providerId || undefined;
           }
         }
@@ -520,57 +517,100 @@ export function syncSessionProviderToLocalStorage(engine: string, providerId: st
   }
 }
 
-/**
- * 将渠道选择应用到宿主：
- * 1. 优先调用宿主 CliMenu 的 onChannelChange，由宿主执行会话级绑定（rememberSessionProvider / patchSession）；
- * 2. 同步更新本地 storage 的 openTabs / activeSession 中的 provider 字段；
- * 3. 所有会话（包括空白新会话）均不改写全局默认渠道；
- * 4. 派发 ccgui:channel-changed 事件通知 UI 响应。
- */
+/** Keep the original tab as the target across confirmation, IPC and follow-up saves. */
+export function captureHostSessionGuard(engine: CliEngineId, allowPendingRetarget = false): () => void {
+  const original = getHostCliMenuProps();
+  if (!original) throw new Error("无法连接宿主渠道切换入口，请重载插件后重试");
+  const pending = original.session !== undefined ? original.session : getHostSession();
+  const identity = (host: HostCliMenuProps) => {
+    const session = host.session !== undefined ? host.session : getHostSession();
+    // Only a model follow-up may intentionally retarget the same unstarted tab.
+    const sessionEngine = allowPendingRetarget && pending?.sessionId === null && !original.streaming &&
+      session?.sessionId === null && (session.engine === pending.engine || session.engine === engine)
+      ? engine : session?.engine ?? host.value;
+    return JSON.stringify([sessionEngine, session?.sessionId, session?.workspacePath]);
+  };
+  const originalSession = identity(original);
+  const assertSession = () => {
+    const host = getHostCliMenuProps();
+    if (!host || identity(host) !== originalSession) {
+      throw new Error("当前会话已变化，已停止后续操作，请在目标会话重试；已提交的 CLI 配置不会自动撤销");
+    }
+    const error = sessionSelectionError(engine,
+      host.session !== undefined ? host.session : getHostSession(), host.streaming);
+    if (error) throw new Error(error);
+  };
+  assertSession();
+  return assertSession;
+}
+
+/** New hosts write shared CLI files; legacy callbacks retain their session-level contract. */
+export async function confirmNativeProviderChange(
+  engine: CliEngineId,
+  confirm?: (paths: string[]) => Promise<boolean>,
+  assertSession = captureHostSessionGuard(engine),
+): Promise<boolean> {
+  assertSession();
+  if (getHostCliMenuProps()?.onChannelChange) return true;
+  const paths = await invokeHost<string[]>("provider_file_paths", { engine });
+  assertSession();
+  if (paths.length === 0) return true;
+  if (!confirm) throw new Error("改写 CLI 原生配置前需要确认");
+  const accepted = await confirm(paths);
+  assertSession();
+  return accepted;
+}
+
+/** Returns false only when the user cancels; failures never acknowledge a selection. */
 export async function applyChannelSelectionToHost(params: {
   engine: CliEngineId;
   providerId: string;
-}): Promise<void> {
+  confirmNative?: (paths: string[]) => Promise<boolean>;
+  beforeSwitch?: () => Promise<void>;
+  assertSession?: () => void;
+}): Promise<boolean> {
   const { engine, providerId } = params;
   const channelError = independentChannelError(engine);
   if (channelError && providerId && ![NATIVE_PROVIDER_ID, "__local_config_toml__"].includes(providerId)) throw new Error(channelError);
-  const error = hostSessionSelectionError(engine);
-  if (error) throw new Error(error);
-  const callbacks = getHostCliMenuProps();
-
-  if (!callbacks?.onChannelChange) {
-    throw new Error("无法连接宿主渠道切换入口，请重载插件后重试");
-  }
-  const sessionIdentity = (host: HostCliMenuProps | null) => {
-    const session = host?.session !== undefined ? host.session : getHostSession();
-    return JSON.stringify([session?.engine, session?.sessionId, session?.workspacePath]);
-  };
-  const originalSession = sessionIdentity(callbacks);
-  await callbacks.onChannelChange(engine, providerId);
-
-  // The host wraps its asynchronous setProvider in a void callback and catches
-  // backend failures internally. Only its committed selection acknowledges success.
-  const deadline = Date.now() + 5000;
-  while (true) {
-    const current = getHostCliMenuProps();
-    if (sessionIdentity(current) !== originalSession) {
-      throw new Error("当前会话已变化，已停止后续模型切换，请在目标会话重试");
-    }
-    const selectionError = hostSessionSelectionError(engine);
-    if (selectionError) throw new Error(selectionError);
-    const confirmedProvider = current?.selectedChannels?.[engine] ?? current?.session?.provider;
-    if (confirmedProvider === providerId) break;
-    if (Date.now() >= deadline) {
-      throw new Error("宿主未确认渠道切换，请检查渠道配置或宿主错误提示后重试");
-    }
-    await new Promise(resolve => setTimeout(resolve, 50));
+  const checkSession = captureHostSessionGuard(engine);
+  const assertSession = () => { checkSession(); params.assertSession?.(); };
+  assertSession();
+  const callbacks = getHostCliMenuProps()!;
+  if (!await confirmNativeProviderChange(engine, params.confirmNative, assertSession)) return false;
+  assertSession();
+  if (params.beforeSwitch) {
+    await params.beforeSwitch();
+    assertSession();
   }
 
-  syncSessionProviderToLocalStorage(engine, providerId);
+  let selectedId = providerId;
+  if (callbacks.onChannelChange) {
+    await callbacks.onChannelChange(engine, providerId);
+    // Legacy void callbacks swallow backend errors: only the committed value acknowledges success.
+    const deadline = Date.now() + 5000;
+    while (true) {
+      assertSession();
+      const current = getHostCliMenuProps();
+      const confirmedProvider = current?.selectedChannels?.[engine] ?? current?.session?.provider;
+      if (confirmedProvider === providerId) break;
+      if (Date.now() >= deadline) {
+        throw new Error("宿主未确认渠道切换，请检查渠道配置或宿主错误提示后重试");
+      }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    syncSessionProviderToLocalStorage(engine, providerId);
+  } else {
+    selectedId = !providerId || providerId === "__local_config_toml__" ? NATIVE_PROVIDER_ID : providerId;
+    await invokeHost("set_current_provider", { engine, id: selectedId });
+    assertSession();
+    // Global native selection is not a per-session provider binding.
+    notifyCliConfigChanged();
+  }
 
+  assertSession();
   if (typeof window !== "undefined") {
-    window.dispatchEvent(
-      new CustomEvent("ccgui:channel-changed", { detail: { engine, providerId } }),
-    );
+    window.dispatchEvent(new CustomEvent("ccgui:channel-changed", { detail: { engine, providerId: selectedId } }));
   }
+  assertSession();
+  return true;
 }

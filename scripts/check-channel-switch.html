@@ -22,12 +22,15 @@
       await delay(20);
     }
   };
-  const engine = new URLSearchParams(location.search).get('engine') || 'codex';
+  const params = new URLSearchParams(location.search);
+  const engine = params.get('engine') || 'codex';
+  const native = params.get('host') === 'native';
   const unsupported = !!independentChannelError(engine);
   const pluginId = pluginProviderId('b');
   const configs = { [engine]: { current: 'a', providers: {
     a: { name: 'Channel A', baseUrl: 'https://a.example.invalid', apiKey: 'test-a', model: 'model-a' },
     rejected: { name: 'Rejected', model: 'model-rejected' },
+    local: { name: 'Custom local', model: 'local-model' },
   } } };
   let saved = { ...DEFAULT_STATE, selectedCli: engine, selectedProviderId: 'a', selectedModel: 'model-a',
     ...(unsupported ? { activeChannelType: 'plugin', activePluginChannelId: 'b', selectedProviderId: 'b' } : {}),
@@ -35,12 +38,24 @@
     pluginChannels: { [engine]: [{ id: 'b', name: 'Channel B', baseUrl: 'https://b.example.invalid',
       apiKey: 'test-b', model: 'model-b' }] } };
   const calls = [];
-  let saves = 0, saving = 0, maxSaving = 0, host;
+  let saves = 0, saving = 0, maxSaving = 0, host, updateSession, switchDuringIPC = false;
+  const paths = ['C:/preview/.codex/config.toml', 'C:/preview/.codex/auth.json'];
+  window.__channelCheck = { calls, configs, get saved() { return saved; }, get host() { return host; } };
   window.__TAURI_INTERNALS__ = { invoke: async (cmd, args) => {
     calls.push(cmd);
     switch (cmd) {
       case 'get_cli_config': return configs;
       case 'official_config_read': return [];
+      case 'provider_file_paths': return paths;
+      case 'set_current_provider':
+        calls.push(`native:${args.id}`);
+        if (args.id === 'rejected') throw Error('native write denied');
+        if (switchDuringIPC) {
+          updateSession({ sessionId: 'another-session', model: 'other-model' });
+          await delay(80);
+        }
+        configs[args.engine].current = args.id;
+        return;
       case 'list_engines': return [{ id: engine, available: true, enabled: true }];
       case 'list_engine_models': return [{ id: 'model-a', name: 'Model A' }];
       case 'get_app_settings': return {};
@@ -53,7 +68,7 @@
   } };
   const ctx = { bridge: { invoke: async () => { throw Error('Unexpected bridge call'); } } };
   function HostMenu(props) {
-    return React.createElement('button', { 'aria-haspopup': 'dialog', 'aria-label': props.selectedChannels[engine] }, 'Host');
+    return React.createElement('button', { 'aria-haspopup': 'dialog', 'aria-label': props.active.model }, 'Host');
   }
   function Plugin() {
     const display = useSessionDisplay();
@@ -72,10 +87,12 @@
       localStorage.setItem('ccgui-next.activeSession:v1', JSON.stringify(next));
       return next;
     });
+    updateSession = update;
     return React.createElement(React.Fragment, null,
       React.createElement('div', { className: 'select-none' }, React.createElement(HostMenu, {
-        value: engine, active, models: { [engine]: active.model }, selectedChannels: { [engine]: active.provider },
-        onChannelChange: (engine, id) => {
+        value: engine, active, models: { [engine]: active.model },
+        selectedChannels: native ? undefined : { [engine]: active.provider },
+        onChannelChange: native ? undefined : (engine, id) => {
           calls.push(`channel:${id}`);
           // Match the host: no Promise returned, and backend failures are swallowed.
           if (id !== 'rejected') setTimeout(() => update({ provider: id }), 100);
@@ -90,7 +107,80 @@
   const ready = () => !document.querySelector('.ms-loading-overlay') && !document.querySelector('.ms-model-picker input')?.disabled;
   try {
     createRoot(document.querySelector('#root')).render(React.createElement(App));
-    if (unsupported) {
+    if (params.has('manual')) {
+      await waitFor(() => button('Channel A') && ready(), 'manual fixture');
+      document.querySelector('#result').textContent = 'Ready for manual channel verification';
+    } else if (native) {
+      await waitFor(() => button('Channel A') && ready(), 'native channels');
+      const confirmation = () => document.querySelector('[aria-labelledby="ms-native-confirm-title"]');
+      const decide = async accepted => {
+        await waitFor(confirmation, 'native file confirmation');
+        assert(paths.every(path => confirmation().textContent.includes(path)), 'Confirmation lists host-supplied paths');
+        assert(confirmation().textContent.includes('全局'), 'Confirmation states global impact');
+        [...confirmation().querySelectorAll('button')].find(el => el.textContent.trim() === (accepted ? '确认应用' : '取消')).click();
+        await waitFor(() => !confirmation() && ready(), 'finish confirmation');
+      };
+      tab(1);
+      await waitFor(() => button('Channel B') && ready(), 'native plugin tab');
+      const writes = () => calls.filter(cmd => ['upsert_provider', 'delete_provider', 'set_current_provider'].includes(cmd)).length;
+      const beforeCancel = writes();
+      button('Channel B').click();
+      await waitFor(confirmation, 'plugin confirmation');
+      assert(writes() === beforeCancel, 'No provider or native writes before confirmation');
+      await decide(false);
+      assert(writes() === beforeCancel && saved.selectedProviderId === 'a' && configs[engine].current === 'a', 'Cancellation preserves state');
+      button('Channel B').click();
+      await decide(true);
+      await waitFor(() => saved.activePluginChannelId === 'b' && ready(), 'native plugin switch');
+      assert(configs[engine].current === pluginId && host.model === 'model-b', 'Native channel and model apply together');
+      assert(host.provider === 'a', 'Native switching does not invent a per-session binding');
+      button('Channel B').parentElement.querySelector('[aria-label="编辑渠道"]').click();
+      await waitFor(() => document.querySelector('.ms-channel-form'), 'edit channel form');
+      const editWrites = writes();
+      [...document.querySelectorAll('.ms-channel-form button')].find(el => el.textContent.trim() === '保存修改').click();
+      await waitFor(confirmation, 'editing active provider requires confirmation');
+      assert(writes() === editWrites, 'Editing current provider cannot upsert before confirmation');
+      await decide(false);
+      assert(writes() === editWrites, 'Cancelled edit cannot overwrite native files');
+      [...document.querySelectorAll('.ms-channel-form button')].find(el => el.textContent.trim() === '取消').click();
+      tab(0);
+      await waitFor(() => button('Rejected') && ready(), 'native system tab');
+      const beforeReject = saves;
+      const modelCalls = calls.filter(cmd => cmd.startsWith('model:')).length;
+      button('Rejected').click();
+      await decide(true);
+      await waitFor(() => document.querySelector('.ms-status')?.textContent.includes('native write denied'), 'native IPC error shown');
+      assert(saves === beforeReject && calls.filter(cmd => cmd.startsWith('model:')).length === modelCalls, 'IPC failure cannot save selection or apply model');
+      assert(configs[engine].current === pluginId && saved.activePluginChannelId === 'b', 'Failed switch retains prior channel');
+      button('Custom local').click();
+      await decide(true);
+      await waitFor(() => saved.selectedProviderId === 'local' && ready(), 'custom local switch');
+      button('CLI 原生配置').click();
+      await decide(true);
+      await waitFor(() => saved.selectedProviderId === NATIVE_PROVIDER_ID && ready(), 'native restore');
+      assert(configs[engine].current === NATIVE_PROVIDER_ID && calls.filter(cmd => cmd === 'native:local').length === 1, 'Native restore never aliases the custom local provider');
+      tab(1);
+      await waitFor(() => button('Channel B') && ready(), 'native deletion');
+      button('Channel B').parentElement.querySelector('[aria-label="删除渠道"]').click();
+      const beforeDelete = writes();
+      await waitFor(confirmation, 'delete confirmation');
+      assert(writes() === beforeDelete, 'Deletion waits for confirmation');
+      await decide(true);
+      await waitFor(() => saved.pluginChannels[engine].length === 0 && ready(), 'delete confirmed');
+      tab(0);
+      await waitFor(() => button('Channel A') && ready(), 'race setup');
+      const savesBeforeRace = saves;
+      const modelsBeforeRace = calls.filter(cmd => cmd.startsWith('model:')).length;
+      switchDuringIPC = true;
+      button('Channel A').click();
+      await decide(true);
+      await waitFor(() => host.sessionId === 'another-session', 'same-engine tab switch');
+      await delay(200);
+      assert(host.model === 'other-model', 'IPC completion must not retarget another session model');
+      assert(saves === savesBeforeRace && calls.filter(cmd => cmd.startsWith('model:')).length === modelsBeforeRace, 'No follow-up save/model after session change');
+      assert(JSON.parse(localStorage.getItem('ccgui-next.activeSession:v1')).model === 'other-model', 'Other session storage stays intact');
+      document.querySelector('#result').textContent = 'PASS: native confirmation/cancel, plugin registration, edit guard, IPC rejection, native/local IDs, deletion and same-engine tab race';
+    } else if (unsupported) {
       await waitFor(() => button('Channel B') && saved.fetchedModels[`${engine}:b`] && ready(), 'legacy plugin channel');
       assert(document.querySelector('[role="status"]')?.textContent.includes('暂不支持独立渠道'), 'Explain the unsupported channel');
       assert(button('Channel B').disabled, 'Legacy independent channel cannot be selected');

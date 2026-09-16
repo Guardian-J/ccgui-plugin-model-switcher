@@ -704,6 +704,11 @@ const conversation = { memoizedProps: { active: { ...active, model: "live-tab" }
 newMenu.return = conversation;
 active = { ...active, model: "stale-storage" };
 assert.equal(display.readSessionDisplay().selectedModel, "live-tab", "Mounted session wins over delayed persistence");
+conversation.memoizedProps.active.provider = 'stale-session-provider';
+assert.equal(display.readSessionDisplay().selectedProviderId, '', 'Native-config hosts ignore obsolete per-session channel bindings');
+newMenu.memoizedProps.onChannelChange = () => {};
+assert.equal(display.readSessionDisplay().selectedProviderId, 'stale-session-provider', 'Legacy hosts retain per-session channel bindings');
+delete newMenu.memoizedProps.onChannelChange;
 conversation.memoizedProps.active = null;
 active = null;
 assert.equal(display.readSessionDisplay().selectedModel, "history-c", "New chats use the host's engine default");
@@ -798,6 +803,16 @@ assert.deepEqual(hostCalls, [["engine", "claude"], ["model", "claude", "claude-t
 assert.equal(JSON.parse(storage.get(activeKey)).engine, "claude");
 assert.equal(JSON.parse(storage.get(activeKey)).model, "claude-test");
 assert.deepEqual(JSON.parse(storage.get(tabsKey))[1], history, "Switching a pending tab leaves history untouched");
+{
+  footer.memoizedProps.active = pending;
+  const strictGuard = sync.captureHostSessionGuard('claude');
+  const modelFollowupGuard = sync.captureHostSessionGuard('claude', true);
+  await sync.applyModelSelectionToHost({ engine: 'claude', model: 'pending-target' });
+  modelFollowupGuard();
+  assert.throws(strictGuard, /会话已变化/, 'IPC guards never allow an engine change while pending');
+  footer.memoizedProps.active = { ...pending, engine: 'claude', workspacePath: '/different' };
+  assert.throws(modelFollowupGuard, /会话已变化/, 'Intended CLI retargeting cannot authorize a different tab');
+}
 for (const engine of ['omp', 'pi', 'codex', 'grok', 'kimi', 'dsh', 'agy', 'claude']) {
   for (const enabled of [true, false]) {
     const model = engine === 'claude' ? 'sonnet' : 'plugin_model-switcher_custom_1789396676885/grok-4.6';
@@ -910,6 +925,14 @@ for (const session of [pending, history, null]) {
     session && tab.sessionId === session.sessionId ? { ...tab, provider: providerId } : tab));
 }
 {
+  footer.memoizedProps.active = history;
+  storage.set(activeKey, JSON.stringify(pending));
+  storage.set(tabsKey, JSON.stringify([pending, history]));
+  await sync.applyChannelSelectionToHost({ engine: 'codex', providerId: 'history-only' });
+  assert.deepEqual(JSON.parse(storage.get(activeKey)), pending, 'Delayed persistence from another tab is not patched');
+  assert.deepEqual(JSON.parse(storage.get(tabsKey)), [pending, { ...history, provider: 'history-only' }]);
+}
+{
   const callback = menu.memoizedProps.onChannelChange;
   menu.memoizedProps.onChannelChange = () => { throw Error('host rejected channel'); };
   const before = storage.get(activeKey);
@@ -937,6 +960,83 @@ for (const session of [pending, history, null]) {
   footer.memoizedProps.active = session;
   menu.memoizedProps.onChannelChange = callback;
 }
+{
+  delete menu.memoizedProps.onChannelChange;
+  delete menu.memoizedProps.selectedChannels;
+  menu.memoizedProps.value = 'codex';
+  footer.memoizedProps.active = history;
+  storage.set(activeKey, JSON.stringify(history));
+  const storedBefore = [...storage];
+  const events = [];
+  const dispatch = window.dispatchEvent;
+  window.dispatchEvent = event => { events.push(event.type); };
+  const nativeCalls = [];
+  const paths = ['C:/preview/.codex/config.toml', 'C:/preview/.codex/auth.json'];
+  let nativeCurrent = 'before';
+  const invokeNative = async (command, args) => {
+    nativeCalls.push({ command, args });
+    if (command === 'provider_file_paths') return paths;
+    if (command === 'set_current_provider') { nativeCurrent = args.id; return; }
+    throw Error(`Unexpected IPC: ${command}`);
+  };
+  window.__TAURI_INTERNALS__.invoke = invokeNative;
+  const confirmNative = async shown => { assert.deepEqual(shown, paths); return true; };
+  const choose = (providerId, extra = {}) => sync.applyChannelSelectionToHost({ engine: 'codex', providerId, confirmNative, ...extra });
+  let prepared = false;
+  assert.equal(await choose('cancelled', { confirmNative: async () => false, beforeSwitch: async () => { prepared = true; } }), false);
+  assert.equal(prepared, false, 'Cancellation must precede provider registration or editing');
+  assert.equal(nativeCurrent, 'before');
+  assert.deepEqual(events, []);
+  await assert.rejects(() => choose('unconfirmed', { confirmNative: undefined }), /确认/);
+  assert.equal(nativeCurrent, 'before', 'Native writes require explicit confirmation');
+
+  for (const [requested, expected] of [['', bridge.NATIVE_PROVIDER_ID], ['__local_config_toml__', bridge.NATIVE_PROVIDER_ID], [bridge.NATIVE_PROVIDER_ID, bridge.NATIVE_PROVIDER_ID], ['local', 'local']]) {
+    assert.equal(await choose(requested), true);
+    assert.equal(nativeCurrent, expected, 'The reserved native ID cannot select a custom provider named local');
+  }
+  assert.deepEqual([...storage], storedBefore, 'Native file selection does not invent a session-level provider binding');
+  assert.equal(events.filter(type => type === 'ccgui:channel-changed').length, 4);
+  const eventCount = events.length;
+  const currentBefore = nativeCurrent;
+  window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+    if (command === 'set_current_provider') { nativeCalls.push({ command, args }); throw Error('native write denied'); }
+    return invokeNative(command, args);
+  };
+  const writesBefore = nativeCalls.filter(call => call.command === 'set_current_provider').length;
+  await assert.rejects(() => choose(bridge.NATIVE_PROVIDER_ID), /native write denied/);
+  assert.equal(nativeCalls.filter(call => call.command === 'set_current_provider').length, writesBefore + 1, 'Native failure is not retried as another provider');
+  assert.equal(nativeCurrent, currentBefore);
+  assert.deepEqual([...storage], storedBefore);
+  assert.equal(events.length, eventCount, 'Rejected IPC must not emit success events');
+  window.__TAURI_INTERNALS__.invoke = async () => { throw Error('paths unavailable'); };
+  await assert.rejects(() => choose('relay', { beforeSwitch: async () => { prepared = true; } }), /paths unavailable/);
+  assert.equal(prepared, false, 'Missing overwrite paths must fail closed before provider mutations');
+
+  window.__TAURI_INTERNALS__.invoke = invokeNative;
+  const otherSession = { ...history, sessionId: 'another-tab', model: 'untouched' };
+  const switchSession = () => { footer.memoizedProps.active = otherSession; storage.set(activeKey, JSON.stringify(otherSession)); };
+  await assert.rejects(() => choose('late-confirm', { confirmNative: async () => { switchSession(); return true; } }), /会话已变化/);
+  assert.equal(nativeCurrent, currentBefore, 'Switching tabs during confirmation prevents native writes');
+  footer.memoizedProps.active = history;
+  await assert.rejects(() => choose('late-upsert', { beforeSwitch: async () => { switchSession(); } }), /会话已变化/);
+  assert.equal(nativeCurrent, currentBefore, 'Switching tabs during registration prevents channel activation');
+  footer.memoizedProps.active = history;
+  window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+    const result = await invokeNative(command, args);
+    if (command === 'set_current_provider') switchSession();
+    return result;
+  };
+  const hostCallsBefore = hostCalls.length;
+  await assert.rejects(async () => {
+    if (await choose('late-ipc')) await sync.applyModelSelectionToHost({ engine: 'codex', model: 'wrong-tab' });
+  }, /会话已变化/);
+  assert.deepEqual(JSON.parse(storage.get(activeKey)), otherSession, 'IPC completion cannot patch another same-engine session');
+  assert.equal(hostCalls.length, hostCallsBefore, 'No follow-up model callback after a tab switch');
+  assert.equal(events.length, eventCount);
+  window.__TAURI_INTERNALS__.invoke = invokeBeforeSwitch;
+  window.dispatchEvent = dispatch;
+}
+console.log('Native channel confirmation, canonical IDs, IPC errors and cross-session cancellation passed.');
 delete globalThis.document;
 const beforeFallback = calls.length;
 storage.set(activeKey, JSON.stringify(pending));

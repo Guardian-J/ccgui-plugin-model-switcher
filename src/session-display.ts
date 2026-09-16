@@ -23,7 +23,8 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
   // Prefer the mounted tab and the host's resolved selection; raw history is a fallback.
   const model = session?.model || matchingHost?.models?.[engine] || host?.lastUsedModel || "";
   const effort = (session?.effort as EffortLevel) || (matchingHost?.models?.[engine] ? matchingHost?.efforts?.[engine] as EffortLevel : undefined) || host?.lastUsedEffort || (matchingHost?.efforts?.[engine] as EffortLevel) || "high";
-  const selectedProviderId = session?.provider || matchingHost?.selectedChannels?.[engine] || "";
+  // Native-config hosts no longer use historical per-session provider bindings.
+  const selectedProviderId = host && !host.onChannelChange ? "" : session?.provider || matchingHost?.selectedChannels?.[engine] || "";
   return {
     // Selection updates must not remount a flyout whose host/storage writes are still in flight.
     sessionKey: JSON.stringify([engine, session?.sessionId ?? null, session?.workspacePath ?? "", host?.streaming ?? false]),

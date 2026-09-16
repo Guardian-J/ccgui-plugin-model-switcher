@@ -48,6 +48,9 @@ import type { GuiThemeManager } from "../theme-manager";
 import {
   applyModelSelectionToHost,
   applyChannelSelectionToHost,
+  getHostCliMenuProps,
+  captureHostSessionGuard,
+  confirmNativeProviderChange,
   hostSessionSelectionError as sessionSelectionError,
 } from "../sync-host";
 import { useSessionDisplay, withSessionDisplay } from "../session-display";
@@ -60,6 +63,8 @@ const ROW = "ms-row";
 const ROW_ON = "is-selected";
 const ROW_OFF = "";
 const ICON_BTN = "ms-icon-button";
+
+type ConfirmedNativeChange = { assertSession: () => void; paths: string[] };
 
 interface Props {
   ctx: PluginContext;
@@ -109,6 +114,7 @@ export function CliModelFlyoutMenu({
   const [nativeModels, setNativeModels] = useState<NativeModel[]>(() => initialCachedCatalog?.models ?? []);
   const [nativeAuthoritative, setNativeAuthoritative] = useState(() => initialCachedCatalog?.authoritative ?? false);
   const channelRequest = useRef(0);
+  const channelRefreshPending = useRef(false);
   const [currentChannelId, setCurrentChannelId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [customInput, setCustomInput] = useState("");
@@ -124,6 +130,24 @@ export function CliModelFlyoutMenu({
   const [channelForm, setChannelForm] = useState({ ...EMPTY_CHANNEL_FORM });
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
   const [viewingChannelId, setViewingChannelId] = useState<string | null>(null);
+  const [nativeConfirmPaths, setNativeConfirmPaths] = useState<string[] | null>(null);
+  const nativeConfirmAction = useRef<(() => void) | null>(null);
+  const mounted = useRef(true);
+  const confirmNative = (paths: string[], action: () => void, confirmed?: ConfirmedNativeChange): Promise<boolean> => {
+    if (!mounted.current) return Promise.resolve(false);
+    if (confirmed && paths.length === confirmed.paths.length && paths.every((path) => confirmed.paths.includes(path))) {
+      return Promise.resolve(true);
+    }
+    nativeConfirmAction.current = action;
+    setNativeConfirmPaths(paths);
+    return Promise.resolve(false);
+  };
+  const finishNativeConfirmation = (confirmed: boolean) => {
+    const action = nativeConfirmAction.current;
+    nativeConfirmAction.current = null;
+    setNativeConfirmPaths(null);
+    if (confirmed) action?.();
+  };
   const [menuLayout, setMenuLayout] = useState<{ offsetX: number; maxHeight: number; below: boolean }>({
     offsetX: 0,
     maxHeight: 560,
@@ -132,10 +156,10 @@ export function CliModelFlyoutMenu({
   const menuRef = useRef<HTMLDialogElement | null>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  const busy = switching;
+  const busy = switching || nativeConfirmPaths !== null;
 
   useEffect(() => {
-    if (!sessionDisplay || selectionPending.current) return;
+    if (!sessionDisplay || selectionPending.current || nativeConfirmAction.current) return;
     if (sessionDisplay.selectedCli !== activeEngine) {
       modelRequest.current++;
       setFetchingModels(false);
@@ -207,6 +231,11 @@ export function CliModelFlyoutMenu({
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (nativeConfirmAction.current) {
+          e.preventDefault();
+          finishNativeConfirmation(false);
+          return;
+        }
         closeRef.current();
         triggerRef?.current?.focus();
       }
@@ -227,21 +256,36 @@ export function CliModelFlyoutMenu({
   }, [triggerRef]);
 
   useEffect(() => {
+    mounted.current = true;
     menuRef.current?.focus();
+    return () => {
+      mounted.current = false;
+      nativeConfirmAction.current = null;
+    };
   }, []);
 
-  const loadChannels = async (engine: CliEngineId) => {
+  const loadChannels = async (engine: CliEngineId, refresh = false) => {
     const request = ++channelRequest.current;
     setLoadingChannels(true);
-    setChannels([]);
-    setCurrentChannelId(null);
-    setStatusMsg(null);
+    if (!refresh) {
+      setChannels([]);
+      setCurrentChannelId(null);
+    }
     try {
       const res = await getSystemProviderChannels(engine);
       if (request !== channelRequest.current) return;
+      if (selectionPending.current) {
+        channelRefreshPending.current = true;
+        return;
+      }
       setChannels(res.channels);
       setCurrentChannelId(res.current);
       setState((prev) => {
+        if (res.current && !getHostCliMenuProps()?.onChannelChange) {
+          const plugin = prev.pluginChannels?.[engine]?.find(channel => pluginProviderId(channel.id) === res.current);
+          return { ...prev, selectedProviderId: plugin?.id || res.current,
+            activeChannelType: plugin ? "plugin" : "system", activePluginChannelId: plugin?.id };
+        }
         if (prev.activeChannelType === "plugin" || prev.selectedProviderId) return prev;
         const hostId = res.current && !isPluginProviderId(res.current) ? res.current : null;
         return hostId ? { ...prev, selectedProviderId: hostId } : prev;
@@ -273,7 +317,10 @@ export function CliModelFlyoutMenu({
       if (customEvent.detail) applyEngines(customEvent.detail);
       else void getSystemEngines(true).then(applyEngines);
     };
-    const handleConfigChanged = () => void loadChannels(activeEngine);
+    const handleConfigChanged = () => {
+      if (selectionPending.current) channelRefreshPending.current = true;
+      else void loadChannels(activeEngine, true);
+    };
     const handleWindowFocus = () => void getSystemEngines(true).then(applyEngines);
 
     window.addEventListener(CLI_ENGINES_CHANGED_EVENT, handleEnginesChanged);
@@ -292,6 +339,12 @@ export function CliModelFlyoutMenu({
     void loadChannels(activeEngine);
     return () => { channelRequest.current++; };
   }, [activeEngine]);
+
+  useEffect(() => {
+    if (busy || !channelRefreshPending.current) return;
+    channelRefreshPending.current = false;
+    void loadChannels(activeEngine, true);
+  }, [busy, activeEngine]);
 
   const pluginCustomChannels = useMemo(() => {
     return state.pluginChannels?.[activeEngine] || [];
@@ -708,7 +761,7 @@ export function CliModelFlyoutMenu({
     }
   };
 
-  const handleSelectSystemProvider = async (channel: { id: string; name: string; model?: string }) => {
+  const handleSelectSystemProvider = async (channel: { id: string; name: string; model?: string }, confirmed?: ConfirmedNativeChange) => {
     if (busy || fetchingModels || selectionPending.current) return;
     if (state.activeChannelType !== "plugin" && channel.id === (state.selectedProviderId || currentChannelId)) return;
     const hostModel = qualifyEngineModel(activeEngine, channel, channel.model || "");
@@ -724,18 +777,28 @@ export function CliModelFlyoutMenu({
       activePluginChannelId: undefined,
     };
     try {
-      await applyChannelSelectionToHost({ engine: activeEngine, providerId: channel.id });
+      const assertSession = confirmed?.assertSession ?? captureHostSessionGuard(activeEngine, true);
+      assertSession();
+      const applied = await applyChannelSelectionToHost({
+        engine: activeEngine,
+        providerId: channel.id,
+        confirmNative: (paths) => confirmNative(paths, () => void handleSelectSystemProvider(channel, { assertSession, paths }), confirmed),
+        assertSession,
+      });
+      assertSession();
+      if (!applied) return;
       await applyModelSelectionToHost({
           engine: activeEngine,
           model: hostModel,
           effort: state.effort,
           enable1M: state.enable1MContext,
       });
+      assertSession();
       await onSave(nextState);
+      assertSession();
       setCurrentChannelId(channel.id);
       setState(nextState);
       setStatusMsg(hostModel ? `已生效: ${channel.name}` : "渠道已切换，请选择模型");
-      setTimeout(() => setStatusMsg(null), 2000);
     } catch (e) {
       setStatusMsg(e instanceof Error ? e.message : "切换失败");
     } finally {
@@ -744,7 +807,7 @@ export function CliModelFlyoutMenu({
     }
   };
 
-  const handleSelectPluginChannel = async (channel: CustomPluginChannel) => {
+  const handleSelectPluginChannel = async (channel: CustomPluginChannel, confirmed?: ConfirmedNativeChange) => {
     if (busy || fetchingModels || selectionPending.current) return;
     const pluginChannel = { ...channel, isPlugin: true as const };
     const hostModel = qualifyEngineModel(activeEngine, pluginChannel, channel.model || "");
@@ -760,13 +823,23 @@ export function CliModelFlyoutMenu({
       selectedModel: displayEngineModel(activeEngine, pluginChannel, hostModel),
     };
     try {
-      await applyCustomPluginChannelToEngine(ctx, activeEngine, channel);
-      await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(channel.id) });
+      const assertSession = confirmed?.assertSession ?? captureHostSessionGuard(activeEngine, true);
+      assertSession();
+      const applied = await applyChannelSelectionToHost({
+        engine: activeEngine,
+        providerId: pluginProviderId(channel.id),
+        confirmNative: (paths) => confirmNative(paths, () => void handleSelectPluginChannel(channel, { assertSession, paths }), confirmed),
+        assertSession,
+        beforeSwitch: () => applyCustomPluginChannelToEngine(ctx, activeEngine, channel),
+      });
+      assertSession();
+      if (!applied) return;
       await applyModelSelectionToHost({ engine: activeEngine, model: hostModel, effort: state.effort, enable1M: state.enable1MContext });
+      assertSession();
       await onSave(nextState);
+      assertSession();
       setState(nextState);
       setStatusMsg(hostModel ? `已生效: ${channel.name}` : "渠道已切换，请选择模型");
-      setTimeout(() => setStatusMsg(null), 2000);
     } catch (e) {
       setStatusMsg(`应用失败: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -775,7 +848,7 @@ export function CliModelFlyoutMenu({
     }
   };
 
-  const handleSaveNewChannel = async () => {
+  const handleSaveNewChannel = async (confirmed?: ConfirmedNativeChange) => {
     if (viewingChannelId || busy || fetchingModels || selectionPending.current) return;
     const formModel = channelForm.model.trim();
     const error = sessionSelectionError(activeEngine) || (formModel ? modelSelectionError(activeEngine, formModel) : null);
@@ -819,17 +892,27 @@ export function CliModelFlyoutMenu({
     selectionPending.current = true;
     setSwitching(true);
     try {
-      await applyCustomPluginChannelToEngine(ctx, activeEngine, newChan);
-      await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(newChan.id) });
+      const assertSession = confirmed?.assertSession ?? captureHostSessionGuard(activeEngine, true);
+      assertSession();
+      const applied = await applyChannelSelectionToHost({
+        engine: activeEngine,
+        providerId: pluginProviderId(newChan.id),
+        confirmNative: (paths) => confirmNative(paths, () => void handleSaveNewChannel({ assertSession, paths }), confirmed),
+        assertSession,
+        beforeSwitch: () => applyCustomPluginChannelToEngine(ctx, activeEngine, newChan),
+      });
+      assertSession();
+      if (!applied) return;
       if (hostModel) {
         await applyModelSelectionToHost({ engine: activeEngine, model: hostModel, effort: state.effort, enable1M: state.enable1MContext });
+        assertSession();
       }
       await onSave(nextState);
+      assertSession();
       setState(nextState);
       setChannelTab("plugin");
       closeChannelForm();
       setStatusMsg(`已保存并应用渠道: ${newChan.name}`);
-      setTimeout(() => setStatusMsg(null), 2000);
     } catch (e) {
       setStatusMsg(`保存渠道失败: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -838,7 +921,7 @@ export function CliModelFlyoutMenu({
     }
   };
 
-  const handleDeletePluginChannel = async (channelId: string, e: React.MouseEvent) => {
+  const handleDeletePluginChannel = async (channelId: string, e: React.MouseEvent, confirmed?: ConfirmedNativeChange) => {
     e.stopPropagation();
     if (busy || fetchingModels || selectionPending.current) return;
     const error = sessionSelectionError(activeEngine);
@@ -850,6 +933,9 @@ export function CliModelFlyoutMenu({
     selectionPending.current = true;
     setSwitching(true);
     try {
+      const assertSession = confirmed?.assertSession ?? captureHostSessionGuard(activeEngine);
+      assertSession();
+      const confirmDelete = (paths: string[]) => confirmNative(paths, () => void handleDeletePluginChannel(channelId, e, { assertSession, paths }), confirmed);
       const fallbackId = !independentChannelError(activeEngine) && currentChannelId && !isPluginProviderId(currentChannelId)
         ? currentChannelId : NATIVE_PROVIDER_ID;
       const nextState: PluginState = {
@@ -862,12 +948,26 @@ export function CliModelFlyoutMenu({
           [activeEngine]: nextChannels,
         },
       };
-      await deleteCustomPluginChannel(activeEngine, channelId);
       if (isDeletingCurrent) {
-        await applyChannelSelectionToHost({ engine: activeEngine, providerId: fallbackId });
-        setCurrentChannelId(fallbackId);
+        const applied = await applyChannelSelectionToHost({
+          engine: activeEngine,
+          providerId: fallbackId,
+          confirmNative: confirmDelete,
+          assertSession,
+          beforeSwitch: () => deleteCustomPluginChannel(activeEngine, channelId),
+        });
+        assertSession();
+        if (!applied) return;
+      } else {
+        const applied = await confirmNativeProviderChange(activeEngine, confirmDelete, assertSession);
+        assertSession();
+        if (!applied) return;
+        await deleteCustomPluginChannel(activeEngine, channelId);
+        assertSession();
       }
       await onSave(nextState);
+      assertSession();
+      if (isDeletingCurrent) setCurrentChannelId(fallbackId);
       setState(nextState);
       setStatusMsg("已删除该渠道");
     } catch (e) {
@@ -876,7 +976,6 @@ export function CliModelFlyoutMenu({
       selectionPending.current = false;
       setSwitching(false);
     }
-    setTimeout(() => setStatusMsg(null), 1500);
   };
 
   const closeChannelForm = () => {
@@ -927,6 +1026,11 @@ export function CliModelFlyoutMenu({
         maxHeight: `${menuLayout.maxHeight}px`,
         top: menuLayout.below ? "calc(100% + 8px)" : undefined,
         bottom: menuLayout.below ? "auto" : "calc(100% + 8px)",
+      }}
+      onCancel={(event) => {
+        event.preventDefault();
+        if (nativeConfirmAction.current) finishNativeConfirmation(false);
+        else onClose();
       }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -1122,7 +1226,27 @@ export function CliModelFlyoutMenu({
         </div>
       </div>
 
-      {busy && (
+      {nativeConfirmPaths && (
+        <div className="ms-confirm-backdrop" role="presentation">
+          <dialog open className="ms-confirm-dialog" aria-modal="true" aria-labelledby="ms-native-confirm-title">
+            <h3 id="ms-native-confirm-title">确认改写 CLI 配置</h3>
+            <p>此操作将改写以下原生配置文件，影响该 CLI 的全局配置及其他会话，并非仅当前会话。</p>
+            <div style={{ maxHeight: "180px", overflowY: "auto" }}>
+              {nativeConfirmPaths.map((path) => <p key={path}>{path}</p>)}
+            </div>
+            <div className="ms-confirm-actions">
+              <button type="button" className="ms-button" autoFocus onClick={() => finishNativeConfirmation(false)}>
+                取消
+              </button>
+              <button type="button" className="ms-button" onClick={() => finishNativeConfirmation(true)}>
+                确认应用
+              </button>
+            </div>
+          </dialog>
+        </div>
+      )}
+
+      {busy && !nativeConfirmPaths && (
         <div className="ms-loading-overlay" role="status" aria-live="polite">
           <RefreshIcon size={26} className="animate-spin" />
           <span>正在应用配置…</span>

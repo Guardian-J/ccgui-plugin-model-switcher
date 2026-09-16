@@ -30,6 +30,10 @@ export async function fetchModelsFromProvider(
   if (!trimmedUrl) {
     throw new Error("请先填写供应商的基础 API 地址 (Base URL)");
   }
+  // 安全验证：仅允许 HTTP/HTTPS 协议
+  if (!trimmedUrl.match(/^https?:\/\//i)) {
+    throw new Error("Base URL 必须以 http:// 或 https:// 开头");
+  }
 
   // 1. 优先使用 CC GUI 宿主原生提供的 fetch_provider_models 命令（支持任意第三方代理域名，无 network 权限限制，且自动探测 /v1/models、兼容 OpenAI 与 Anthropic 格式）
   try {
