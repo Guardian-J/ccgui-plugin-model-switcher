@@ -1090,7 +1090,23 @@ export function CliModelFlyoutMenu({
           </div>
         )}
 
-        <div className="ms-engines" role="group" aria-label="CLI 引擎">
+        <div
+          className="ms-engines"
+          role="group"
+          aria-label="CLI 引擎"
+          ref={(el) => {
+            if (el) {
+              const handleWheel = (e: WheelEvent) => {
+                if (e.deltaY !== 0) {
+                  e.preventDefault();
+                  el.scrollLeft += e.deltaY;
+                }
+              };
+              el.addEventListener('wheel', handleWheel, { passive: false });
+              return () => el.removeEventListener('wheel', handleWheel);
+            }
+          }}
+        >
           {engines.map((item) => {
             const isSelected = activeEngine === item.id;
             return (
