@@ -1,42 +1,42 @@
 # Agents
 
-This directory can contain agent definitions for the Claude Code agent system.
+此目录用于存放 Claude Code agent 系统的 agent 定义文件。
 
-## Agent Definition Format
+## Agent 定义格式
 
-Agents are defined in individual `.md` files with YAML frontmatter:
+Agent 定义文件使用独立的 `.md` 文件，包含 YAML frontmatter：
 
 ```markdown
 ---
 name: agent-name
-description: Brief description of what this agent does
+description: 简短描述此 agent 的功能
 tools: ["Read", "Write", "Bash"]
 model: sonnet
 ---
 
-Agent instructions go here...
+Agent 的具体指令写在这里...
 ```
 
-## Available Tools
+## 可用工具
 
 - Read, Write, Edit
 - Bash
 - Grep, Glob
-- Agent (for spawning subagents)
-- And other tools available in the Claude Code environment
+- Agent (用于生成子 agent)
+- 以及 Claude Code 环境中其他可用的工具
 
-## Usage
+## 使用方式
 
-To use a defined agent:
+调用已定义的 agent：
 
 ```
-/agent agent-name "task description"
+/agent agent-name "任务描述"
 ```
 
-Or programmatically via the Agent tool with `subagent_type: "agent-name"`.
+或通过 Agent 工具以编程方式调用：`subagent_type: "agent-name"`。
 
-## Notes
+## 注意事项
 
-- Keep agent instructions focused and specific
-- Define clear tool sets needed for the agent's tasks
-- Use descriptive names that indicate the agent's purpose
+- 保持 agent 指令专注且具体
+- 明确定义 agent 任务所需的工具集
+- 使用能清楚表达 agent 用途的描述性名称
