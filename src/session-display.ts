@@ -22,7 +22,13 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
   const matchingHost = host?.value === engine ? host : null;
   // Prefer the mounted tab and the host's resolved selection; raw history is a fallback.
   const model = session?.model || matchingHost?.models?.[engine] || host?.lastUsedModel || "";
-  const effort = (session?.effort as EffortLevel) || (matchingHost?.models?.[engine] ? matchingHost?.efforts?.[engine] as EffortLevel : undefined) || host?.lastUsedEffort || (matchingHost?.efforts?.[engine] as EffortLevel) || "high";
+  // 已有会话的 tab.effort 会被宿主清空；真正展示/发送的是 displayEfforts（来自 activeEffort）
+  const effort = (
+    (session?.sessionId == null ? session?.effort as EffortLevel : undefined) ||
+    matchingHost?.efforts?.[engine] as EffortLevel ||
+    host?.lastUsedEffort ||
+    "high"
+  );
   const selectedProviderId = session?.provider || matchingHost?.selectedChannels?.[engine] || "";
   return {
     // Selection updates must not remount a flyout whose host/storage writes are still in flight.

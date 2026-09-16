@@ -115,6 +115,7 @@ export function CliModelFlyoutMenu({
   const [loadingChannels, setLoadingChannels] = useState(true);
   const [switching, setSwitching] = useState(false);
   const selectionPending = useRef(false);
+  const committedSelection = useRef<{ sessionKey: string; effort: EffortLevel } | null>(null);
   const modelRequest = useRef(0);
   const legacyEngine = useRef(initialState.selectedCli);
   const [fetchingModels, setFetchingModels] = useState(false);
@@ -136,14 +137,25 @@ export function CliModelFlyoutMenu({
 
   useEffect(() => {
     if (!sessionDisplay || selectionPending.current) return;
+    if (committedSelection.current && committedSelection.current.sessionKey !== sessionDisplay.sessionKey) {
+      committedSelection.current = null;
+    }
     if (sessionDisplay.selectedCli !== activeEngine) {
       modelRequest.current++;
       setFetchingModels(false);
       setLoadingChannels(true);
       setActiveEngine(sessionDisplay.selectedCli);
     }
-    setState(prev => withSessionDisplay(prev, sessionDisplay));
-  }, [sessionDisplay, busy]);
+    setState(prev => {
+      const next = withSessionDisplay(prev, sessionDisplay);
+      const pinned = committedSelection.current;
+      // 宿主 displayEfforts 刷新滞后时，不要把刚写入的 effort 盖回旧值
+      if (pinned && pinned.sessionKey === sessionDisplay.sessionKey) {
+        return { ...next, effort: pinned.effort };
+      }
+      return next;
+    });
+  }, [sessionDisplay]);
 
   useEffect(() => {
     let positionFrame = 0;
@@ -568,6 +580,9 @@ export function CliModelFlyoutMenu({
       if (sessionError) throw new Error(sessionError);
       const cleanModel = displayEngineModel(activeEngine, activeChannel, hostModel);
       const saved = { ...nextState, selectedCli: activeEngine, selectedModel: cleanModel };
+      committedSelection.current = sessionDisplay
+        ? { sessionKey: sessionDisplay.sessionKey, effort: saved.effort }
+        : null;
       await onSave(saved);
       setState(saved);
       setStatusMsg(null);

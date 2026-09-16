@@ -11,6 +11,14 @@ interface HostCliMenuCallbacks {
   onChannelChange?: (engine: string, channelId: string) => void | Promise<void>;
 }
 
+/** ChatConversation 从 useChatStore 取出的 actions；已有会话的 setEffort 会写 bySession.activeEffort。 */
+export interface HostStoreActions {
+  setEffort: (engine: string, effort: string) => unknown;
+  setModel: (engine: string, model: string) => unknown;
+  pinModels: unknown;
+  setActiveEngine?: (engine: string) => unknown;
+}
+
 interface HostCliMenuProps extends HostCliMenuCallbacks {
   value?: string;
   models?: Record<string, string>;
@@ -284,6 +292,54 @@ export function hostSessionSelectionError(engine: string): string | null {
     host?.session !== undefined ? host.session : getHostSession(), host?.streaming);
 }
 
+function isHostStoreActions(value: unknown): value is HostStoreActions {
+  if (!value || typeof value !== "object") return false;
+  const rec = value as Record<string, unknown>;
+  return typeof rec.setEffort === "function" && typeof rec.setModel === "function" && typeof rec.pinModels === "function";
+}
+
+function scanFiberHooks(fiber: { memoizedState?: unknown }): HostStoreActions | null {
+  let hook = fiber.memoizedState as { memoizedState?: unknown; next?: unknown } | null;
+  for (let n = 0; hook && n < 80; n++, hook = (hook.next ?? null) as typeof hook) {
+    if (!hook || typeof hook !== "object") break;
+    const value = hook.memoizedState;
+    if (isHostStoreActions(value)) return value;
+    if (value && typeof value === "object" && isHostStoreActions((value as { current?: unknown }).current)) {
+      return (value as { current: HostStoreActions }).current;
+    }
+  }
+  return null;
+}
+
+/** 从 Fiber 链上找宿主 zustand actions；测试可直接喂假 hook 链表。 */
+export function findHostStoreActionsFromFiber(
+  fiber: { return?: unknown; memoizedState?: unknown } | null,
+): HostStoreActions | null {
+  for (let depth = 0; fiber && depth < 80; depth++, fiber = (fiber.return ?? null) as typeof fiber) {
+    const found = scanFiberHooks(fiber);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * 从隐藏的原生 CliMenu 向上找到 ChatConversation 的 zustand actions。
+ * Fiber 上的 onEffortChange 只保证触发 UI 回调；已有会话发请求读的是 setEffort 写入的 activeEffort。
+ */
+function findHostStoreActions(anchor?: HTMLElement | null): HostStoreActions | null {
+  const starts: Array<HTMLElement | null> = [
+    findBuiltinTriggerButton(anchor),
+    anchor ?? null,
+    typeof document === "undefined" ? null : document.querySelector('[data-ccgui-plugin-model-switcher="true"]'),
+  ];
+  for (const el of starts) {
+    if (!el) continue;
+    const found = findHostStoreActionsFromFiber(committedFiber(el));
+    if (found) return found;
+  }
+  return null;
+}
+
 /**
  * 同步更新本地存储中的 activeSession 与 openTabs 中的模型/推理强度
  */
@@ -379,7 +435,7 @@ export async function applyModelSelectionToHost(params: {
   const error = hostSessionSelectionError(params.engine) ||
     (params.model ? modelSelectionError(params.engine, params.model, params.compatibility) : null);
   if (error) throw new Error(error);
-  const { engine, effort = "high", enable1M = false } = params;
+  const { engine, effort, enable1M = false } = params;
   let finalModel = params.model.trim();
   if (finalModel === "default") {
     finalModel = "";
@@ -392,40 +448,54 @@ export async function applyModelSelectionToHost(params: {
     }
   }
 
-  // 1. 通过 React Fiber 触发宿主 ChatConversation 的 setModel/setEffort/setActiveEngine
   const callbacks = getHostCliMenuProps();
-  if (callbacks) {
-    try {
-      if (callbacks.onChange) {
-        callbacks.onChange(engine);
-      }
-      // The host may refuse to retarget a pending tab whose first turn just started.
-      const active = getHostSession();
-      if (callbacks.value !== engine && active && active.engine !== engine) {
-        throw new Error("当前会话未切换到目标 CLI，请等待当前请求结束后重试");
-      }
-      if (callbacks.onModelChange) {
-        callbacks.onModelChange(engine, finalModel);
-      }
-      if (callbacks.onEffortChange) {
+  const actions = findHostStoreActions();
+  const active = callbacks?.session !== undefined ? callbacks.session : getHostSession();
+
+  // 1. 先同步 localStorage，确保数据就绪
+  if (effort) syncLocalStorage(engine, finalModel, effort);
+  else syncLocalStorage(engine, finalModel, active?.effort || "");
+
+  // 2. 优先调用宿主 zustand setEffort：已有会话会同步写入 bySession.activeEffort
+  //    Fiber 上的 onEffortChange 只是 UI 回调，发请求并不读 tab.effort
+  try {
+    if (actions?.setActiveEngine) {
+      actions.setActiveEngine(engine);
+    } else if (callbacks?.onChange) {
+      callbacks.onChange(engine);
+    }
+    if (callbacks?.value !== engine && active && active.engine !== engine) {
+      throw new Error("当前会话未切换到目标 CLI，请等待当前请求结束后重试");
+    }
+    if (actions?.setModel) {
+      await Promise.resolve(actions.setModel(engine, finalModel));
+    } else if (callbacks?.onModelChange) {
+      callbacks.onModelChange(engine, finalModel);
+    }
+    if (effort) {
+      if (actions?.setEffort) {
+        await Promise.resolve(actions.setEffort(engine, effort));
+      } else if (callbacks?.onEffortChange) {
         callbacks.onEffortChange(engine, effort);
       }
-    } catch (err) {
-      console.warn("[model-switcher] 触发宿主 Fiber 回调失败:", err);
-      throw err;
     }
-  } else {
-    const active = getHostSession();
-    if (active && active.engine !== engine) {
-      throw new Error("无法连接宿主 CLI 切换入口，请重载插件后重试");
-    }
+  } catch (err) {
+    console.warn("[model-switcher] 触发宿主切换失败:", err);
+    throw err;
   }
 
-  // 2. 同步更新宿主 localStorage（确保会话与 Tab 状态准确生效）
-  syncLocalStorage(engine, finalModel, effort);
+  if (!actions && !callbacks && active && active.engine !== engine) {
+    throw new Error("无法连接宿主 CLI 切换入口，请重载插件后重试");
+  }
+  // 已有会话发请求读的是内存里的 activeEffort。
+  // 禁止再走 remember_session_effort：它会触发 sessions_changed，refreshSessions
+  // 可能用旧的 listSessions 结果把刚写入的 max 盖回 high。
+  if (effort && !actions?.setEffort && !callbacks?.onEffortChange) {
+    throw new Error("无法写入宿主推理强度，请重载插件后重试");
+  }
 
   // 3. 同步写入系统后端 AppSettings（确保新会话与默认配置生效）
-  await syncAppSettings(engine, finalModel, effort);
+  await syncAppSettings(engine, finalModel, effort ?? "");
 
   // 4. 派发通知事件
   if (typeof window !== "undefined") {
