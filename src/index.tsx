@@ -7,8 +7,6 @@ import { ProjectEngineIcon, inferModelEngine } from "./icons";
 import { CLI_DISPLAY_NAMES, prefetchSystemSnapshot } from "./system-bridge";
 import { DEFAULT_STATE } from "./constants";
 import { useSessionDisplay, withSessionDisplay } from "./session-display";
-import { FileSearchPanel } from "./components/FileSearchPanel";
-import { SearchIcon } from "./icons";
 import { installChatLinks } from "./chat-links";
 import { repairLegacyContextSelections, findBuiltinTriggerButton } from "./sync-host";
 import { compactPluginModelLabel, installCompactModelLabels } from "./model-display";
@@ -198,10 +196,6 @@ export default function activate(ctx: PluginContext): Disposer {
     disposeHostTransport,
     installCompactModelLabels(),
     installChatLinks(ctx),
-    ctx.ui.registerPanelTab({
-      key: "file-search", label: () => "搜索", icon: SearchIcon, order: 0.5,
-      component: ({ workspacePath }) => <FileSearchPanel key={workspacePath} ctx={ctx} workspacePath={workspacePath} />,
-    }),
     // 注册输入框模型选择触发器
     ctx.ui.registerComposerSlot({
       slot: "cliMenu",
