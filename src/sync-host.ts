@@ -502,6 +502,12 @@ function sessionStoreKey(engine: string, sessionId: string | null, workspacePath
   return sessionId ? `${engine}/${sessionId}` : `new:${engine}:${workspacePath}`;
 }
 
+let lastDiagnostic = "";
+
+export function getLastDiagnostic(): string {
+  return lastDiagnostic;
+}
+
 /**
  * 已有会话发请求读 bySession[key].activeEffort。
  * 禁止走 setEffort：它会 remember_session_effort → refreshSessions，旧 list 可能把 max 盖回 high。
@@ -515,22 +521,30 @@ export function patchHostSessionEffort(
   live?: HostSessionState | null,
 ): boolean {
   if (live) {
-    console.warn(`[model-switcher] 直接改 SessionState.activeEffort = ${effort}`);
+    const msg = `直接改 SessionState.activeEffort = ${effort}`;
+    console.warn(`[model-switcher] ${msg}`);
+    lastDiagnostic = msg;
     live.activeEffort = effort;
     return true;
   }
   if (!store) {
-    console.warn("[model-switcher] 找不到 store，无法 patch");
+    const msg = "找不到 store，无法 patch";
+    console.warn(`[model-switcher] ${msg}`);
+    lastDiagnostic = msg;
     return false;
   }
   const state = store.getState();
   const active = session ?? state.active ?? null;
   if (!active || active.engine !== engine || !active.sessionId) {
-    console.warn("[model-switcher] active 不匹配或无 sessionId，跳过 patch");
+    const msg = "active 不匹配或无 sessionId，跳过 patch";
+    console.warn(`[model-switcher] ${msg}`);
+    lastDiagnostic = msg;
     return false;
   }
   const key = sessionStoreKey(engine, active.sessionId, active.workspacePath);
-  console.warn(`[model-switcher] setState 改 bySession[${key}].activeEffort = ${effort}`);
+  const msg = `setState 改 bySession[${key}].activeEffort = ${effort}`;
+  console.warn(`[model-switcher] ${msg}`);
+  lastDiagnostic = msg;
   store.setState((s) => {
     const bySession = { ...((s.bySession as Record<string, Record<string, unknown>>) ?? {}) };
     const current = { ...(bySession[key] ?? {}) };
@@ -654,8 +668,10 @@ export async function applyModelSelectionToHost(params: {
   const actions = store ? undefined : findHostStoreActions();
   const active = callbacks?.session !== undefined ? callbacks.session : (store?.getState().active ?? getHostSession());
   const liveSession = effort && active?.sessionId ? findHostSessionState() : null;
+  const summary = `sessionId=${active?.sessionId ?? "null"} liveSession=${liveSession ? "✓" : "✗"} store=${store ? "✓" : "✗"}`;
   console.warn(`[model-switcher] 切换到 ${engine} / ${finalModel} / ${effort ?? "无"}`);
-  console.warn(`[model-switcher] active.sessionId = ${active?.sessionId ?? "null"}, liveSession = ${liveSession ? "找到" : "null"}, store = ${store ? "找到" : "null"}`);
+  console.warn(`[model-switcher] ${summary}`);
+  lastDiagnostic = summary;
   const patched = effort ? patchHostSessionEffort(store, engine, effort, active, liveSession) : false;
 
   // 1. 先同步 localStorage，确保数据就绪

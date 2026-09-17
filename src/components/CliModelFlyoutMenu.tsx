@@ -49,6 +49,7 @@ import {
   applyModelSelectionToHost,
   applyChannelSelectionToHost,
   hostSessionSelectionError as sessionSelectionError,
+  getLastDiagnostic,
 } from "../sync-host";
 import { useSessionDisplay, withSessionDisplay } from "../session-display";
 import { getHostSession, modelSelectionError, isConcreteModel } from "../selection-policy";
@@ -576,6 +577,7 @@ export function CliModelFlyoutMenu({
         enable1M: nextState.enable1MContext,
         compatibility: compatibilityFor(targetModel) || compatibilityFor(hostModel),
       });
+      const diagnostic = getLastDiagnostic();
       const sessionError = sessionSelectionError(activeEngine);
       if (sessionError) throw new Error(sessionError);
       const cleanModel = displayEngineModel(activeEngine, activeChannel, hostModel);
@@ -585,10 +587,12 @@ export function CliModelFlyoutMenu({
         : null;
       await onSave(saved);
       setState(saved);
-      setStatusMsg(null);
+      setStatusMsg(diagnostic || null);
+      setTimeout(() => setStatusMsg(null), 3000);
       return true;
     } catch (e) {
-      setStatusMsg(e instanceof Error ? e.message : "模型切换失败");
+      const diagnostic = getLastDiagnostic();
+      setStatusMsg(`${e instanceof Error ? e.message : "模型切换失败"}${diagnostic ? ` [${diagnostic}]` : ""}`);
       return false;
     } finally {
       selectionPending.current = false;
