@@ -504,10 +504,12 @@ export function CliModelFlyoutMenu({
     const customSet = new Set(custom.map(normalizeId));
     for (const id of custom) customSet.add(id);
     const catalogSet = new Set(normalizedFetched);
+    for (const id of fetched) catalogSet.add(id);
 
     if (rawList.length > 0) {
       return rawList.map((m) => {
         const isCustom = customSet.has(m) || customSet.has(normalizeId(m));
+        const isCatalog = catalogSet.has(m) || catalogSet.has(normalizeId(m));
         let desc: string | undefined;
         const lower = m.toLowerCase();
         if (lower.includes("gemini")) desc = "Google Gemini";
@@ -526,7 +528,7 @@ export function CliModelFlyoutMenu({
           label: m,
           description: desc,
           custom: isCustom,
-          catalog: catalogSet.has(m),
+          catalog: isCatalog,
         };
       });
     }
@@ -587,8 +589,10 @@ export function CliModelFlyoutMenu({
         : null;
       await onSave(saved);
       setState(saved);
-      setStatusMsg(diagnostic || null);
-      setTimeout(() => setStatusMsg(null), 3000);
+      if (diagnostic) {
+        setStatusMsg(diagnostic);
+        setTimeout(() => setStatusMsg(null), 3000);
+      }
       return true;
     } catch (e) {
       const diagnostic = getLastDiagnostic();
@@ -666,6 +670,11 @@ export function CliModelFlyoutMenu({
     } finally {
       if (request === modelRequest.current) setFetchingModels(false);
     }
+  };
+
+  const handleSearchFocus = () => {
+    // 点击搜索框时立即强制拉取最新模型列表
+    void handleFetchModels();
   };
 
   const handleAddCustomModel = async (modelId = customInput) => {
@@ -1060,6 +1069,7 @@ export function CliModelFlyoutMenu({
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
               onFetchModels={() => void handleFetchModels()}
+              onSearchFocus={handleSearchFocus}
               selectionError={selectionError}
               onSelectModel={(id) => void handleSelectModel(id)}
               onDeleteCustomModel={(id, event) => {
