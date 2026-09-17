@@ -1,7 +1,7 @@
 import type { PluginContext } from "./ccgui-plugin";
 import { paletteCss, THEME_PALETTES } from "./theme-palette";
 import { toolTimelineCss } from "./tool-timeline-theme";
-import { customThemeColor, paletteFromColor, isBackgroundImage, type CustomPalette } from "./theme-customization";
+import { customThemeColor, paletteFromColor, type CustomPalette } from "./theme-customization";
 
 export interface GuiThemeConfig {
   /** 主题预设 */
@@ -9,11 +9,6 @@ export interface GuiThemeConfig {
   paletteMode: "preset" | "custom";
   customPalette?: CustomPalette;
   customAccent?: string;
-  backgroundImage?: string;
-  backgroundName?: string;
-  backgroundEnabled: boolean;
-  backgroundFit: "cover" | "contain";
-  backgroundDim: number;
   /** Legacy texture setting; normalized to plain on load. */
   canvasStyle: "plain" | "grid" | "diagonal";
   enableBackdropPolish: boolean;
@@ -39,9 +34,6 @@ export interface GuiThemeConfig {
 export const DEFAULT_THEME_CONFIG: GuiThemeConfig = {
   preset: "acrylic",
   paletteMode: "preset",
-  backgroundEnabled: false,
-  backgroundFit: "cover",
-  backgroundDim: 65,
   canvasStyle: "plain",
   enableBackdropPolish: true,
   backdropOpacity: 45,
@@ -238,10 +230,7 @@ export function generateThemeCss(config: GuiThemeConfig): string {
     `);
   }
 
-  const hasImage = config.backgroundEnabled && isBackgroundImage(config.backgroundImage);
-  if (palette || hasImage) {
-    // Fixed attachment aligns the same image across opaque host surfaces, including portals.
-    // Keep controls, selected rows and code/result panels on their semantic colors.
+  if (palette) {
     const surfaces = `:is(body, #root,
       :is(div, main, section, aside, header, footer, nav)[class~="bg-background-full"]:not([data-virtual-inner] *),
       :is(div, main, section, aside, header, footer, nav)[class~="bg-background-primary-default"]:not([data-virtual-inner] *),
@@ -249,20 +238,11 @@ export function generateThemeCss(config: GuiThemeConfig): string {
       .overflow-y-auto:has(> [data-virtual-inner]), .ms-flyout, .ms-channels,
       [role="dialog"], .shadow-dropdown)`;
     const canvas = 'var(--ms-canvas, var(--color-background-full, #f2f2f2))';
-    const dim = Number.isFinite(config.backgroundDim) ? Math.max(0, Math.min(100, config.backgroundDim)) : 65;
-    const wash = `color-mix(in srgb, ${canvas} ${dim}%, transparent)`;
     parts.push(`${surfaces} {
       background-color: ${canvas};
-      background-image: ${hasImage ? `linear-gradient(${wash}, ${wash}), var(--ms-background-image, none)` : 'none'};
-      background-size: auto, ${config.backgroundFit === 'contain' ? 'contain' : 'cover'};
-      background-position: center;
-      background-repeat: no-repeat;
+      background-image: none;
       background-attachment: fixed;
-      ${hasImage ? 'backdrop-filter: none; -webkit-backdrop-filter: none;' : ''}
     }`);
-    if (hasImage && /^data:image\/(gif|webp);/i.test(config.backgroundImage!)) parts.push(`
-      @media (prefers-reduced-motion: reduce) { ${surfaces} { background-image: none; } }
-    `);
   }
   if (config.customCss?.trim()) parts.push(config.customCss.trim());
   return parts.join("\n");
@@ -274,8 +254,6 @@ export function generateThemeCss(config: GuiThemeConfig): string {
 export class GuiThemeManager {
   private ctx: PluginContext;
   private currentDisposer: (() => void) | null = null;
-  private imageDisposer: (() => void) | null = null;
-  private appliedImage = "";
   private saveQueue: Promise<void> = Promise.resolve();
   private config: GuiThemeConfig = { ...DEFAULT_THEME_CONFIG };
   private listeners = new Set<(cfg: GuiThemeConfig) => void>();
@@ -290,8 +268,6 @@ export class GuiThemeManager {
       if (saved) {
         this.config = { ...DEFAULT_THEME_CONFIG, ...saved, canvasStyle: "plain" };
       }
-      const image = await this.ctx.storage.get<string>("theme_background");
-      if (isBackgroundImage(image)) this.config.backgroundImage = image;
     } catch (e) {
       console.warn("[model-switcher:theme] 读取主题设置失败:", e);
     }
@@ -311,25 +287,14 @@ export class GuiThemeManager {
     this.config = { ...this.config, ...partial, canvasStyle: "plain" };
     this.apply();
     this.listeners.forEach((fn) => fn(this.config));
-    const { backgroundImage, ...settings } = this.config;
-    // Serialize slider/picker writes and keep large media out of ordinary settings writes.
     const save = this.saveQueue.then(async () => {
-      if (Object.prototype.hasOwnProperty.call(partial, "backgroundImage")) {
-        await this.ctx.storage.set("theme_background", isBackgroundImage(backgroundImage) ? backgroundImage : null);
-      }
-      await this.ctx.storage.set("theme_config", settings);
+      await this.ctx.storage.set("theme_config", this.config);
     });
     this.saveQueue = save.catch(e => { console.warn("[model-switcher:theme] 保存主题配置失败:", e); });
     return save;
   }
 
   public apply(): void {
-    const image = this.config.backgroundEnabled && isBackgroundImage(this.config.backgroundImage) ? this.config.backgroundImage : "";
-    if (image !== this.appliedImage) {
-      this.imageDisposer?.();
-      this.imageDisposer = image ? this.ctx.theme.injectCss(`:root { --ms-background-image: url("${image}"); }`) : null;
-      this.appliedImage = image;
-    }
     if (this.currentDisposer) {
       this.currentDisposer();
       this.currentDisposer = null;
@@ -345,9 +310,6 @@ export class GuiThemeManager {
   }
 
   public dispose(): void {
-    this.imageDisposer?.();
-    this.imageDisposer = null;
-    this.appliedImage = "";
     if (this.currentDisposer) {
       this.currentDisposer();
       this.currentDisposer = null;

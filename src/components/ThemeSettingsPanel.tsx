@@ -69,7 +69,7 @@ export function ThemeSettingsPanel({ manager, onClose }: Props) {
         <button type="button" aria-pressed={config.paletteMode === "preset"} onClick={() => void update({ paletteMode: "preset" })}>内置主题</button>
         <button type="button" aria-pressed={config.paletteMode === "custom"} onClick={() => void update({ paletteMode: "custom" })}>调色盘</button>
       </div>
-      {config.paletteMode === "custom" ? <ThemeCustomizationPanel section="palette" config={config} update={update} /> :
+      {config.paletteMode === "custom" ? <ThemeCustomizationPanel config={config} update={update} /> :
       <div className="ms-theme-grid" role="group" aria-label="主题配色">
         {THEME_PRESETS.map((preset) => {
           const isSelected = config.preset === preset.id;
@@ -103,10 +103,6 @@ export function ThemeSettingsPanel({ manager, onClose }: Props) {
           );
         })}
       </div>}
-      <section className="ms-theme-section" aria-label="应用背景">
-        <h4>应用背景</h4>
-        <ThemeCustomizationPanel section="background" config={config} update={update} />
-      </section>
       <section className="ms-theme-section" aria-label="幕布">
         <button type="button" role="switch" aria-label="幕布渲染" aria-checked={config.enableBackdropPolish}
           className="ms-theme-toggle" onClick={() => handleToggle("enableBackdropPolish")}>

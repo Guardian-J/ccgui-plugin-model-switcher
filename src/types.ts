@@ -63,6 +63,18 @@ export const EMPTY_CHANNEL_FORM = {
 
 export type ChannelFormState = typeof EMPTY_CHANNEL_FORM;
 
+/** 对话级渠道覆盖记录，以 stableSessionKey（engine+sessionId+workspacePath）为键持久化 */
+export interface SessionChannelRecord {
+  selectedCli: CliEngineId;
+  selectedProviderId: string;
+  selectedModel: string;
+  effort: EffortLevel;
+  enable1MContext: boolean;
+  activeChannelType?: "system" | "plugin";
+  activePluginChannelId?: string;
+  activeChannelName?: string;
+}
+
 export interface PluginState {
   selectedCli: CliEngineId;
   selectedProviderId: string;
@@ -74,5 +86,7 @@ export interface PluginState {
   pluginChannels?: Record<string, CustomPluginChannel[]>; // engineId -> CustomPluginChannel[]
   activeChannelType?: "system" | "plugin"; // 明确区分当前生效的是系统供应商还是插件独立渠道
   activePluginChannelId?: string; // 当前生效的插件独立渠道 ID
+  activeChannelName?: string; // 当前生效渠道的显示名称（系统渠道或插件渠道均适用）
+  sessionChannels?: Record<string, SessionChannelRecord>; // stableSessionKey -> 对话级渠道覆盖
   claudeScrubStatus?: "clean" | "unscrubbed" | "not_found" | "unknown"; // Legacy persisted field; live status always comes from a fresh check.
 }

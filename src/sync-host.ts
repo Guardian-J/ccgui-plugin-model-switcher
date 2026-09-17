@@ -317,6 +317,15 @@ export function hostSessionSelectionError(engine: string): string | null {
     host?.session !== undefined ? host.session : getHostSession(), host?.streaming);
 }
 
+/**
+ * 检测新版 CC GUI：宿主 props 可读且不含 onChannelChange 才视为新宿主，渠道隔离存储，不写入 CLI 配置文件。
+ * props 未就绪（getHostCliMenuProps 返回 null）时保守地返回 false，避免误跳过旧宿主的配置文件写入。
+ */
+export function isNewHost(): boolean {
+  const props = getHostCliMenuProps();
+  return props !== null && !props.onChannelChange;
+}
+
 function isHostStoreActions(value: unknown): value is HostStoreActions {
   if (!value || typeof value !== "object") return false;
   const rec = value as Record<string, unknown>;

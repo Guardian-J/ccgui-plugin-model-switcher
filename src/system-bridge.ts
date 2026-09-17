@@ -38,9 +38,7 @@ export const CLI_DISPLAY_NAMES: Record<string, string> = {
 
 export const NATIVE_PROVIDER_ID = "__local_settings_json__";
 export function independentChannelError(engine: string): string | null {
-  return ["claude", "codex", "kimi", "grok", "pi", "omp"].includes(engine)
-    ? null
-    : `${CLI_DISPLAY_NAMES[engine] || engine} 使用自身的账号或服务配置，暂不支持独立渠道，请在对应 CLI 中配置`;
+  return null;
 }
 
 const PLUGIN_PROVIDER_PREFIX = "plugin_model-switcher_";
@@ -51,6 +49,11 @@ const NATIVE_CONFIG_NAMES: Partial<Record<CliEngineId, string>> = {
   grok: "config.toml",
   pi: "models.json · auth.json",
   omp: "models.yml · agent.db",
+  dsh: "CLI 内置服务配置",
+  agy: "CLI 内置服务配置",
+  opencode: "CLI 内置服务配置",
+  qoder: "CLI 内置服务配置",
+  "qoder-cn": "CLI 内置服务配置",
 };
 
 export interface NativeModel {
@@ -621,8 +624,9 @@ export async function setSystemCurrentProvider(
   if (error && providerId && ![NATIVE_PROVIDER_ID, "__local_config_toml__"].includes(providerId)) throw new Error(error);
   if (engine !== "pi" && engine !== "omp") {
     await invokeTauri("set_current_provider", { engine, id: providerId });
-    invalidateCliConfig();
   }
+  // pi / omp 不走 set_current_provider，但配置文件已由调用方写入，缓存仍须失效
+  invalidateCliConfig();
   notifyCliConfigChanged();
 }
 
@@ -826,14 +830,17 @@ async function deletePiFamilyPluginChannel(
 /**
  * 把独立渠道 upsert 到宿主供应商列表；会话绑定由调用方执行，不改写全局默认渠道。
  * Codex 附带 settingsConfig（auth.json + requires_openai_auth），omp / pi 写入 models.yml / models.json。
+ * skipHostWrite=true 时（新宿主模式）跳过所有 CLI 配置文件写入和 upsert_provider，仅由调用方持久化到插件存储。
  */
 export async function applyCustomPluginChannelToEngine(
   _ctx: PluginContext,
   engine: CliEngineId,
   channel: CustomPluginChannel,
+  { skipHostWrite = false }: { skipHostWrite?: boolean } = {},
 ): Promise<void> {
   const error = independentChannelError(engine);
   if (error) throw new Error(error);
+  if (skipHostWrite) return;
   const id = pluginProviderId(channel.id);
   const json: Record<string, unknown> = {
     name: channel.name,
@@ -871,18 +878,24 @@ export async function applyCustomPluginChannelToEngine(
 
 /**
  * 删除宿主独立渠道及 OMP/PI 原生模型配置中的对应项，允许删除最后一个渠道。
+ * skipHostWrite=true 时（新宿主模式）跳过所有 CLI 配置文件写入和 delete_provider，渠道记录仅存于插件存储。
  */
 export async function deleteCustomPluginChannel(
   engine: CliEngineId,
   channelId: string,
+  { skipHostWrite = false }: { skipHostWrite?: boolean } = {},
 ): Promise<void> {
+  if (skipHostWrite) return;
   if (isPiFamilyEngine(engine)) {
     await deletePiFamilyPluginChannel(engine, channelId);
+    // pi / omp 渠道配置存储在 models.yml / models.json，上面已删除；
+    // 宿主不支持通用 delete_provider 命令，跳过以避免异常中断后续缓存清理。
+  } else {
+    await invokeTauri("delete_provider", {
+      engine,
+      id: pluginProviderId(channelId),
+    });
   }
-  await invokeTauri("delete_provider", {
-    engine,
-    id: pluginProviderId(channelId),
-  });
   invalidateCliConfig();
   notifyCliConfigChanged();
 }

@@ -114,7 +114,6 @@ export function ModelListSection({
     // 确保输入框失去焦点，触发后续逻辑
     setTimeout(() => {
       inputRef.current?.blur();
-      console.log('[ModelListSection] input blurred');
     }, 0);
   }, [onSearchChange, closeDropdown]);
 

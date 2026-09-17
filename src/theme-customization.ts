@@ -1,7 +1,6 @@
 import { THEME_PALETTES, type Colors } from "./theme-palette";
 
 export type CustomPalette = { light: Colors; dark: Colors };
-export const MAX_BACKGROUND_BYTES = 4 * 1024 * 1024;
 
 export function customThemeColor(color: string | undefined, legacy: CustomPalette | undefined, preset: string): string {
   const candidate = color ?? legacy?.light?.accent;
@@ -39,34 +38,4 @@ export function customPaletteBase(preset: string): CustomPalette {
     ? THEME_PALETTES[preset as keyof typeof THEME_PALETTES] : THEME_PALETTES.acrylic;
 }
 
-export function isBackgroundImage(value: unknown): value is string {
-  return typeof value === "string" && value.length <= Math.ceil(MAX_BACKGROUND_BYTES / 3) * 4 + 64 &&
-    /^data:image\/(png|jpeg|gif|webp);base64,[a-z0-9+/]+={0,2}$/i.test(value);
-}
 
-export async function readBackgroundFile(file: File): Promise<string> {
-  if (file.size > MAX_BACKGROUND_BYTES) throw new Error("图片不能超过 4 MB");
-  if (!file.size) throw new Error("图片文件为空");
-  const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
-  const starts = (...header: number[]) => header.every((byte, index) => bytes[index] === byte);
-  const mime = starts(137, 80, 78, 71, 13, 10, 26, 10) ? "image/png"
-    : starts(255, 216, 255) ? "image/jpeg"
-      : starts(71, 73, 70, 56) ? "image/gif"
-        : starts(82, 73, 70, 70) && bytes[8] === 87 && bytes[9] === 69 && bytes[10] === 66 && bytes[11] === 80 ? "image/webp" : null;
-  if (!mime) throw new Error("请选择 PNG、JPEG、WebP 或 GIF 图片");
-  const data = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("图片读取失败"));
-    reader.readAsDataURL(new Blob([file], { type: mime }));
-  });
-  await new Promise<void>((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => image.naturalWidth * image.naturalHeight <= 40_000_000
-      ? resolve() : reject(new Error("图片尺寸过大，请使用不超过 4000 万像素的图片"));
-    image.onerror = () => reject(new Error("图片损坏或格式不受支持"));
-    image.src = data;
-  });
-  // Keep original bytes, so GIF/WebP animation survives import and reload.
-  return data;
-}

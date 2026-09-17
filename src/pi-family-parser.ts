@@ -236,10 +236,38 @@ function findYamlProviderLineRange(lines: string[], id: string): YamlProviderLin
   return { providersIndex, keyIndent, startLine, endLine };
 }
 
+/**
+ * 从现有 provider 块中提取插件不管理的额外字段行，避免 upsert 时静默丢弃用户自定义配置。
+ * fieldIndent 为 provider 字段所在缩进深度（通常为 4）。
+ */
+function extractExtraYamlLines(
+  lines: string[],
+  startLine: number,
+  endLine: number,
+  fieldIndent: number,
+): string[] {
+  const MANAGED_KEYS = new Set(["name", "baseUrl", "api", "auth", "apiKey", "models"]);
+  const extra: string[] = [];
+  let capturing = false;
+  for (let i = startLine + 1; i < endLine; i++) {
+    const line = lines[i];
+    const indent = line.search(/\S/);
+    if (indent < 0) continue;
+    if (indent === fieldIndent) {
+      const kv = line.trim().match(/^([a-zA-Z0-9_-]+)\s*:/);
+      const key = kv ? kv[1] : null;
+      capturing = key !== null && !MANAGED_KEYS.has(key);
+    }
+    if (capturing) extra.push(line);
+  }
+  return extra;
+}
+
 function renderYamlProviderLines(
   id: string,
   patch: PiFamilyProviderPatch,
   models: Array<{ id: string; name?: string }>,
+  extraLines: string[] = [],
 ): string[] {
   // omp: anthropic-messages 且未写 auth 时会强制 isOAuth，请求被塑成 Claude Code
   // OAuth（Accept: json、?beta=true），中转站按 SSE/API Key 走就会卡 1–2 分钟。
@@ -251,6 +279,7 @@ function renderYamlProviderLines(
     `    api: ${patch.api}`,
     `    auth: apiKey`,
     `    apiKey: ${JSON.stringify(patch.apiKey)}`,
+    ...extraLines,
   ];
   if (models.length > 0) {
     lines.push("    models:");
@@ -290,7 +319,11 @@ export function upsertPiFamilyProviderText(
     const mergedModels = mergePiFamilyModels(existingModels, nextPatch);
 
     const range = findYamlProviderLineRange(lines, id);
-    const newBlockLines = renderYamlProviderLines(id, nextPatch, mergedModels);
+    // 保留现有 provider 中插件不管理的额外字段，避免每次 upsert 时静默丢弃用户自定义配置
+    const extraLines = range && range.startLine >= 0
+      ? extractExtraYamlLines(lines, range.startLine, range.endLine, range.keyIndent + 2)
+      : [];
+    const newBlockLines = renderYamlProviderLines(id, nextPatch, mergedModels, extraLines);
 
     if (!range || range.startLine < 0) {
       const pIdx = range?.providersIndex ?? lines.findIndex((l) => /^providers\s*:/.test(l.trim()));

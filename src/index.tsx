@@ -4,11 +4,11 @@ import type { PluginState } from "./types";
 import { CliModelFlyoutMenu } from "./components/CliModelFlyoutMenu";
 import { GuiThemeManager } from "./theme-manager";
 import { ProjectEngineIcon, inferModelEngine } from "./icons";
-import { CLI_DISPLAY_NAMES, prefetchSystemSnapshot } from "./system-bridge";
+import { CLI_DISPLAY_NAMES, prefetchSystemSnapshot, qualifyEngineModel } from "./system-bridge";
 import { DEFAULT_STATE } from "./constants";
 import { useSessionDisplay, withSessionDisplay } from "./session-display";
 import { installChatLinks } from "./chat-links";
-import { repairLegacyContextSelections, findBuiltinTriggerButton } from "./sync-host";
+import { repairLegacyContextSelections, findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost } from "./sync-host";
 import { compactPluginModelLabel, installCompactModelLabels } from "./model-display";
 import { disposeHostTransport } from "./host-transport";
 import { withRemoteStorage } from "./remote-storage";
@@ -93,12 +93,56 @@ export default function activate(ctx: PluginContext): Disposer {
       prefetchSystemSnapshot(state.selectedCli);
     }, [state.selectedCli]);
 
+    // 对话级渠道隔离：切换到新会话时，恢复该会话上次的渠道和模型选择
+    const prevStableKey = useRef<string | null>(null);
+    useEffect(() => {
+      const stableKey = sessionDisplay?.stableKey;
+      if (!stableKey || stableKey === prevStableKey.current) return;
+      prevStableKey.current = stableKey;
+
+      const record = savedState.sessionChannels?.[stableKey];
+      if (!record) return;
+
+      // 后台静默恢复，不阻塞 UI；失败仅记录警告
+      const engine = record.selectedCli;
+      const providerId = record.selectedProviderId;
+      const model = record.selectedModel;
+      void (async () => {
+        try {
+          if (providerId) {
+            await applyChannelSelectionToHost({ engine, providerId });
+          }
+          if (model) {
+            // 找到该渠道对象用于 qualify（插件渠道需要加前缀）
+            const pluginCh = savedState.pluginChannels?.[engine]?.find(c => c.id === record.activePluginChannelId);
+            const channelRef = pluginCh ? { id: pluginCh.id, isPlugin: true } : (providerId ? { id: providerId } : null);
+            const hostModel = qualifyEngineModel(engine, channelRef, model);
+            await applyModelSelectionToHost({
+              engine,
+              model: hostModel,
+              effort: record.effort,
+              enable1M: record.enable1MContext,
+            });
+          }
+        } catch (err) {
+          console.warn("[model-switcher] 恢复会话渠道失败:", err);
+        }
+      })();
+    }, [sessionDisplay?.stableKey]);
+
     const engineName = CLI_DISPLAY_NAMES[state.selectedCli] || state.selectedCli;
     const bareModel = state.selectedModel ? compactPluginModelLabel(state.selectedModel.replace(/\[1m\]$/i, "")) : "未获取模型";
     const displayModel = state.enable1MContext ? `${bareModel} [1m]` : bareModel;
     const effortText = state.effort || "high";
     const modelIconEngine =
       inferModelEngine(state.selectedModel) || state.selectedCli;
+    // 渠道显示名：插件渠道显示名称，系统渠道固定显示"系统渠道"
+    const channelName = state.activeChannelType === "plugin"
+      ? (state.activeChannelName ||
+          state.pluginChannels?.[state.selectedCli]?.find(c => c.id === state.activePluginChannelId)?.name ||
+          state.selectedProviderId ||
+          "插件渠道")
+      : "系统渠道";
 
     // 动态隐藏紧邻的原生 cliMenu 按钮，实现无缝替代
     useEffect(() => {
@@ -138,7 +182,7 @@ export default function activate(ctx: PluginContext): Disposer {
           aria-haspopup="dialog"
           aria-expanded={open}
           onClick={() => setOpen((prev) => !prev)}
-          title={`当前引擎: ${engineName} / 模型: ${displayModel} · 推理强度: ${effortText}`}
+          title={`引擎: ${state.selectedCli}\n渠道: ${channelName}\n模型: ${state.selectedModel || '未选择'}\n推理强度: ${effortText}`}
           className="group flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 outline-none transition-colors hover:bg-background-primary-hover focus-visible:ring-2 focus-visible:ring-border-focus-ring"
         >
           {/* 1. CLI 引擎 Logo */}
@@ -173,25 +217,6 @@ export default function activate(ctx: PluginContext): Disposer {
     );
   }
 
-  // 2. 底部状态栏控件：显示 CLI 的 Logo 和模型信息
-  function StatusBarItem() {
-    const state = withSessionDisplay(useCurrentState(), useSessionDisplay());
-    const bareModel = state.selectedModel ? compactPluginModelLabel(state.selectedModel.replace(/\[1m\]$/i, "")) : "未获取模型";
-    const displayModel = state.enable1MContext ? `${bareModel}[1m]` : bareModel;
-    const modelIconEngine =
-      inferModelEngine(state.selectedModel) || state.selectedCli;
-
-    return (
-      <span className="inline-flex items-center gap-1.5 text-body-2-regular text-text-secondary px-1">
-        <ProjectEngineIcon engine={state.selectedCli} size={14} />
-        <span className="font-medium text-text-primary">{state.selectedCli}:</span>
-        <ProjectEngineIcon engine={modelIconEngine} size={12} />
-        <span className="truncate max-w-[120px]">{displayModel}</span>
-        <span className="text-text-tertiary">· {state.effort || "high"}</span>
-      </span>
-    );
-  }
-
   const disposers: Disposer[] = [
     disposeHostTransport,
     installCompactModelLabels(),
@@ -202,11 +227,6 @@ export default function activate(ctx: PluginContext): Disposer {
       key: "model-switcher-slot",
       component: ComposerButton,
       order: 1,
-    }),
-    // 注册状态栏信息指示器
-    ctx.ui.registerStatusBarItem({
-      key: "model-switcher-status",
-      component: StatusBarItem,
     }),
     // 释放主题管理器
     () => {

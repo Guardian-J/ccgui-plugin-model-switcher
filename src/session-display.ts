@@ -5,7 +5,10 @@ import type { CliEngineId, EffortLevel, PluginState } from "./types";
 import { isPluginProviderId, pluginProviderId } from "./system-bridge";
 
 export interface SessionDisplay {
+  /** 含 streaming 标志，变化时阻止弹窗重挂载 */
   sessionKey: string;
+  /** 不含 streaming，仅 engine+sessionId+workspacePath，用于对话级渠道记录的存储键 */
+  stableKey: string;
   selectedCli: CliEngineId;
   selectedModel: string;
   effort: EffortLevel;
@@ -33,6 +36,8 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
   return {
     // Selection updates must not remount a flyout whose host/storage writes are still in flight.
     sessionKey: JSON.stringify([engine, session?.sessionId ?? null, session?.workspacePath ?? "", host?.streaming ?? false]),
+    // stableKey excludes streaming so it stays constant while a session is open — used as the storage key for per-session channel records.
+    stableKey: JSON.stringify([engine, session?.sessionId ?? null, session?.workspacePath ?? ""]),
     selectedCli: engine as CliEngineId,
     selectedModel: isConcreteModel(model) ? model.replace(/\[1m\]$/i, "").trim() : "",
     effort: effort as EffortLevel,
@@ -92,20 +97,32 @@ export function useSessionDisplay(anchor?: { current: HTMLElement | null }): Ses
   const [display, setDisplay] = useState(() => readSessionDisplay(anchor?.current));
   useEffect(() => {
     let observed: HTMLElement | null = null;
+    let cachedTrigger: HTMLElement | null = null;
+    let cacheExpiry = 0;
     const observer = new MutationObserver(() => refresh());
+
     const refresh = () => {
       repairLegacyHostModel(anchor?.current);
-      const trigger = findBuiltinTriggerButton(anchor?.current);
+      // 缓存触发按钮引用 1s，避免每次 MutationObserver 回调都重走 Fiber 树扫描
+      const now = Date.now();
+      if (now > cacheExpiry) {
+        cachedTrigger = findBuiltinTriggerButton(anchor?.current);
+        cacheExpiry = now + 1000;
+      }
+      const trigger = cachedTrigger;
       if (trigger !== observed) {
         observer.disconnect();
         observed = trigger;
-        if (trigger) observer.observe(trigger, { attributes: true, childList: true, characterData: true, subtree: true });
+        if (trigger) {
+          // 只观察 attributes，不观察 subtree 内的 DOM 变动
+          // subtree:true 会在 streaming 期间每帧触发，导致高频 Fiber 树扫描
+          observer.observe(trigger, { attributes: true, attributeFilter: ["aria-label", "disabled", "data-value"] });
+        }
       }
       const next = readSessionDisplay(anchor?.current);
       setDisplay(prev => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
     };
     refresh();
-    // 降低定时器轮询频次为 1000ms，优先依赖 MutationObserver 及事件驱动，消除频繁 Fiber 树扫描开销
     const timer = window.setInterval(refresh, 1000);
     window.addEventListener("storage", refresh);
     window.addEventListener("ccgui:model-changed", refresh);
