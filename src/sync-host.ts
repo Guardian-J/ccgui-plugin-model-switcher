@@ -520,6 +520,7 @@ export function patchHostSessionEffort(
   session: HostSession | null,
   live?: HostSessionState | null,
 ): boolean {
+  console.warn(`[model-switcher] patchHostSessionEffort 入参: store=${store ? "✓" : "✗"}, live=${live ? "✓" : "✗"}, sessionId=${session?.sessionId ?? "null"}`);
   if (live && store) {
     const state = store.getState();
     const active = session ?? state.active ?? null;
