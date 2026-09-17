@@ -44,19 +44,47 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
 export function withSessionDisplay(state: PluginState, display: SessionDisplay | null): PluginState {
   if (!display) return state.selectedCli === "claude" ? state : { ...state, enable1MContext: false };
   const { sessionKey: _key, selectedProviderId, ...selection } = display;
+
+  // 查找插件渠道（如果宿主 selectedProviderId 指向插件渠道）
   const channel = state.pluginChannels?.[display.selectedCli]?.find(item =>
     pluginProviderId(item.id) === selectedProviderId);
+
+  // 引擎切换时必须重置渠道选择
+  const engineChanged = state.selectedCli !== display.selectedCli;
+
+  // 确定渠道类型和 ID（优先使用宿主提供的 selectedProviderId）
+  let activeChannelType: "system" | "plugin";
+  let activePluginChannelId: string | undefined;
+  let finalProviderId: string;
+
+  if (selectedProviderId) {
+    // 宿主提供了明确的 providerId（来自 session.provider 或 selectedChannels[engine]）
+    finalProviderId = selectedProviderId;
+    if (isPluginProviderId(selectedProviderId)) {
+      activeChannelType = "plugin";
+      activePluginChannelId = channel?.id;
+    } else {
+      activeChannelType = "system";
+      activePluginChannelId = undefined;
+    }
+  } else if (engineChanged) {
+    // 引擎切换且宿主未提供 providerId，重置为系统渠道
+    finalProviderId = "";
+    activeChannelType = "system";
+    activePluginChannelId = undefined;
+  } else {
+    // 宿主未提供 providerId 且未切换引擎，保留插件当前选择（兼容旧版宿主）
+    finalProviderId = state.selectedProviderId || "";
+    activeChannelType = state.activeChannelType || "system";
+    activePluginChannelId = state.activePluginChannelId;
+  }
+
   return {
     ...state,
     ...selection,
-    ...(selectedProviderId ? { selectedProviderId } : {}),
-    ...(selectedProviderId ? {
-      activeChannelType: isPluginProviderId(selectedProviderId) ? "plugin" as const : "system" as const,
-      activePluginChannelId: channel?.id,
-    } : {}),
-    ...(state.selectedCli !== display.selectedCli ? {
-      selectedProviderId: selectedProviderId || "", activeChannelType: channel ? "plugin" as const : "system" as const, activePluginChannelId: channel?.id,
-    } : {}),
+    selectedProviderId: finalProviderId,
+    activeChannelType,
+    activePluginChannelId,
   };
 }
 

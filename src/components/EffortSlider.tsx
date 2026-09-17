@@ -1,6 +1,7 @@
 import { React } from "../react-context";
 import type { EffortLevel } from "../types";
 import { EFFORT_LEVELS } from "./EffortSection";
+import { FlameOverlay } from "./EffortFlame";
 
 interface EffortSliderProps {
   position: number;
@@ -110,12 +111,7 @@ export function EffortSlider({
             }} />
           ))}
         </div>
-        {isMax && !reducedMotion && visible && (
-          <React.Suspense fallback={null}>
-            {/* Lazy load FlameOverlay */}
-            {React.lazy(() => import("./EffortFlame").then(m => ({ default: m.FlameOverlay })))()}
-          </React.Suspense>
-        )}
+        {isMax && !reducedMotion && visible && <FlameOverlay />}
         <input
           className="ms-range"
           type="range"
