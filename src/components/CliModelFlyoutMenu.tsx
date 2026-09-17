@@ -673,8 +673,10 @@ export function CliModelFlyoutMenu({
   };
 
   const handleSearchFocus = () => {
-    // 点击搜索框时立即强制拉取最新模型列表
-    void handleFetchModels();
+    // 只在当前渠道还没有模型数据时才拉取，避免重复请求禁用输入框
+    if (catalogModelOptions.length === 0) {
+      void handleFetchModels();
+    }
   };
 
   const handleAddCustomModel = async (modelId = customInput) => {
