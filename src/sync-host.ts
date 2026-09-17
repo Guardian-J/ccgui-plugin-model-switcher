@@ -520,12 +520,31 @@ export function patchHostSessionEffort(
   session: HostSession | null,
   live?: HostSessionState | null,
 ): boolean {
-  if (live) {
-    const msg = `直接改 SessionState.activeEffort = ${effort}`;
-    console.warn(`[model-switcher] ${msg}`);
-    lastDiagnostic = msg;
-    live.activeEffort = effort;
-    return true;
+  if (live && store) {
+    const state = store.getState();
+    const active = session ?? state.active ?? null;
+    if (active?.sessionId) {
+      const key = sessionStoreKey(engine, active.sessionId, active.workspacePath);
+      const storeSession = (state.bySession as Record<string, unknown>)?.[key] as HostSessionState | undefined;
+      if (storeSession && storeSession === live) {
+        const msg = `同引用：直接改 activeEffort = ${effort}`;
+        console.warn(`[model-switcher] ${msg}`);
+        lastDiagnostic = msg;
+        live.activeEffort = effort;
+        return true;
+      }
+      const msg = `引用不同：setState 改 bySession[${key}].activeEffort = ${effort}`;
+      console.warn(`[model-switcher] ${msg}`);
+      lastDiagnostic = msg;
+      store.setState((s) => {
+        const bySession = { ...((s.bySession as Record<string, Record<string, unknown>>) ?? {}) };
+        const current = { ...(bySession[key] ?? {}) };
+        current.activeEffort = effort;
+        bySession[key] = current;
+        return { bySession };
+      });
+      return true;
+    }
   }
   if (!store) {
     const msg = "找不到 store，无法 patch";
