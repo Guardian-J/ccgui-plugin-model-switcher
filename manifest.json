@@ -1,7 +1,7 @@
 {
   "id": "model-switcher",
   "name": "模型与供应商助手",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "minAppVersion": "1.0.0",
   "sdkVersion": "*",
   "author": "Guardian-J",

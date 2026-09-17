@@ -752,7 +752,8 @@ export async function applyModelSelectionToHost(params: {
     throw new Error("无法连接宿主 CLI 切换入口，请重载插件后重试");
   }
   if (effort && !patched && active?.sessionId) {
-    throw new Error("无法写入已有会话推理强度，请重载插件后重试");
+    // 已有会话 effort patch 失败时仅记录警告，不阻断渠道/模型切换
+    console.warn("[model-switcher] 已有会话 effort patch 失败，渠道切换继续执行");
   }
 
   // 3. 同步写入系统后端 AppSettings（确保新会话与默认配置生效）
