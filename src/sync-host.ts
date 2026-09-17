@@ -19,6 +19,31 @@ export interface HostStoreActions {
   setActiveEngine?: (engine: string) => unknown;
 }
 
+/** 宿主 zustand store；发请求读 bySession[key].activeEffort。 */
+export interface HostChatStore {
+  getState: () => {
+    active?: HostSession | null;
+    bySession?: Record<string, { activeEffort?: string | null; activeModel?: string | null }>;
+    efforts?: Record<string, string>;
+    setEffort?: (engine: string, effort: string) => unknown;
+    setModel?: (engine: string, model: string) => unknown;
+    setActiveEngine?: (engine: string) => unknown;
+  };
+  setState: (
+    partial:
+      | Record<string, unknown>
+      | ((s: Record<string, unknown>) => Record<string, unknown>),
+  ) => void;
+}
+
+/** MessageTimeline / SessionTimeline 拿到的 bySession 切片，和 store 是同一引用。 */
+export interface HostSessionState {
+  messages: unknown[];
+  streaming: boolean;
+  activeEffort?: string | null;
+  activeModel?: string | null;
+}
+
 interface HostCliMenuProps extends HostCliMenuCallbacks {
   value?: string;
   models?: Record<string, string>;
@@ -298,15 +323,99 @@ function isHostStoreActions(value: unknown): value is HostStoreActions {
   return typeof rec.setEffort === "function" && typeof rec.setModel === "function" && typeof rec.pinModels === "function";
 }
 
-function scanFiberHooks(fiber: { memoizedState?: unknown }): HostStoreActions | null {
-  let hook = fiber.memoizedState as { memoizedState?: unknown; next?: unknown } | null;
+function isHostChatStore(value: unknown): value is HostChatStore {
+  if (!value || typeof value !== "object") return false;
+  const rec = value as Record<string, unknown>;
+  if (typeof rec.getState !== "function" || typeof rec.setState !== "function") return false;
+  try {
+    const state = (rec.getState as () => unknown)();
+    if (!state || typeof state !== "object") return false;
+    const s = state as Record<string, unknown>;
+    return !!s.bySession && typeof s.bySession === "object" && "active" in s;
+  } catch {
+    return false;
+  }
+}
+
+export function isHostSessionState(value: unknown): value is HostSessionState {
+  if (!value || typeof value !== "object") return false;
+  const rec = value as Record<string, unknown>;
+  return Array.isArray(rec.messages) && typeof rec.streaming === "boolean";
+}
+
+function walkHookValues(fiber: { memoizedState?: unknown }, visit: (value: unknown) => boolean): boolean {
+  let hook = fiber.memoizedState as { memoizedState?: unknown; queue?: unknown; next?: unknown } | null;
   for (let n = 0; hook && n < 80; n++, hook = (hook.next ?? null) as typeof hook) {
     if (!hook || typeof hook !== "object") break;
-    const value = hook.memoizedState;
-    if (isHostStoreActions(value)) return value;
-    if (value && typeof value === "object" && isHostStoreActions((value as { current?: unknown }).current)) {
-      return (value as { current: HostStoreActions }).current;
+    for (const value of [hook.memoizedState, hook.queue, (hook.queue as { getState?: unknown } | undefined)]) {
+      if (visit(value)) return true;
+      if (value && typeof value === "object") {
+        const rec = value as Record<string, unknown>;
+        if (visit(rec.current) || visit(rec.getSnapshot) || visit(rec.value) || visit(rec.store)) return true;
+      }
     }
+  }
+  return false;
+}
+
+function scanFiberHooks(fiber: { memoizedState?: unknown }): HostStoreActions | null {
+  let found: HostStoreActions | null = null;
+  walkHookValues(fiber, (value) => {
+    if (isHostStoreActions(value)) {
+      found = value;
+      return true;
+    }
+    return false;
+  });
+  return found;
+}
+
+function scanFiberStore(fiber: { memoizedState?: unknown }): HostChatStore | null {
+  let found: HostChatStore | null = null;
+  walkHookValues(fiber, (value) => {
+    if (isHostChatStore(value)) {
+      found = value;
+      return true;
+    }
+    return false;
+  });
+  return found;
+}
+
+function scanFiberSessionState(fiber: {
+  memoizedState?: unknown;
+  memoizedProps?: Record<string, unknown>;
+}): HostSessionState | null {
+  const fromProps = fiber.memoizedProps?.session;
+  if (isHostSessionState(fromProps)) return fromProps;
+  let found: HostSessionState | null = null;
+  walkHookValues(fiber, (value) => {
+    if (isHostSessionState(value)) {
+      found = value;
+      return true;
+    }
+    return false;
+  });
+  return found;
+}
+
+function bfsSessionState(root: unknown): HostSessionState | null {
+  if (!root || typeof root !== "object") return null;
+  const queue: unknown[] = [root];
+  const visited = new Set<unknown>();
+  while (queue.length > 0 && visited.size < 240) {
+    const node = queue.shift() as {
+      child?: unknown;
+      sibling?: unknown;
+      memoizedProps?: Record<string, unknown>;
+      memoizedState?: unknown;
+    } | undefined;
+    if (!node || visited.has(node)) continue;
+    visited.add(node);
+    const found = scanFiberSessionState(node);
+    if (found) return found;
+    if (node.child) queue.push(node.child);
+    if (node.sibling) queue.push(node.sibling);
   }
   return null;
 }
@@ -322,22 +431,106 @@ export function findHostStoreActionsFromFiber(
   return null;
 }
 
+export function findHostChatStoreFromFiber(
+  fiber: { return?: unknown; memoizedState?: unknown } | null,
+): HostChatStore | null {
+  for (let depth = 0; fiber && depth < 80; depth++, fiber = (fiber.return ?? null) as typeof fiber) {
+    const found = scanFiberStore(fiber);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** 从 Fiber 找到宿主 bySession 切片；和 sendPrompt 读的是同一对象。 */
+export function findHostSessionStateFromFiber(
+  fiber: { return?: unknown; memoizedState?: unknown; memoizedProps?: Record<string, unknown> } | null,
+): HostSessionState | null {
+  for (let depth = 0; fiber && depth < 80; depth++, fiber = (fiber.return ?? null) as typeof fiber) {
+    const found = bfsSessionState(fiber);
+    if (found) return found;
+  }
+  return null;
+}
+
+function hostFiberStarts(anchor?: HTMLElement | null): Array<HTMLElement | null> {
+  return [
+    findBuiltinTriggerButton(anchor),
+    anchor ?? null,
+    typeof document === "undefined" ? null : document.querySelector('[data-ccgui-plugin-model-switcher="true"]'),
+  ];
+}
+
 /**
  * 从隐藏的原生 CliMenu 向上找到 ChatConversation 的 zustand actions。
  * Fiber 上的 onEffortChange 只保证触发 UI 回调；已有会话发请求读的是 setEffort 写入的 activeEffort。
  */
 function findHostStoreActions(anchor?: HTMLElement | null): HostStoreActions | null {
-  const starts: Array<HTMLElement | null> = [
-    findBuiltinTriggerButton(anchor),
-    anchor ?? null,
-    typeof document === "undefined" ? null : document.querySelector('[data-ccgui-plugin-model-switcher="true"]'),
-  ];
-  for (const el of starts) {
+  for (const el of hostFiberStarts(anchor)) {
     if (!el) continue;
     const found = findHostStoreActionsFromFiber(committedFiber(el));
     if (found) return found;
   }
   return null;
+}
+
+function findHostChatStore(anchor?: HTMLElement | null): HostChatStore | null {
+  for (const el of hostFiberStarts(anchor)) {
+    if (!el) continue;
+    const found = findHostChatStoreFromFiber(committedFiber(el));
+    if (found) return found;
+  }
+  return null;
+}
+
+function findHostSessionState(anchor?: HTMLElement | null): HostSessionState | null {
+  for (const el of hostFiberStarts(anchor)) {
+    if (!el) continue;
+    const found = findHostSessionStateFromFiber(committedFiber(el));
+    if (found) return found;
+  }
+  const timeline = findTimelineFiber();
+  if (timeline) {
+    const found = findHostSessionStateFromFiber(
+      timeline as { return?: unknown; memoizedState?: unknown; memoizedProps?: Record<string, unknown> },
+    );
+    if (found) return found;
+  }
+  return null;
+}
+
+function sessionStoreKey(engine: string, sessionId: string | null, workspacePath: string): string {
+  return sessionId ? `${engine}/${sessionId}` : `new:${engine}:${workspacePath}`;
+}
+
+/**
+ * 已有会话发请求读 bySession[key].activeEffort。
+ * 禁止走 setEffort：它会 remember_session_effort → refreshSessions，旧 list 可能把 max 盖回 high。
+ * 优先原地改 Fiber 上的 SessionState（和 store 同一引用）。
+ */
+export function patchHostSessionEffort(
+  store: HostChatStore | null,
+  engine: string,
+  effort: string,
+  session: HostSession | null,
+  live?: HostSessionState | null,
+): boolean {
+  if (live) {
+    live.activeEffort = effort;
+    return true;
+  }
+  if (!store) return false;
+  const state = store.getState();
+  const active = session ?? state.active ?? null;
+  if (!active || active.engine !== engine || !active.sessionId) return false;
+  const key = sessionStoreKey(engine, active.sessionId, active.workspacePath);
+  store.setState((s) => {
+    const bySession = { ...((s.bySession as Record<string, Record<string, unknown>>) ?? {}) };
+    const current = { ...(bySession[key] ?? {}) };
+    current.activeEffort = effort;
+    bySession[key] = current;
+    return { bySession };
+  });
+  return true;
 }
 
 /**
@@ -449,15 +642,17 @@ export async function applyModelSelectionToHost(params: {
   }
 
   const callbacks = getHostCliMenuProps();
-  const actions = findHostStoreActions();
-  const active = callbacks?.session !== undefined ? callbacks.session : getHostSession();
+  const store = findHostChatStore();
+  const actions = store ? undefined : findHostStoreActions();
+  const active = callbacks?.session !== undefined ? callbacks.session : (store?.getState().active ?? getHostSession());
+  const liveSession = effort && active?.sessionId ? findHostSessionState() : null;
+  const patched = effort ? patchHostSessionEffort(store, engine, effort, active, liveSession) : false;
 
   // 1. 先同步 localStorage，确保数据就绪
   if (effort) syncLocalStorage(engine, finalModel, effort);
   else syncLocalStorage(engine, finalModel, active?.effort || "");
 
-  // 2. 优先调用宿主 zustand setEffort：已有会话会同步写入 bySession.activeEffort
-  //    Fiber 上的 onEffortChange 只是 UI 回调，发请求并不读 tab.effort
+  // 2. 已有会话直接改 SessionState（避免 setEffort 触发 refreshSessions 覆盖）；新会话改引擎默认
   try {
     if (actions?.setActiveEngine) {
       actions.setActiveEngine(engine);
@@ -472,11 +667,14 @@ export async function applyModelSelectionToHost(params: {
     } else if (callbacks?.onModelChange) {
       callbacks.onModelChange(engine, finalModel);
     }
-    if (effort) {
-      if (actions?.setEffort) {
-        await Promise.resolve(actions.setEffort(engine, effort));
-      } else if (callbacks?.onEffortChange) {
-        callbacks.onEffortChange(engine, effort);
+    if (effort && !patched) {
+      // 已有会话已通过 patchHostSessionEffort 改了 SessionState 或 bySession，不再走 setEffort
+      if (!active?.sessionId) {
+        if (actions?.setEffort) {
+          await Promise.resolve(actions.setEffort(engine, effort));
+        } else if (callbacks?.onEffortChange) {
+          callbacks.onEffortChange(engine, effort);
+        }
       }
     }
   } catch (err) {
@@ -487,11 +685,8 @@ export async function applyModelSelectionToHost(params: {
   if (!actions && !callbacks && active && active.engine !== engine) {
     throw new Error("无法连接宿主 CLI 切换入口，请重载插件后重试");
   }
-  // 已有会话发请求读的是内存里的 activeEffort。
-  // 禁止再走 remember_session_effort：它会触发 sessions_changed，refreshSessions
-  // 可能用旧的 listSessions 结果把刚写入的 max 盖回 high。
-  if (effort && !actions?.setEffort && !callbacks?.onEffortChange) {
-    throw new Error("无法写入宿主推理强度，请重载插件后重试");
+  if (effort && !patched && active?.sessionId) {
+    throw new Error("无法写入已有会话推理强度，请重载插件后重试");
   }
 
   // 3. 同步写入系统后端 AppSettings（确保新会话与默认配置生效）

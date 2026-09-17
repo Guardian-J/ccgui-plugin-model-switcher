@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findHostStoreActionsFromFiber, normalizeEffort } from "./sync-host";
+import { findHostChatStoreFromFiber, findHostStoreActionsFromFiber, normalizeEffort, patchHostSessionEffort, type HostChatStore } from "./sync-host";
 
 describe("normalizeEffort", () => {
   it("接受 max 和 ultra", () => {
@@ -49,5 +49,54 @@ describe("findHostStoreActionsFromFiber", () => {
       },
     };
     expect(findHostStoreActionsFromFiber(fiber)).toBeNull();
+  });
+});
+
+describe("findHostChatStoreFromFiber", () => {
+  it("从 useSyncExternalStore 的 queue 找到 store", () => {
+    const store: HostChatStore = {
+      getState: () => ({
+        active: { engine: "claude", sessionId: "s1", workspacePath: "/ws" },
+        bySession: { "claude/s1": { activeEffort: "high" } },
+      }),
+      setState: () => {},
+    };
+    const fiber = { memoizedState: { queue: store, next: null } };
+    expect(findHostChatStoreFromFiber(fiber)).toBe(store);
+  });
+});
+
+describe("patchHostSessionEffort", () => {
+  it("已有会话优先调用 store.setEffort", () => {
+    const calls: Array<[string, string]> = [];
+    const store: HostChatStore = {
+      getState: () => ({
+        active: { engine: "claude", sessionId: "s1", workspacePath: "/ws" },
+        bySession: { "claude/s1": { activeEffort: "high" } },
+        setEffort: (engine, effort) => { calls.push([engine, effort]); },
+      }),
+      setState: () => {},
+    };
+    expect(patchHostSessionEffort(store, "claude", "max", null)).toBe(true);
+    expect(calls).toEqual([["claude", "max"]]);
+  });
+
+  it("没有 setEffort 时直接改 bySession.activeEffort", () => {
+    let next: Record<string, unknown> | null = null;
+    const store: HostChatStore = {
+      getState: () => ({
+        active: { engine: "claude", sessionId: "s1", workspacePath: "/ws" },
+        bySession: { "claude/s1": { activeEffort: "high" } },
+      }),
+      setState: (partial) => {
+        next = typeof partial === "function"
+          ? partial({ bySession: { "claude/s1": { activeEffort: "high" } } })
+          : partial;
+      },
+    };
+    expect(patchHostSessionEffort(store, "claude", "max", {
+      engine: "claude", sessionId: "s1", workspacePath: "/ws",
+    })).toBe(true);
+    expect((next as { bySession: Record<string, { activeEffort: string }> }).bySession["claude/s1"].activeEffort).toBe("max");
   });
 });
