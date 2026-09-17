@@ -510,8 +510,7 @@ export function getLastDiagnostic(): string {
 
 /**
  * 已有会话发请求读 bySession[key].activeEffort。
- * 禁止走 setEffort：它会 remember_session_effort → refreshSessions，旧 list 可能把 max 盖回 high。
- * 优先原地改 Fiber 上的 SessionState（和 store 同一引用）。
+ * 优先调用宿主提供的 __ccgui_patchSessionEffort API。
  */
 export function patchHostSessionEffort(
   store: HostChatStore | null,
@@ -521,6 +520,24 @@ export function patchHostSessionEffort(
   live?: HostSessionState | null,
 ): boolean {
   console.warn(`[model-switcher] patchHostSessionEffort 入参: store=${store ? "✓" : "✗"}, live=${live ? "✓" : "✗"}, sessionId=${session?.sessionId ?? "null"}`);
+
+  // 优先使用宿主提供的 API（如果存在）
+  const patchAPI = (window as unknown as { __ccgui_patchSessionEffort?: (engine: string, sessionId: string, workspacePath: string | undefined, effort: string) => void }).__ccgui_patchSessionEffort;
+  if (patchAPI && session?.sessionId) {
+    console.warn(`[model-switcher] 调用宿主 API: __ccgui_patchSessionEffort(${engine}, ${session.sessionId}, ${effort})`);
+    try {
+      patchAPI(engine, session.sessionId, session.workspacePath, effort);
+      lastDiagnostic = `host API called`;
+      return true;
+    } catch (err) {
+      console.warn(`[model-switcher] 宿主 API 调用失败，fallback 到插件逻辑:`, err);
+      // 继续执行下面的 fallback 逻辑
+    }
+  } else if (session?.sessionId && !patchAPI) {
+    console.warn(`[model-switcher] 宿主未提供 __ccgui_patchSessionEffort API（旧版本），使用 fallback 逻辑`);
+  }
+
+  // Fallback：原有逻辑
   if (live && store) {
     const state = store.getState();
     const active = session ?? state.active ?? null;

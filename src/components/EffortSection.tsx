@@ -1,6 +1,6 @@
 import { React, useEffect, useMemo, useRef, useState } from "../react-context";
 import type { CliEngineId, EffortLevel } from "../types";
-import { FlameOverlay } from "./EffortFlame";
+import { EffortSlider } from "./EffortSlider";
 
 export const EFFORT_LEVELS: readonly EffortLevel[] = [
   "low",
@@ -20,14 +20,7 @@ interface Props {
   onToggle1M: (enabled: boolean) => void;
 }
 
-export function EffortSection({
-  engine,
-  effort,
-  onChange,
-  disabled = false,
-  enable1M,
-  onToggle1M,
-}: Props) {
+function useEffortState(effort: EffortLevel, disabled: boolean) {
   const savedIndex = Math.max(0, EFFORT_LEVELS.indexOf(effort));
   const [preview, setPreview] = useState<number | null>(null);
   const draft = useRef(savedIndex);
@@ -36,53 +29,41 @@ export function EffortSection({
   const saving = useRef(false);
   const [pending, setPending] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const position = preview ?? savedIndex;
-  const index = Math.round(position);
-  const fraction = position / (EFFORT_LEVELS.length - 1);
-  const dragging = pointer.current !== null;
-  const isMax = index === EFFORT_LEVELS.length - 1 && !dragging && !keyboard.current && !pending;
-  const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
-  const [visible, setVisible] = useState(() => !document.hidden);
-  useEffect(() => {
-    const updateVisibility = () => setVisible(!document.hidden);
-    document.addEventListener("visibilitychange", updateVisibility);
-    return () => document.removeEventListener("visibilitychange", updateVisibility);
-  }, []);
+
   useEffect(() => {
     if (!saving.current && pointer.current === null && !keyboard.current) {
       draft.current = savedIndex;
       setPreview(null);
     }
   }, [savedIndex]);
-  const updatePreview = (value: number) => {
-    draft.current = value;
-    setPreview(value);
+
+  return {
+    savedIndex,
+    preview,
+    draft,
+    pointer,
+    keyboard,
+    saving,
+    pending,
+    saveError,
+    setPreview,
+    setPending,
+    setSaveError,
   };
-  const cancelPreview = () => {
-    pointer.current = null;
-    keyboard.current = false;
-    draft.current = savedIndex;
-    setPreview(null);
-  };
-  const commit = async () => {
-    if (saving.current) return;
-    const next = Math.round(draft.current);
-    if (disabled || next === savedIndex) { cancelPreview(); return; }
-    updatePreview(next);
-    setSaveError(null);
-    saving.current = true;
-    setPending(true);
-    try {
-      // Only the final stop reaches host IPC/storage; the parent reports save failures.
-      await onChange(EFFORT_LEVELS[next]);
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : "推理强度保存失败，请重试");
-    } finally {
-      saving.current = false;
-      setPending(false);
-      setPreview(null);
-    }
-  };
+}
+
+function useMediaQueries() {
+  const [reducedMotion, setReducedMotion] = useState(() =>
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false
+  );
+  const [visible, setVisible] = useState(() => !document.hidden);
+
+  useEffect(() => {
+    const updateVisibility = () => setVisible(!document.hidden);
+    document.addEventListener("visibilitychange", updateVisibility);
+    return () => document.removeEventListener("visibilitychange", updateVisibility);
+  }, []);
+
   useEffect(() => {
     const media = window.matchMedia?.("(prefers-reduced-motion: reduce)");
     if (!media) return;
@@ -90,13 +71,69 @@ export function EffortSection({
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
+
+  return { reducedMotion, visible };
+}
+
+export function EffortSection({
+  engine,
+  effort,
+  onChange,
+  disabled = false,
+  enable1M,
+  onToggle1M,
+}: Props) {
+  const state = useEffortState(effort, disabled);
+  const { reducedMotion, visible } = useMediaQueries();
+
+  const position = state.preview ?? state.savedIndex;
+  const index = Math.round(position);
+  const dragging = state.pointer.current !== null;
+  const isMax = index === EFFORT_LEVELS.length - 1 && !dragging && !state.keyboard.current && !state.pending;
+
   const blast = useMemo(() => EFFORT_LEVELS.map(() => ({
-    x: -(70 + Math.random() * 130), y: (Math.random() - 0.5) * 70,
-    rotate: (Math.random() - 0.5) * 720, delay: Math.random() * 0.3,
+    x: -(70 + Math.random() * 130),
+    y: (Math.random() - 0.5) * 70,
+    rotate: (Math.random() - 0.5) * 720,
+    delay: Math.random() * 0.3,
   })), [isMax]);
 
+  const updatePreview = (value: number) => {
+    state.draft.current = value;
+    state.setPreview(value);
+  };
+
+  const cancelPreview = () => {
+    state.pointer.current = null;
+    state.keyboard.current = false;
+    state.draft.current = state.savedIndex;
+    state.setPreview(null);
+  };
+
+  const commit = async () => {
+    if (state.saving.current) return;
+    const next = Math.round(state.draft.current);
+    if (disabled || next === state.savedIndex) {
+      cancelPreview();
+      return;
+    }
+    updatePreview(next);
+    state.setSaveError(null);
+    state.saving.current = true;
+    state.setPending(true);
+    try {
+      await onChange(EFFORT_LEVELS[next]);
+    } catch (error) {
+      state.setSaveError(error instanceof Error ? error.message : "推理强度保存失败，请重试");
+    } finally {
+      state.saving.current = false;
+      state.setPending(false);
+      state.setPreview(null);
+    }
+  };
+
   return (
-    <div className="ms-effort" data-dragging={dragging || keyboard.current || undefined}>
+    <div className="ms-effort" data-dragging={dragging || state.keyboard.current || undefined}>
       <div className="ms-effort-heading">
         <span className="ms-effort-label">
           推理强度 <output key={EFFORT_LEVELS[index]}>{EFFORT_LEVELS[index]}</output>
@@ -106,7 +143,7 @@ export function EffortSection({
           role="switch"
           aria-label="1M 上下文"
           aria-checked={engine === "claude" && enable1M}
-          disabled={engine !== "claude" || disabled || pending}
+          disabled={engine !== "claude" || disabled || state.pending}
           title={engine === "claude" ? "1M 上下文（需要模型支持）" : "上下文容量由 CLI 和模型配置决定，不支持通过此开关开启 1M"}
           onClick={() => onToggle1M(!enable1M)}
           className="ms-switch-button"
@@ -121,67 +158,24 @@ export function EffortSection({
         <span>更快</span>
         <span>更深入</span>
       </div>
-      <div className="ms-effort-slider">
-        <div className="ms-effort-track" data-max={isMax && !reducedMotion || undefined}>
-          <div
-            className="ms-effort-fill"
-            style={{ width: `calc(${fraction} * (100% - 21px) + 21px)` }}
-          />
-          <div className="ms-effort-ticks" aria-hidden>
-            {EFFORT_LEVELS.map((level, i) => (
-              <span key={level} style={{
-                opacity: isMax && !reducedMotion ? 0 : i > index ? 0.3 : 1,
-                transform: isMax && !reducedMotion ? `translate(${blast[i].x}px, ${blast[i].y}px) rotate(${blast[i].rotate}deg)` : "none",
-                transitionDelay: isMax && !reducedMotion ? `${blast[i].delay}s` : "0s",
-              }} />
-            ))}
-          </div>
-          {isMax && !reducedMotion && visible && <FlameOverlay />}
-          <input
-            className="ms-range"
-            type="range"
-            min={0}
-            max={EFFORT_LEVELS.length - 1}
-            step={0.01}
-            value={position}
-            disabled={disabled || pending}
-            aria-label="推理强度"
-            aria-valuetext={EFFORT_LEVELS[index]}
-            onPointerDown={(e) => {
-              if (e.button !== 0 || saving.current || disabled) return;
-              pointer.current = e.pointerId;
-              updatePreview(position);
-              e.currentTarget.setPointerCapture(e.pointerId);
-            }}
-            onPointerUp={(e) => {
-              if (pointer.current !== e.pointerId) return;
-              pointer.current = null;
-              void commit();
-            }}
-            onPointerCancel={cancelPreview}
-            onLostPointerCapture={() => { if (pointer.current !== null) cancelPreview(); }}
-            onKeyDown={(e) => {
-              const changes: Record<string, number> = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1, PageDown: -1, PageUp: 1 };
-              if (!(e.key in changes) && e.key !== "Home" && e.key !== "End") return;
-              e.preventDefault();
-              if (!keyboard.current) draft.current = position;
-              keyboard.current = true;
-              updatePreview(e.key === "Home" ? 0 : e.key === "End" ? EFFORT_LEVELS.length - 1
-                : Math.max(0, Math.min(EFFORT_LEVELS.length - 1, Math.round(draft.current) + changes[e.key])));
-            }}
-            onKeyUp={() => { if (keyboard.current) { keyboard.current = false; void commit(); } }}
-            onBlur={() => {
-              if (pointer.current !== null) cancelPreview();
-              else if (keyboard.current) { keyboard.current = false; void commit(); }
-            }}
-            onChange={(e) => {
-              updatePreview(Number(e.target.value));
-              if (pointer.current === null && !keyboard.current) void commit();
-            }}
-          />
-        </div>
-      </div>
-      {saveError && <div role="alert">{saveError}</div>}
+      <EffortSlider
+        position={position}
+        savedIndex={state.savedIndex}
+        disabled={disabled}
+        pending={state.pending}
+        isMax={isMax}
+        reducedMotion={reducedMotion}
+        visible={visible}
+        blast={blast}
+        onUpdatePreview={updatePreview}
+        onCommit={commit}
+        onCancel={cancelPreview}
+        pointerRef={state.pointer}
+        keyboardRef={state.keyboard}
+        savingRef={state.saving}
+        draftRef={state.draft}
+      />
+      {state.saveError && <div role="alert">{state.saveError}</div>}
     </div>
   );
 }

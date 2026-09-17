@@ -1,6 +1,5 @@
 import { React, useState } from "../react-context";
 import type { SystemProviderChannel, CustomPluginChannel, ChannelFormState } from "../types";
-import { PI_FAMILY_API_PROTOCOLS } from "../types";
 import {
   ProjectEngineIcon,
   CheckIcon,
@@ -9,13 +8,8 @@ import {
   EyeIcon,
   EyeOffIcon,
 } from "../icons";
-
-const PROTOCOL_LABELS: Record<string, string> = {
-  "openai-completions": "OpenAI Completions",
-  "openai-responses": "OpenAI Responses",
-  "anthropic-messages": "Anthropic Messages",
-  "google-generative-ai": "Google Generative AI",
-};
+import { ChannelForm } from "./ChannelForm";
+import { ChannelList } from "./ChannelList";
 
 const ROW = "ms-row";
 const ROW_ON = "is-selected";
@@ -42,7 +36,7 @@ function CloseIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-function SecretInput({
+export function SecretInput({
   value,
   onChange,
   placeholder,
@@ -83,7 +77,7 @@ function SecretInput({
   );
 }
 
-function ChannelRow({
+export function ChannelRow({
   name,
   url,
   detail,
@@ -224,14 +218,16 @@ export function ChannelSection({
   channelBrand,
   children,
 }: ChannelSectionProps) {
+  const shouldShowForm = showAddChannel && (!channelSupportError || viewingChannelId);
+  const channelCount = channelTab === "system" ? systemChannels.length : pluginCustomChannels.length;
+
   return (
     <div className="ms-channels">
       <div className="ms-section-heading">
         <h3>供应商渠道</h3>
-        <span className="ms-count">
-          {channelTab === "system" ? systemChannels.length : pluginCustomChannels.length}
-        </span>
+        <span className="ms-count">{channelCount}</span>
       </div>
+
       <div className="ms-channel-toolbar">
         <div className="ms-segments" role="group" aria-label="渠道来源">
           <button
@@ -252,7 +248,7 @@ export function ChannelSection({
           </button>
         </div>
         <span className="ms-actions">
-          {channelTab === "plugin" ? (
+          {channelTab === "plugin" && (
             <button
               type="button"
               aria-label={showAddChannel ? "收起" : "新增渠道"}
@@ -264,88 +260,23 @@ export function ChannelSection({
             >
               {showAddChannel ? <CloseIcon size={14} /> : <PlusIcon size={14} />}
             </button>
-          ) : null}
+          )}
         </span>
       </div>
 
-      {channelSupportError ? <p className="ms-empty" role="status">{channelSupportError}</p> : null}
+      {channelSupportError && <p className="ms-empty" role="status">{channelSupportError}</p>}
 
-      {showAddChannel && (!channelSupportError || viewingChannelId) ? (
-        <div className="ms-channel-form">
-          <label>
-            渠道名称
-            <input
-              value={channelForm.name}
-              readOnly={!!viewingChannelId}
-              onChange={(e) => onFormChange({ ...channelForm, name: e.target.value })}
-              placeholder="渠道名称"
-              className={FIELD}
-            />
-          </label>
-          <label>
-            Base URL
-            <input
-              value={channelForm.baseUrl}
-              readOnly={!!viewingChannelId}
-              onChange={(e) => onFormChange({ ...channelForm, baseUrl: e.target.value })}
-              placeholder="Base URL"
-              className={FIELD}
-            />
-          </label>
-          <label>
-            API Key
-            <SecretInput
-              key={`${viewingChannelId || editingChannelId || "new"}-key`}
-              value={channelForm.apiKey}
-              readOnly={!!viewingChannelId}
-              onChange={(value) => onFormChange({ ...channelForm, apiKey: value })}
-              placeholder="API Key"
-            />
-          </label>
-          {showProtocol ? (
-            <label>
-              协议类型
-              <select
-                value={channelForm.api}
-                disabled={!!viewingChannelId}
-                onChange={(e) => onFormChange({ ...channelForm, api: e.target.value })}
-                aria-label="协议类型"
-                className={FIELD}
-              >
-                {PI_FAMILY_API_PROTOCOLS.map((protocol) => (
-                  <option key={protocol} value={protocol}>
-                    {PROTOCOL_LABELS[protocol] || protocol}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          <label>
-            默认模型
-            <input
-              value={channelForm.model}
-              readOnly={!!viewingChannelId}
-              onChange={(e) => onFormChange({ ...channelForm, model: e.target.value })}
-              placeholder="默认模型 ID（可选）"
-              className={FIELD}
-            />
-          </label>
-          <div className="ms-form-actions">
-            <button type="button" onClick={onCloseForm} className="ms-button">
-              {viewingChannelId ? "关闭" : "取消"}
-            </button>
-            {viewingChannelId ? null : (
-              <button
-                type="button"
-                onClick={onSaveChannel}
-                className="ms-button ms-primary"
-              >
-                {editingChannelId ? "保存修改" : "保存"}
-              </button>
-            )}
-          </div>
-        </div>
-      ) : null}
+      {shouldShowForm && (
+        <ChannelForm
+          channelForm={channelForm}
+          onFormChange={onFormChange}
+          onSaveChannel={onSaveChannel}
+          onCloseForm={onCloseForm}
+          editingChannelId={editingChannelId}
+          viewingChannelId={viewingChannelId}
+          showProtocol={showProtocol}
+        />
+      )}
 
       <div
         className="ms-channel-list"
@@ -353,45 +284,22 @@ export function ChannelSection({
         aria-label="供应商渠道"
         aria-busy={loadingChannels}
       >
-        {channelTab === "system" ? (
-          systemChannels.length === 0 ? (
-            <span className="ms-empty">
-              {loadingChannels ? "正在加载…" : "尚未配置系统供应商"}
-            </span>
-          ) : (
-            systemChannels.map((ch) => (
-              <ChannelRow
-                key={ch.id}
-                disabled={fetchingModels}
-                selectDisabled={!!channelSupportError && !ch.isNative}
-                name={ch.name}
-                url={ch.baseUrl}
-                detail={ch.remark}
-                brand={channelBrand(ch.name, ch.model, ch.baseUrl, ch.isNative)}
-                selected={!isPluginActive && ch.id === selectedChannelId}
-                onSelect={() => onSelectSystemProvider(ch)}
-                onView={(e) => onViewSystemChannel(ch, e)}
-              />
-            ))
-          )
-        ) : pluginCustomChannels.length === 0 ? (
-          <span className="ms-empty">暂无独立渠道</span>
-        ) : (
-          pluginCustomChannels.map((ch) => (
-            <ChannelRow
-              key={ch.id}
-              disabled={fetchingModels}
-              selectDisabled={!!channelSupportError}
-              name={ch.name}
-              url={ch.baseUrl}
-              brand={channelBrand(ch.name, ch.model, ch.baseUrl)}
-              selected={isPluginActive && ch.id === selectedChannelId}
-              onSelect={() => onSelectPluginChannel(ch)}
-              onDelete={(e) => onDeletePluginChannel(ch.id, e)}
-              onEdit={channelSupportError ? undefined : (e) => onEditPluginChannel(ch, e)}
-            />
-          ))
-        )}
+        <ChannelList
+          channelTab={channelTab}
+          systemChannels={systemChannels}
+          pluginCustomChannels={pluginCustomChannels}
+          loadingChannels={loadingChannels}
+          fetchingModels={fetchingModels}
+          selectedChannelId={selectedChannelId}
+          isPluginActive={isPluginActive}
+          channelSupportError={channelSupportError}
+          onSelectSystemProvider={onSelectSystemProvider}
+          onSelectPluginChannel={onSelectPluginChannel}
+          onViewSystemChannel={onViewSystemChannel}
+          onEditPluginChannel={onEditPluginChannel}
+          onDeletePluginChannel={onDeletePluginChannel}
+          channelBrand={channelBrand}
+        />
       </div>
       {children}
     </div>
