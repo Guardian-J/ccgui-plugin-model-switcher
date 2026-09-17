@@ -515,14 +515,22 @@ export function patchHostSessionEffort(
   live?: HostSessionState | null,
 ): boolean {
   if (live) {
+    console.warn(`[model-switcher] 直接改 SessionState.activeEffort = ${effort}`);
     live.activeEffort = effort;
     return true;
   }
-  if (!store) return false;
+  if (!store) {
+    console.warn("[model-switcher] 找不到 store，无法 patch");
+    return false;
+  }
   const state = store.getState();
   const active = session ?? state.active ?? null;
-  if (!active || active.engine !== engine || !active.sessionId) return false;
+  if (!active || active.engine !== engine || !active.sessionId) {
+    console.warn("[model-switcher] active 不匹配或无 sessionId，跳过 patch");
+    return false;
+  }
   const key = sessionStoreKey(engine, active.sessionId, active.workspacePath);
+  console.warn(`[model-switcher] setState 改 bySession[${key}].activeEffort = ${effort}`);
   store.setState((s) => {
     const bySession = { ...((s.bySession as Record<string, Record<string, unknown>>) ?? {}) };
     const current = { ...(bySession[key] ?? {}) };
@@ -646,6 +654,8 @@ export async function applyModelSelectionToHost(params: {
   const actions = store ? undefined : findHostStoreActions();
   const active = callbacks?.session !== undefined ? callbacks.session : (store?.getState().active ?? getHostSession());
   const liveSession = effort && active?.sessionId ? findHostSessionState() : null;
+  console.warn(`[model-switcher] 切换到 ${engine} / ${finalModel} / ${effort ?? "无"}`);
+  console.warn(`[model-switcher] active.sessionId = ${active?.sessionId ?? "null"}, liveSession = ${liveSession ? "找到" : "null"}, store = ${store ? "找到" : "null"}`);
   const patched = effort ? patchHostSessionEffort(store, engine, effort, active, liveSession) : false;
 
   // 1. 先同步 localStorage，确保数据就绪
@@ -670,11 +680,14 @@ export async function applyModelSelectionToHost(params: {
     if (effort && !patched) {
       // 已有会话已通过 patchHostSessionEffort 改了 SessionState 或 bySession，不再走 setEffort
       if (!active?.sessionId) {
+        console.warn(`[model-switcher] 新会话走 setEffort/onEffortChange`);
         if (actions?.setEffort) {
           await Promise.resolve(actions.setEffort(engine, effort));
         } else if (callbacks?.onEffortChange) {
           callbacks.onEffortChange(engine, effort);
         }
+      } else {
+        console.warn(`[model-switcher] ⚠️ 已有会话但 patch 失败，effort 未写入`);
       }
     }
   } catch (err) {
