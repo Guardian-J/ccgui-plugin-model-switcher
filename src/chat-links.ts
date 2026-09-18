@@ -1,5 +1,6 @@
 import { LinkifyIt } from "linkify-it";
 import type { PluginContext, Disposer } from "./ccgui-plugin";
+import { invokeHost } from "./host-transport";
 import browserSource from "../scripts/open-browser.cjs?raw";
 
 const linkify = new LinkifyIt({ fuzzyLink: false, fuzzyEmail: false, fuzzyIP: false });
@@ -51,7 +52,6 @@ export async function openBrowser(ctx: PluginContext, value: string): Promise<vo
     window.open(url, '_blank', 'noopener,noreferrer');
     return;
   }
-  const { invokeHost } = await import('./host-transport');
   const result = await invokeHost<{ code: number | null }>('plugin_exec_run', {
     bin: 'node', args: ['-e', browserSource, '--', url], timeoutMs: 15000,
   });

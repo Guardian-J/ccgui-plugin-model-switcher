@@ -65,7 +65,6 @@ export async function fetchModelsFromProvider(
 
   for (const targetUrl of targetUrls) {
     try {
-      const { invokeHost } = await import("./host-transport");
       const res = await invokeHost<{ status: number; body: string }>("plugin_http_request", {
         method: "GET", url: targetUrl, headers,
       });
