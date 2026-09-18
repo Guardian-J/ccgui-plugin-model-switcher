@@ -109,7 +109,7 @@ CLI 配置如何应用取决于宿主版本：早期宿主可能改写原生文�
 
 | 项目 | 要求 |
 | --- | --- |
-| 宿主 | CC GUI，清单声明最低版本 `1.0.0`，插件 SDK 范围 `*`（兼容所有版本） |
+| 宿主 | CC GUI，清单声明最低版本 `1.0.5`，插件 SDK 范围 `^0.3.11` |
 | 平台 | Windows、macOS、Linux 桌面版；Web 模式不具备桌面执行桥能力 |
 | Node.js | 文件索引、桌面浏览器跳转、提示词清洗需要宿主能从 PATH 找到 `node`，并授予 `exec:node` 权限 |
 | 浏览器跳转 | Windows 使用 PowerShell，macOS 使用 `open`，Linux 使用 `xdg-open`；需配置默认浏览器 |

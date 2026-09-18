@@ -301,10 +301,12 @@ export function CliModelFlyoutMenu({
     };
   }, [activeEngine]);
 
+  // 引擎或会话切换时重新读取宿主当前渠道：切换会话页签后引擎可能不变，
+  // 但宿主的 current provider 已随会话变化，必须重跑才能恢复高亮
   useEffect(() => {
     void loadChannels(activeEngine);
     return () => { channelRequest.current++; };
-  }, [activeEngine]);
+  }, [activeEngine, sessionDisplay?.stableKey]);
 
   const pluginCustomChannels = useMemo(() => {
     return state.pluginChannels?.[activeEngine] || [];

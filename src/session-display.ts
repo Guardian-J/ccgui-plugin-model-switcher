@@ -78,10 +78,18 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
     activeChannelType = "system";
     activePluginChannelId = undefined;
   } else {
-    // 宿主未提供 providerId 且未切换引擎，保留插件当前选择（兼容旧版宿主）
-    finalProviderId = state.selectedProviderId || "";
-    activeChannelType = state.activeChannelType || "system";
-    activePluginChannelId = state.activePluginChannelId;
+    // 宿主未提供 providerId 且未切换引擎，优先从对话级记录恢复，兜底插件当前选择（兼容旧版宿主）
+    const sessionRecord = display.stableKey ? state.sessionChannels?.[display.stableKey] : undefined;
+    if (sessionRecord) {
+      finalProviderId = sessionRecord.selectedProviderId || "";
+      activeChannelType = sessionRecord.activeChannelType || "system";
+      activePluginChannelId = sessionRecord.activePluginChannelId;
+    } else {
+      // 无对话级记录，不继承其他会话的渠道状态，交由 loadChannels 从宿主取当前值
+      finalProviderId = "";
+      activeChannelType = "system";
+      activePluginChannelId = undefined;
+    }
   }
 
   return {

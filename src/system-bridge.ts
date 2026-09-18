@@ -888,14 +888,11 @@ export async function deleteCustomPluginChannel(
   if (skipHostWrite) return;
   if (isPiFamilyEngine(engine)) {
     await deletePiFamilyPluginChannel(engine, channelId);
-    // pi / omp 渠道配置存储在 models.yml / models.json，上面已删除；
-    // 宿主不支持通用 delete_provider 命令，跳过以避免异常中断后续缓存清理。
-  } else {
-    await invokeTauri("delete_provider", {
-      engine,
-      id: pluginProviderId(channelId),
-    });
   }
+  await invokeTauri("delete_provider", {
+    engine,
+    id: pluginProviderId(channelId),
+  });
   invalidateCliConfig();
   notifyCliConfigChanged();
 }

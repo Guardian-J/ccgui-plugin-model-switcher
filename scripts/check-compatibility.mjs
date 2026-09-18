@@ -461,6 +461,13 @@ for (const engine of ["claude", "codex", "kimi", "grok", "pi", "omp"]) {
     model: "alias",
     ...(isPiFamily ? { api: "openai-completions" } : {}),
   };
+  if (engine === "claude") {
+    // Claude CLI 独立渠道默认注入 attribution 与 env.ENABLE_TOOL_SEARCH
+    expectedJson.settingsConfig = {
+      attribution: { commit: "", pr: "" },
+      env: { ENABLE_TOOL_SEARCH: "true" },
+    };
+  }
   if (engine === "codex") {
     expectedJson.settingsConfig = {
       config: upsert.args.json.settingsConfig.config,
@@ -653,6 +660,28 @@ assert.equal((await scrub.checkScrubStatus(executableCtx)).status, "clean");
 console.log("Portable execution, host channel adapters and metadata-based model validation passed.");
 
 const display = await loadModule("../src/session-display.ts");
+{
+  // 切换会话页签后渠道高亮必须跟随会话：优先读对话级记录，无记录则清空交由宿主重新确定
+  const localSaved = { selectedCli: 'claude', selectedModel: '', effort: 'high', enable1MContext: false, selectedProviderId: 'leaked-from-other-session', activeChannelType: 'system' };
+  const withSessions = {
+    ...localSaved,
+    sessionChannels: {
+      A: { selectedCli: 'claude', selectedProviderId: 'provider-a', selectedModel: 'm', effort: 'high', enable1MContext: false, activeChannelType: 'system' },
+      B: { selectedCli: 'claude', selectedProviderId: 'plugin_model-switcher_b', selectedModel: 'm', effort: 'high', enable1MContext: false, activeChannelType: 'plugin', activePluginChannelId: 'b' },
+    },
+  };
+  const noProvider = { sessionKey: 'k', stableKey: 'A', selectedCli: 'claude', selectedModel: '', effort: 'high', enable1MContext: false };
+  assert.equal(display.withSessionDisplay(withSessions, noProvider).selectedProviderId, 'provider-a',
+    'A returning tab restores its own channel from the per-session record');
+  const pluginTab = display.withSessionDisplay(withSessions, { ...noProvider, stableKey: 'B' });
+  assert.equal(pluginTab.selectedProviderId, 'plugin_model-switcher_b', 'A plugin channel record survives a tab round-trip');
+  assert.equal(pluginTab.activeChannelType, 'plugin');
+  assert.equal(pluginTab.activePluginChannelId, 'b');
+  const freshTab = display.withSessionDisplay(withSessions, { ...noProvider, stableKey: 'C' });
+  assert.equal(freshTab.selectedProviderId, '', 'A tab without a record must not inherit another tab channel');
+  assert.equal(freshTab.activeChannelType, 'system');
+  assert.equal(freshTab.activePluginChannelId, undefined);
+}
 {
   const state = { selectedCli: 'omp', activeChannelType: 'plugin', activePluginChannelId: 'a', pluginChannels: { omp: [{ id: 'a' }, { id: 'b' }] } };
   const session = { sessionKey: 'session', selectedCli: 'omp', selectedModel: 'alias', effort: 'high', enable1MContext: false };
