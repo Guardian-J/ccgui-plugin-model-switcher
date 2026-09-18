@@ -1,7 +1,7 @@
 {
   "id": "model-switcher",
   "name": "模型与供应商助手",
-  "version": "1.0.13",
+  "version": "1.0.15",
   "minAppVersion": "1.0.0",
   "sdkVersion": "*",
   "author": "Guardian-J",
@@ -11,10 +11,10 @@
   "license": "MIT",
   "permissions": [
     "storage",
-    "ui:composer",
+    "ui:composer-status",
     "ui:markdown",
     "ui:settings-section",
-    "ui:status-bar",
+    "ui:statusbar",
     "ui:command",
     "theme",
     "i18n",
