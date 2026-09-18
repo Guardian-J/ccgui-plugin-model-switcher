@@ -254,10 +254,11 @@ export function CliModelFlyoutMenu({
       if (request !== channelRequest.current) return;
       setChannels(res.channels);
       setCurrentChannelId(res.current);
+      // 仅在完全无渠道选择时，用 res.current 作为兜底（让用户有个起点）
       setState((prev) => {
-        if (prev.activeChannelType === "plugin" || prev.selectedProviderId) return prev;
+        if (prev.selectedProviderId || prev.activeChannelType === "plugin") return prev;
         const hostId = res.current && !isPluginProviderId(res.current) ? res.current : null;
-        return hostId ? { ...prev, selectedProviderId: hostId } : prev;
+        return hostId ? { ...prev, selectedProviderId: hostId, activeChannelType: "system" } : prev;
       });
     } catch (e) {
       console.warn("加载系统供应商失败:", e);
@@ -305,6 +306,26 @@ export function CliModelFlyoutMenu({
   // 但宿主的 current provider 已随会话变化，必须重跑才能恢复高亮
   useEffect(() => {
     void loadChannels(activeEngine);
+
+    // 如果当前会话无对话级记录，立即保存当前状态（避免下次切换回来丢失）
+    const stableKey = sessionDisplay?.stableKey;
+    if (stableKey && !state.sessionChannels?.[stableKey] && state.selectedProviderId) {
+      const sessionChannels = {
+        ...state.sessionChannels,
+        [stableKey]: {
+          selectedCli: activeEngine,
+          selectedProviderId: state.selectedProviderId,
+          selectedModel: state.selectedModel,
+          effort: state.effort,
+          enable1MContext: state.enable1MContext,
+          activeChannelType: state.activeChannelType,
+          activePluginChannelId: state.activePluginChannelId,
+          activeChannelName: state.activeChannelName,
+        },
+      };
+      void onSave({ ...state, sessionChannels });
+    }
+
     return () => { channelRequest.current++; };
   }, [activeEngine, sessionDisplay?.stableKey]);
 
@@ -330,7 +351,10 @@ export function CliModelFlyoutMenu({
       if (p) return { ...p, model: p.model || "", isPlugin: true };
       return null;
     }
-    const sys = systemChannels.find((c) => c.id === (state.selectedProviderId || currentChannelId));
+    const targetId = state.selectedProviderId || currentChannelId;
+    const sys = systemChannels.find((c) => c.id === targetId)
+      // 若未明确选择且只有一个系统渠道，默认选中（兼容打开已有对话时 loadChannels 尚未完成）
+      || (!targetId && systemChannels.length === 1 ? systemChannels[0] : null);
     if (sys) {
       return {
         id: sys.id,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "./react-context";
 import { getHostSession, isConcreteModel } from "./selection-policy";
-import { findBuiltinTriggerButton, getHostCliMenuProps, repairLegacyHostModel } from "./sync-host";
+import { findBuiltinTriggerButton, getHostCliMenuProps, repairLegacyHostModel, findHostChatStoreFromFiber, committedFiber } from "./sync-host";
 import type { CliEngineId, EffortLevel, PluginState } from "./types";
 import { isPluginProviderId, pluginProviderId } from "./system-bridge";
 
@@ -32,7 +32,46 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
     host?.lastUsedEffort ||
     "high"
   );
-  const selectedProviderId = session?.provider || matchingHost?.selectedChannels?.[engine] || "";
+
+  // 会话级渠道优先级：
+  // 1. bySession[sessionKey].activeProvider（已创建会话的真实渠道）
+  // 2. localStorage activeSession.provider（新会话的渠道选择）
+  // 3. session.provider（React props，可能滞后）
+  // 4. selectedChannels[engine]（全局默认）
+  let selectedProviderId = "";
+
+  // 已创建的会话：从 bySession 读取
+  if (session?.sessionId) {
+    try {
+      const sessionKey = `${engine}/${session.sessionId}`;
+      const btn = findBuiltinTriggerButton(anchor);
+      if (btn) {
+        const fiber = committedFiber(btn);
+        const store = findHostChatStoreFromFiber(fiber);
+        if (store) {
+          const state = store.getState();
+          const bySessionState = state.bySession?.[sessionKey];
+          if (bySessionState && typeof bySessionState === "object") {
+            selectedProviderId = (bySessionState as { activeProvider?: string }).activeProvider || "";
+          }
+        }
+      }
+    } catch {
+      // 读取失败时降级到 localStorage
+    }
+  }
+
+  // 兜底：localStorage、props、全局默认
+  if (!selectedProviderId) {
+    const localStorageSession = getHostSession();
+    selectedProviderId = (
+      (localStorageSession?.engine === engine ? localStorageSession?.provider : undefined) ||
+      session?.provider ||
+      matchingHost?.selectedChannels?.[engine] ||
+      ""
+    );
+  }
+
   return {
     // Selection updates must not remount a flyout whose host/storage writes are still in flight.
     sessionKey: JSON.stringify([engine, session?.sessionId ?? null, session?.workspacePath ?? "", host?.streaming ?? false]),
@@ -50,9 +89,11 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
   if (!display) return state.selectedCli === "claude" ? state : { ...state, enable1MContext: false };
   const { sessionKey: _key, selectedProviderId, ...selection } = display;
 
-  // 查找插件渠道（如果宿主 selectedProviderId 指向插件渠道）
-  const channel = state.pluginChannels?.[display.selectedCli]?.find(item =>
-    pluginProviderId(item.id) === selectedProviderId);
+  // 查找插件渠道：尝试完整 providerId 或去掉前缀后的原始 ID
+  const channel = state.pluginChannels?.[display.selectedCli]?.find(item => {
+    const withPrefix = pluginProviderId(item.id);
+    return withPrefix === selectedProviderId || item.id === selectedProviderId;
+  });
 
   // 引擎切换时必须重置渠道选择
   const engineChanged = state.selectedCli !== display.selectedCli;
@@ -64,13 +105,21 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
 
   if (selectedProviderId) {
     // 宿主提供了明确的 providerId（来自 session.provider 或 selectedChannels[engine]）
-    finalProviderId = selectedProviderId;
-    if (isPluginProviderId(selectedProviderId)) {
+    if (channel) {
+      // 匹配到插件渠道：使用带前缀的 providerId
       activeChannelType = "plugin";
-      activePluginChannelId = channel?.id;
+      activePluginChannelId = channel.id;
+      finalProviderId = pluginProviderId(channel.id);
+    } else if (isPluginProviderId(selectedProviderId)) {
+      // 宿主 providerId 是插件格式但未找到对应渠道
+      activeChannelType = "plugin";
+      activePluginChannelId = undefined;
+      finalProviderId = selectedProviderId;
     } else {
+      // 系统渠道
       activeChannelType = "system";
       activePluginChannelId = undefined;
+      finalProviderId = selectedProviderId;
     }
   } else if (engineChanged) {
     // 引擎切换且宿主未提供 providerId，重置为系统渠道
@@ -85,10 +134,16 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
       activeChannelType = sessionRecord.activeChannelType || "system";
       activePluginChannelId = sessionRecord.activePluginChannelId;
     } else {
-      // 无对话级记录，不继承其他会话的渠道状态，交由 loadChannels 从宿主取当前值
-      finalProviderId = "";
-      activeChannelType = "system";
-      activePluginChannelId = undefined;
+      // 无对话级记录，保留当前状态（loadChannels 可能已回填或用户已选择）
+      finalProviderId = state.selectedProviderId || "";
+      // 根据 selectedProviderId 类型确定 activeChannelType，保持状态一致
+      if (finalProviderId && isPluginProviderId(finalProviderId)) {
+        activeChannelType = "plugin";
+        activePluginChannelId = state.activePluginChannelId;
+      } else {
+        activeChannelType = "system";
+        activePluginChannelId = undefined;
+      }
     }
   }
 

@@ -24,7 +24,7 @@ export interface HostStoreActions {
 export interface HostChatStore {
   getState: () => {
     active?: HostSession | null;
-    bySession?: Record<string, { activeEffort?: string | null; activeModel?: string | null }>;
+    bySession?: Record<string, { activeEffort?: string | null; activeModel?: string | null; activeProvider?: string | null }>;
     efforts?: Record<string, string>;
     setEffort?: (engine: string, effort: string) => unknown;
     setModel?: (engine: string, model: string) => unknown;
@@ -43,6 +43,7 @@ export interface HostSessionState {
   streaming: boolean;
   activeEffort?: string | null;
   activeModel?: string | null;
+  activeProvider?: string | null;
 }
 
 interface HostCliMenuProps extends HostCliMenuCallbacks {
@@ -183,7 +184,7 @@ function findTimelineFiber(): unknown {
 /**
  * 从 DOM 中定位原生被隐藏的 CliMenu 按钮
  */
-function committedFiber(element: HTMLElement): any {
+export function committedFiber(element: HTMLElement): any {
   const key = Object.keys(element).find(k => k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$"));
   if (!key) return null;
   let fiber = (element as any)[key];
@@ -510,6 +511,18 @@ function findHostSessionState(anchor?: HTMLElement | null): HostSessionState | n
 
 function sessionStoreKey(engine: string, sessionId: string | null, workspacePath: string): string {
   return sessionId ? `${engine}/${sessionId}` : `new:${engine}:${workspacePath}`;
+}
+
+/** 从宿主 store 的 bySession 读取指定会话的状态（包含 activeProvider） */
+export function getHostSessionState(sessionKey: string): HostSessionState | null {
+  try {
+    const store = findHostChatStore();
+    if (!store) return null;
+    const state = store.getState();
+    return (state.bySession?.[sessionKey] as HostSessionState | undefined) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 let lastDiagnostic = "";
