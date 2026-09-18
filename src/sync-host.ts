@@ -3,6 +3,7 @@ import { getHostSession, sessionSelectionError, modelSelectionError } from "./se
 import type { HostSession, ModelCompatibility } from "./selection-policy";
 import { invokeHost } from "./host-transport";
 import { independentChannelError, NATIVE_PROVIDER_ID } from "./system-bridge";
+import type { PluginContext } from "./ccgui-plugin";
 
 interface HostCliMenuCallbacks {
   onModelChange?: (engine: string, model: string) => void;
@@ -518,8 +519,48 @@ export function getLastDiagnostic(): string {
 }
 
 /**
- * 已有会话发请求读 bySession[key].activeEffort。
- * 优先调用宿主提供的 __ccgui_patchSessionEffort API。
+ * 已有会话的推理强度 patch 入口：优先走官方 ctx.sessions.setEffort（权限
+ * host:session，SDK 0.3.10 起）直写宿主会话状态并持久化；ctx 未传入、
+ * 宿主是不支持该方法的旧版本，或调用本身失败时，才 fallback 到
+ * patchHostSessionEffort 的 Fiber 猜测逻辑。
+ *
+ * 只处理"已有会话"（session.sessionId 非空）；新会话没有 sessionId，
+ * setEffort 会直接 reject（宿主拒绝为不存在的会话造幽灵条目），继续走
+ * fallback 让 applyModelSelectionToHost 改引擎默认 effort。
+ */
+async function patchSessionEffort(
+  ctx: PluginContext | undefined,
+  store: HostChatStore | null,
+  engine: string,
+  effort: string,
+  session: HostSession | null,
+  live?: HostSessionState | null,
+): Promise<boolean> {
+  if (ctx?.sessions?.setEffort && session?.sessionId) {
+    try {
+      await ctx.sessions.setEffort(engine, session.sessionId, session.workspacePath, effort);
+      const msg = `ctx.sessions.setEffort(${engine}, ${session.sessionId}, ${effort})`;
+      console.warn(`[model-switcher] ${msg}`);
+      lastDiagnostic = msg;
+      return true;
+    } catch (err) {
+      console.warn(`[model-switcher] ctx.sessions.setEffort 失败，fallback 到 Fiber 猜测:`, err);
+      // 继续走下面的 fallback，不 return——旧会话仍需要某种方式落地。
+    }
+  }
+  return patchHostSessionEffort(store, engine, effort, session, live);
+}
+
+/**
+ * Fiber 猜测 fallback：已有会话发请求读 bySession[key].activeEffort，
+ * 直接改这个字段（或改宿主 zustand store 的 setState）；store 自带
+ * setEffort action 时优先调用它而非硬改内部字段，让宿主自己的持久化/
+ * 副作用逻辑生效。
+ *
+ * 仅在 applyModelSelectionToHost 判定 ctx.sessions.setEffort（官方 API，
+ * SDK 0.3.10 起）不可用时才会被调用——旧宿主没有这个方法，或调用失败。
+ * 依赖 Fiber 遍历翻到宿主运行时私有引用，宿主任何一次重渲染/依赖升级
+ * 都可能让这条路径失效，仅作为兜底，不是首选路径。
  */
 export function patchHostSessionEffort(
   store: HostChatStore | null,
@@ -529,22 +570,6 @@ export function patchHostSessionEffort(
   live?: HostSessionState | null,
 ): boolean {
   console.warn(`[model-switcher] patchHostSessionEffort 入参: store=${store ? "✓" : "✗"}, live=${live ? "✓" : "✗"}, sessionId=${session?.sessionId ?? "null"}`);
-
-  // 优先使用宿主提供的 API（如果存在）
-  const patchAPI = (window as unknown as { __ccgui_patchSessionEffort?: (engine: string, sessionId: string, workspacePath: string | undefined, effort: string) => void }).__ccgui_patchSessionEffort;
-  if (patchAPI && session?.sessionId) {
-    console.warn(`[model-switcher] 调用宿主 API: __ccgui_patchSessionEffort(${engine}, ${session.sessionId}, ${effort})`);
-    try {
-      patchAPI(engine, session.sessionId, session.workspacePath, effort);
-      lastDiagnostic = `host API called`;
-      return true;
-    } catch (err) {
-      console.warn(`[model-switcher] 宿主 API 调用失败，fallback 到插件逻辑:`, err);
-      // 继续执行下面的 fallback 逻辑
-    }
-  } else if (session?.sessionId && !patchAPI) {
-    console.warn(`[model-switcher] 宿主未提供 __ccgui_patchSessionEffort API（旧版本），使用 fallback 逻辑`);
-  }
 
   // Fallback：原有逻辑
   if (live && store) {
@@ -586,6 +611,13 @@ export function patchHostSessionEffort(
     console.warn(`[model-switcher] ${msg}`);
     lastDiagnostic = msg;
     return false;
+  }
+  if (typeof state.setEffort === "function") {
+    const msg = `调用 store.setEffort(${engine}, ${effort})`;
+    console.warn(`[model-switcher] ${msg}`);
+    lastDiagnostic = msg;
+    state.setEffort(engine, effort);
+    return true;
   }
   const key = sessionStoreKey(engine, active.sessionId, active.workspacePath);
   const msg = `setState 改 bySession[${key}].activeEffort = ${effort}`;
@@ -692,6 +724,10 @@ export async function applyModelSelectionToHost(params: {
   effort?: EffortLevel;
   enable1M?: boolean;
   compatibility?: ModelCompatibility;
+  /** 传入后优先走官方 ctx.sessions.setEffort（权限 host:session，SDK
+   *  0.3.10 起）patch 已有会话的推理强度，失败/不可用才 fallback 到
+   *  Fiber 猜测。省略时直接走 fallback（兼容未传 ctx 的旧调用点）。 */
+  ctx?: PluginContext;
 }): Promise<void> {
   const error = hostSessionSelectionError(params.engine) ||
     (params.model ? modelSelectionError(params.engine, params.model, params.compatibility) : null);
@@ -718,7 +754,7 @@ export async function applyModelSelectionToHost(params: {
   console.warn(`[model-switcher] 切换到 ${engine} / ${finalModel} / ${effort ?? "无"}`);
   console.warn(`[model-switcher] ${summary}`);
   lastDiagnostic = summary;
-  const patched = effort ? patchHostSessionEffort(store, engine, effort, active, liveSession) : false;
+  const patched = effort ? await patchSessionEffort(params.ctx, store, engine, effort, active, liveSession) : false;
 
   // 1. 先同步 localStorage，确保数据就绪
   if (effort) syncLocalStorage(engine, finalModel, effort);

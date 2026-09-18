@@ -38,10 +38,9 @@ describe('system-bridge', () => {
       expect(independentChannelError('qoder-cn')).toBe(null);
     });
 
-    it('应该对不支持的引擎返回错误信息', () => {
-      const error = independentChannelError('dsh');
-      expect(error).toContain('DeepSeek Harness');
-      expect(error).toContain('暂不支持独立渠道');
+    it('应该对所有引擎返回 null（4196fd3 起独立渠道限制已移除）', () => {
+      expect(independentChannelError('dsh')).toBe(null);
+      expect(independentChannelError('agy')).toBe(null);
     });
   });
 

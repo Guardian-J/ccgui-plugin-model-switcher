@@ -578,6 +578,7 @@ export function CliModelFlyoutMenu({
         effort: nextState.effort,
         enable1M: nextState.enable1MContext,
         compatibility: compatibilityFor(targetModel) || compatibilityFor(hostModel),
+        ctx,
       });
       const diagnostic = getLastDiagnostic();
       const sessionError = sessionSelectionError(activeEngine);
@@ -777,6 +778,7 @@ export function CliModelFlyoutMenu({
           model: hostModel,
           effort: state.effort,
           enable1M: state.enable1MContext,
+          ctx,
       });
       const stableKey = sessionDisplay?.stableKey;
       const sessionChannels = stableKey ? {
@@ -825,7 +827,7 @@ export function CliModelFlyoutMenu({
     try {
       await applyCustomPluginChannelToEngine(ctx, activeEngine, channel);
       await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(channel.id) });
-      await applyModelSelectionToHost({ engine: activeEngine, model: hostModel, effort: state.effort, enable1M: state.enable1MContext });
+      await applyModelSelectionToHost({ engine: activeEngine, model: hostModel, effort: state.effort, enable1M: state.enable1MContext, ctx });
       const stableKey = sessionDisplay?.stableKey;
       const sessionChannels = stableKey ? {
         ...nextState.sessionChannels,

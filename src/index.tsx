@@ -122,6 +122,7 @@ export default function activate(ctx: PluginContext): Disposer {
               model: hostModel,
               effort: record.effort,
               enable1M: record.enable1MContext,
+              ctx,
             });
           }
         } catch (err) {
