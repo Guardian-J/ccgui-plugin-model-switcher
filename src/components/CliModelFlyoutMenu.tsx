@@ -50,7 +50,6 @@ import {
   applyChannelSelectionToHost,
   hostSessionSelectionError as sessionSelectionError,
   getLastDiagnostic,
-  isNewHost,
 } from "../sync-host";
 import { useSessionDisplay, withSessionDisplay } from "../session-display";
 import { getHostSession, modelSelectionError, isConcreteModel } from "../selection-policy";
@@ -824,7 +823,7 @@ export function CliModelFlyoutMenu({
       activeChannelName: channel.name,
     };
     try {
-      await applyCustomPluginChannelToEngine(ctx, activeEngine, channel, { skipHostWrite: isNewHost() });
+      await applyCustomPluginChannelToEngine(ctx, activeEngine, channel);
       await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(channel.id) });
       await applyModelSelectionToHost({ engine: activeEngine, model: hostModel, effort: state.effort, enable1M: state.enable1MContext });
       const stableKey = sessionDisplay?.stableKey;
@@ -892,7 +891,7 @@ export function CliModelFlyoutMenu({
     selectionPending.current = true;
     setSwitching(true);
     try {
-      await applyCustomPluginChannelToEngine(ctx, activeEngine, newChan, { skipHostWrite: isNewHost() });
+      await applyCustomPluginChannelToEngine(ctx, activeEngine, newChan);
       await onSave(nextState);
       setState(nextState);
       setChannelTab("plugin");
@@ -939,7 +938,7 @@ export function CliModelFlyoutMenu({
             )
           : undefined,
       };
-      await deleteCustomPluginChannel(activeEngine, channelId, { skipHostWrite: isNewHost() });
+      await deleteCustomPluginChannel(activeEngine, channelId);
       if (isDeletingCurrent) {
         await applyChannelSelectionToHost({ engine: activeEngine, providerId: fallbackId });
         setCurrentChannelId(fallbackId);

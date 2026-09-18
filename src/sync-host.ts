@@ -909,20 +909,10 @@ export async function applyChannelSelectionToHost(params: {
     }
   } else {
     // 新版 CC GUI（CliMenu 已移除 onChannelChange，渠道通过 set_current_provider 原生命令切换）
-    let targetId = providerId;
-    if (!targetId || targetId === NATIVE_PROVIDER_ID || targetId === "__local_config_toml__") {
-      targetId = "local";
-    }
-    try {
-      await invokeHost("set_current_provider", { engine, id: targetId });
-    } catch (err) {
-      console.warn("[model-switcher] set_current_provider 失败，尝试原 ID:", err);
-      if (targetId === "local" && providerId !== "local") {
-        try {
-          await invokeHost("set_current_provider", { engine, id: providerId || "" });
-        } catch {}
-      }
-    }
+    // 宿主要求的 ID 必须是：__local_settings_json__ / __local_config_toml__ / __disabled__ / 实际存在的渠道 ID
+    // 不能映射为 "local"，否则宿主会报错 "provider local not found"
+    const targetId = providerId || NATIVE_PROVIDER_ID;
+    await invokeHost("set_current_provider", { engine, id: targetId });
   }
 
   syncSessionProviderToLocalStorage(engine, providerId);

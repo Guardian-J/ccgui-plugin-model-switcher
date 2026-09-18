@@ -1,11 +1,12 @@
-import type { PluginContext } from "./ccgui-plugin";
+import * as ReactImport from "react";
 
-type ReactType = PluginContext["react"];
+type ReactType = typeof ReactImport;
 
 let sharedReact: ReactType | null = null;
 
-export function initReact(react: ReactType) {
-  sharedReact = react;
+export function initReact(_react?: ReactType) {
+  // 0.3.0+ 宿主不再通过 ctx.react 传递，React 已全局注入
+  sharedReact = ReactImport;
 }
 
 export function getReact(): ReactType {
@@ -19,29 +20,7 @@ export function getReact(): ReactType {
   return sharedReact;
 }
 
-export const React = {
-  get createElement() {
-    return getReact().createElement;
-  },
-  get Fragment() {
-    return getReact().Fragment;
-  },
-  get useState() {
-    return getReact().useState;
-  },
-  get useEffect() {
-    return getReact().useEffect;
-  },
-  get useMemo() {
-    return getReact().useMemo;
-  },
-  get useCallback() {
-    return getReact().useCallback;
-  },
-  get useRef() {
-    return getReact().useRef;
-  },
-};
+export { ReactImport as React };
 
 export function useState<T>(initialState: T | (() => T)) {
   return getReact().useState(initialState);

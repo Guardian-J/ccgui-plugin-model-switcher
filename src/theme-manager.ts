@@ -264,7 +264,7 @@ export class GuiThemeManager {
 
   public async init(): Promise<void> {
     try {
-      const saved = await this.ctx.storage.get<GuiThemeConfig>("theme_config");
+      const saved = await this.ctx.storage.get("theme_config") as GuiThemeConfig | null;
       if (saved) {
         this.config = { ...DEFAULT_THEME_CONFIG, ...saved, canvasStyle: "plain" };
       }
@@ -302,7 +302,11 @@ export class GuiThemeManager {
     const css = generateThemeCss(this.config);
     if (css && css.trim()) {
       try {
-        this.currentDisposer = this.ctx.theme.injectCss(css);
+        // 0.3.0+ 移除了 ctx.theme，手动注入样式
+        const styleEl = document.createElement('style');
+        styleEl.textContent = css;
+        document.head.appendChild(styleEl);
+        this.currentDisposer = () => styleEl.remove();
       } catch (err) {
         console.warn("[model-switcher:theme] 注入主题 CSS 失败:", err);
       }

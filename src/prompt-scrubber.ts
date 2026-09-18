@@ -48,11 +48,12 @@ async function runScrub(
   ctx: PluginContext,
   action: "check" | "apply" | "restore",
 ): Promise<ScrubPayload> {
+  const { invokeHost } = await import("./host-transport");
   const internals = typeof window !== "undefined" ? window.__TAURI_INTERNALS__ : undefined;
   if (!internals?.invoke) throw new Error("无法读取宿主 CLI 路径，请在桌面宿主中重试");
   const settings = await internals.invoke("get_app_settings") as { claudeBin?: string };
   const target = typeof settings?.claudeBin === "string" ? settings.claudeBin.trim() : "";
-  const res = await ctx.bridge.invoke<ExecRunResult>(
+  const res = await invokeHost<ExecRunResult>(
     "plugin_exec_run",
     {
       bin: "node",

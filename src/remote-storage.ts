@@ -7,10 +7,10 @@ export function withRemoteStorage(ctx: PluginContext): PluginContext {
   const prefix = `ccgui.plugin.remote:${ctx.pluginId}:`;
   const unsupported = (error: unknown) => /unknown command:\s*plugin_storage_(set|delete)\b/i.test(String(error));
   return { ...ctx, storage: {
-    async get<T>(key: string): Promise<T | null> {
+    async get<T = unknown>(key: string): Promise<T | null> {
       const local = localStorage.getItem(prefix + key);
-      if (local !== null) return JSON.parse(local) as T | null;
-      return ctx.storage.get<T>(key);
+      if (local !== null) return JSON.parse(local) as T;
+      return (await ctx.storage.get(key)) as T | null;
     },
     async set(key, value) {
       try {

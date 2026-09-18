@@ -6,185 +6,197 @@
  * 插件仓用法（包未发布 npm 前的过渡方案）：复制本文件为插件仓的
  * `src/ccgui-plugin.d.ts`，首行版本戳必须与所用宿主 SDK 一致。
  *
- * @ccgui/plugin-sdk v0.3.1
+ * @ccgui/plugin-sdk v0.3.10
  */
 
 /** 宿主实现的 SDK 契约版本。 */
-export declare const SDK_VERSION: string;
+export const SDK_VERSION = "0.3.10";
 
-/** 每次注册的撤销句柄；卸载时逆序执行。 */
-export type Disposer = () => void;
-
-/** 信任层级（ADR-1）：declarative = 零 JS 声明式。 */
-export type PluginTier = "declarative" | "js";
-
-/** 插件入口唯一约定：main.js 默认导出本函数。 */
-export type PluginActivate = (ctx: PluginContext) => void | (() => void);
-
-export interface JsonSchemaProperty {
-  type?: "string" | "number" | "integer" | "boolean";
-  title?: string;
-  description?: string;
-  default?: unknown;
-  enum?: (string | number)[];
-}
-
-export interface JsonSchemaObject {
-  type: "object";
-  properties?: Record<string, JsonSchemaProperty>;
-  required?: string[];
-}
-
-/** ccgui.plugin.json（plan §5.1）。 */
 export interface PluginManifest {
-  id: string;
   name: string;
+  displayName: string;
   version: string;
-  minAppVersion?: string;
-  /** SDK 兼容区间："^0.3" / "~0.3.0" / ">=0.3.0" / 精确 / "*"（缺省不校验）。 */
-  sdkVersion?: string;
+  description: string;
   author?: string;
-  description?: string;
-  tier: PluginTier;
-  /** 基座权限与 `network:<host>[…]` / `exec:<bin>` 授权；全集、形状与放行
-   *  规则以包内 spec/permissions.json 为单一事实源（TS/Rust/模板校验脚本
-   *  三方消费同一文件）。`network:none` 是基座权限（声明无网络），永远
-   *  不是授权——它不会放行任何主机。 */
-  permissions: string[];
-  contributes?: {
-    themes?: { name?: string; tokens: { light?: Record<string, string>; dark?: Record<string, string> } }[];
-    i18n?: { lang: string; ns?: string; resources: Record<string, unknown> }[];
-    statusBarItems?: { key?: string; text: string }[];
-    commands?: { key: string; title: string; emits?: string }[];
-  };
-  configSchema?: JsonSchemaObject;
+  icon?: string;
+  main: string;
+  permissions?: Array<
+    | "storage"
+    | "ui:settings-section"
+    | "ui:statusbar"
+    | "ui:command"
+    | "ui:session-menu"
+    | "ui:composer-status"
+    | "events"
+    | "host:session"
+    | "host:cli-config"
+    | "host:workspace"
+    | "host:workspace:remote"
+  >;
+  settings?: Array<{
+    key: string;
+    label: string;
+    type: "string" | "number" | "boolean" | "select";
+    default?: string | number | boolean;
+    options?: Array<{ label: string; value: string | number }>;
+    description?: string;
+  }>;
 }
 
-export type ComposerSlotId = "addMenu" | "cliMenu" | "permissionMenu";
-
-export type ComponentLike<P = Record<string, never>> = (props: P) => unknown;
-
-/** 插件唯一能力门面（plan §5.2）。每个 register* 需要对应权限声明，
- *  返回 Disposer；未显式回收也由宿主 disposer 栈兜底。 */
 export interface PluginContext {
   pluginId: string;
-  version: string;
-  /** 宿主共享 React：宿主树容器组件经它创建（createElement/useRef/...）；
-   *  插件自有子树用自己的 createRoot 挂进容器（双段挂载模式）。 */
-  react: typeof import("react");
+  manifest: PluginManifest;
+  workspaceRoot: string | null;
+  getSetting<T = unknown>(key: string): T | undefined;
+  setSetting<T = unknown>(key: string, value: T): Promise<void>;
   ui: {
-    /** 设置页 section（权限 ui:settings-section）。 */
+    /** 在设置页注册插件配置面板（权限 ui:settings-section）。 */
     registerSettingsSection(def: {
       key?: string;
-      label: () => string;
-      icon?: ComponentLike<{ className?: string }>;
       component: ComponentLike;
+      label?: string | (() => string);
     }): Disposer;
-    /** Composer「Add」菜单行（权限 ui:add-menu）。 */
-    registerAddMenuRow(def: {
-      key?: string;
-      label: () => string;
-      description?: () => string;
-      icon?: ComponentLike<{ className?: string }>;
-      onSelect: () => void;
-    }): Disposer;
-    /** Composer 工具栏插槽额外控件（权限 ui:composer）。 */
-    registerComposerSlot(def: {
-      slot: ComposerSlotId;
-      key?: string;
-      component: ComponentLike;
-      order?: number;
-    }): Disposer;
-    /** 聊天右侧面板 tab（权限 ui:panel-tab）。 */
-    registerPanelTab(def: {
-      key?: string;
-      label: () => string;
-      icon?: ComponentLike<{ className?: string }>;
-      component: ComponentLike<{ workspacePath: string }>;
-      order?: number;
-    }): Disposer;
-    /** 应用底部状态栏条目（权限 ui:status-bar）。 */
+    /** 状态栏 chip（权限 ui:statusbar）。 */
     registerStatusBarItem(def: {
+      key?: string;
+      component: ComponentLike;
+      order?: number;
+      /** 摆放区域（0.3.8 起）："start" = 左对齐区；缺省/"end" =
+       *  同步状态之后、版本号之前的既有槽位。 */
+      zone?: "start" | "end";
+    }): Disposer;
+    /** Composer 状态行条目（权限 ui:composer-status，0.3.9 起）：渲染在
+     *  输入框状态行（分支/上下文用量那一行）左组、分支切换器之后。 */
+    registerComposerStatusItem(def: {
       key?: string;
       component: ComponentLike;
       order?: number;
     }): Disposer;
     /** ⌘K 命令面板命令（权限 ui:command）。 */
     registerCommand(def: {
-      key: string;
-      title: () => string;
-      keywords?: () => string[];
-      run: () => void;
-    }): Disposer;
-    /** Markdown 渲染管线追加（权限 ui:markdown）。 */
-    registerMarkdownRenderer(def: {
       key?: string;
-      remarkPlugins?: unknown[];
-      rehypePlugins?: unknown[];
-      components?: Record<string, unknown>;
+      label: string | (() => string);
+      icon?: string;
+      category?: string | (() => string);
+      run: () => void | Promise<void>;
+      order?: number;
     }): Disposer;
-    /** 覆盖层页面，路由 `#/p/<id>`（权限 ui:page）。 */
-    registerPage(def: {
+    /** 侧栏会话右键菜单项（权限 ui:session-menu，0.3.5 起）。 */
+    registerSessionMenuItem(def: {
       key?: string;
-      title: () => string;
-      component: ComponentLike;
+      label: string | (() => string);
+      icon?: string;
+      danger?: boolean;
+      run: (session: { engine: string; sessionId: string }) => void | Promise<void>;
     }): Disposer;
-    /** 自定义 timeline 行 kind 渲染器（权限 ui:timeline-row）。 */
-    registerTimelineRowRenderer(def: {
-      kind: string;
-      key?: string;
-      component: ComponentLike<{ row: { kind: string } }>;
-    }): Disposer;
-  };
-  theme: {
-    /** 注入样式表（权限 theme）；拒绝 @import/远程 url。 */
-    injectCss(css: string): Disposer;
-    /** BoardUI token 覆盖快捷方式；key 必须是 --* 自定义属性。 */
-    setTokens(tokens: { light?: Record<string, string>; dark?: Record<string, string> }): Disposer;
-  };
-  i18n: {
-    /** 注册语言包（权限 i18n）。 */
-    addBundle(lang: string, ns: string, resources: Record<string, unknown>): Disposer;
+    /** 跳转到本插件设置页（权限 ui:settings-section，0.3.6 起）。 */
+    openSettings(key?: string): void;
   };
   storage: {
-    /** 每插件 KV（权限 storage）。 */
-    get<T>(key: string): Promise<T | null>;
+    /** 持久化存储（权限 storage）。 */
+    get(key: string): Promise<unknown>;
     set(key: string, value: unknown): Promise<void>;
     delete(key: string): Promise<void>;
   };
   events: {
-    /** 事件总线（权限 events）。宿主话题示例：`usage://updated`、
-     *  `composer://draft`（payload { text }，草稿变化/清空/会话切换均发射）。 */
+    /** 事件总线（权限 events）。宿主话题：`usage://updated`（引擎 usage
+     *  事件透传，payload 为完整 EngineEventPayload `{ runId, sessionId,
+     *  engine, seq, kind, data, ts? }`，data 是引擎原始 usage JSON）；
+     *  `usage://done`（0.3.8 起，引擎 done 事件透传，data.usage 携带
+     *  该轮最终用量——claude/grok 等只经 Done 上报用量的引擎由此对插件
+     *  可见）；`session://activated`（0.3.8 起，活动会话切换，payload
+     *  `{ engine, sessionId }`，pending 标签 sessionId 为 null，无活动
+     *  标签时两者皆 null）；`composer://draft`（payload { text }，草稿
+     *  变化/清空/会话切换均发射）。 */
     on(topic: string, cb: (data: unknown) => void): Disposer;
     emit(topic: string, data: unknown): void;
   };
-  bridge: {
-    /** 通用能力出口（0.3.0 起；旧的 `cmd:<command>` 逐命令授权机制已删除）。
-     *  仅四条命令，`pluginId` 由宿主自动注入（插件无需也不能传）：
-     *
-     *  - `plugin_http_request` `{ method, url, headers?, body? }` →
-     *    `{ status, body }`：url 限 http/https，host(+端口) 须命中 manifest 的
-     *    `network:<host>` / `network:<host>:<port>` / `network:<host>:<a>-<b>` 授权
-     *    （形状与放行规则以 spec/permissions.json 为准）。
-     *  - `plugin_exec_run` `{ bin, args, env?, timeoutMs? }` →
-     *    `{ code, stdout, stderr }`：bin 须命中 `exec:<bin>` 授权（裸名，无路径）。
-     *  - `plugin_exec_spawn` `{ bin, args, env?, lifecycle? }` → void：
-     *    同授权；成功时 resolve 为 void（Rust 返回 ()），失败 reject。
-     *    lifecycle 缺省 "detached"（用户级服务，活过插件）；"plugin" =
-     *    附属进程，宿主跟踪，插件禁用/卸载时自动 kill。
-     *  - `plugin_exec_kill` `{}` → `{ killed: number }`：kill 本插件全部
-     *    lifecycle="plugin" 子进程（配置变更改名重启用；需任意 exec: 授权）。
-     *
-     *  授权未命中的调用在 JS 侧即 reject（不打 IPC）；Rust 侧对授权与插件
-     *  启用态另有强制（纵深防御）。 */
-    invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  /** CLI 配置管理（权限 host:cli-config）。 */
+  cli: {
+    /** 读取原生配置。返回 CLI 的完整配置快照（cc-gui 的 config.json
+     *  与各引擎的 ~/.config/<cli>/settings.json 合并视图）。 */
+    getConfig(): Promise<CliConfig>;
+    /** 注册独立供应商，写入 CLI 原生配置（claude/grok settings.json
+     *  独立供应商段、OMP/PI models.yml/json 独立段）。 */
+    upsertProvider(def: {
+      engine: string;
+      id: string;
+      json: Record<string, unknown>;
+    }): Promise<void>;
+    /** 移除独立供应商。 */
+    deleteProvider(def: { engine: string; id: string }): Promise<void>;
+    /** 切换当前渠道（会写 CLI 原生配置）。 */
+    setCurrentProvider(def: { engine: string; id: string }): Promise<void>;
   };
-  host: {
-    appVersion: string;
-    /** 宿主实现的 SDK 版本（= @ccgui/plugin-sdk version）。 */
-    sdkVersion: string;
-    locale: string;
-    /** Web 客户端为 true；上述桌面独占桥命令在那里不可用。 */
-    isWeb: boolean;
+  /** 工作区管理（权限 host:workspace，0.3.3 起）。
+   *  卸载时自动注销。 */
+  workspaces: {
+    /** 把任意路径登记为侧栏工作区，不要求本机存在该目录（支持远程机/WSL
+     *  路径）。meta 透传存储，如 `{ wsl: { hostId, distro } }`（0.3.4 起
+     *  携带 `wsl` 键需 `host:workspace:remote`）。 */
+    add(path: string, meta?: Record<string, unknown>): Promise<void>;
   };
+  /** 会话管理（权限 host:session，0.3.3 起）。
+   *  卸载时自动注销。 */
+  sessions: {
+    selectSession(engine: string, sessionId: string, workspacePath: string): Promise<void>;
+    /** 请求宿主立即刷新会话目录（侧栏/标签页），0.3.7 起。
+     *  插件绕过宿主直写会话数据（如 sqlite custom_title、转录 title 行）后
+     *  调用——否则变更要等用户手动同步或下次常规刷新才可见。 */
+    refresh(): Promise<void>;
+    /** 修改已有会话的 effort 档位，0.3.10 起。直写宿主会话状态并持久化
+     *  （等价于用户在会话内切换档位，refreshSessions 不会回滚）。未知会话
+     *  或空 effort 以 rejection 失败——不会创建幽灵会话条目。 */
+    setEffort(engine: string, sessionId: string, workspacePath: string, effort: string): Promise<void>;
+    registerSource(def: {
+      /** 源 id,插件内唯一;同 id 重复登记覆盖(热重载语义)。 */
+      id: string;
+      /** 外部会话列表提供器;宿主在会话目录刷新时调用并把行合并进侧栏
+       *  列表(本机扫描结果优先)。同步抛错的源被隔离(不连累其他源),
+       *  返回数组受 500 行上限控制(不含本机会话)。 */
+      list: () => ExternalSessionRow[] | Promise<ExternalSessionRow[]>;
+    }): Disposer;
+  };
+}
+
+export interface CliConfig {
+  [engine: string]:
+    | {
+        providers?: Record<string, Record<string, unknown>>;
+        current?: string;
+      }
+    | undefined;
+}
+
+export interface ExternalSessionRow {
+  engine: string;
+  sessionId: string;
+  workspacePath: string;
+  title?: string;
+  lastModified?: number;
+}
+
+export interface EngineEventPayload {
+  runId: string;
+  sessionId: string;
+  engine: string;
+  seq: number;
+  kind: string;
+  data: Record<string, unknown>;
+  /** 宿主发射时刻（Unix 毫秒），0.3.8 起。旧宿主上为 undefined。 */
+  ts?: number;
+}
+
+export type ComponentLike =
+  | ((props: Record<string, unknown>) => JSX.Element)
+  | React.ComponentType<Record<string, unknown>>;
+
+export type Disposer = () => void;
+
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      [elemName: string]: unknown;
+    }
+  }
 }
