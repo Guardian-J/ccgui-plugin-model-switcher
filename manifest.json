@@ -14,7 +14,7 @@
     "ui:composer-status",
     "ui:markdown",
     "ui:settings-section",
-    "ui:statusbar",
+    "ui:status-bar",
     "ui:command",
     "theme",
     "i18n",
