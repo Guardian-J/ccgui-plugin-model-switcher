@@ -1,9 +1,9 @@
 {
   "id": "model-switcher",
   "name": "模型与供应商助手",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "minAppVersion": "1.0.0",
-  "sdkVersion": "*",
+  "sdkVersion": "^0.3.11",
   "author": "Guardian-J",
   "description": "针对 cc-gui（https://github.com/zhukunpenglinyutong/desktop-cc-gui）的扩展插件：模型与 CLI 选择、独立渠道管理、全局主题和链接跳转",
   "tier": "js",

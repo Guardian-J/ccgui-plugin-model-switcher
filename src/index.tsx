@@ -221,10 +221,12 @@ export default function activate(ctx: PluginContext): Disposer {
     disposeHostTransport,
     installCompactModelLabels(),
     installChatLinks(ctx),
-    // 注册输入框状态行条目：宿主 1.0.4 的 spec/permissions.json 未收录
-    // ui:composer（registerComposerSlot 对应的权限），只有 ui:composer-status
-    // 通过校验，故挂载点改为状态行而非工具栏插槽。
-    ctx.ui.registerComposerStatusItem({
+    // 注册到输入框工具栏 cliMenu 插槽（宿主 SDK 0.3.11 起，registerComposerSlot
+    // 与 registerComposerStatusItem 共享同一权限 ui:composer-status；此前
+    // registerComposerSlot 误校验不存在的 ui:composer，导致该插槽在 0.3.9~0.3.10
+    // 宿主上无法使用，已在宿主侧修复）。
+    ctx.ui.registerComposerSlot({
+      slot: "cliMenu",
       key: "model-switcher-slot",
       component: ComposerButton,
       order: 1,
