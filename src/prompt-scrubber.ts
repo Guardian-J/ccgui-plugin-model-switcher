@@ -1,5 +1,4 @@
 import type { PluginContext } from "./ccgui-plugin";
-import { invokeHost } from "./host-transport";
 import scrubSource from "../scripts/scrub-core.cjs?raw";
 
 export type ScrubStatus =
@@ -53,7 +52,7 @@ async function runScrub(
   if (!internals?.invoke) throw new Error("无法读取宿主 CLI 路径，请在桌面宿主中重试");
   const settings = await internals.invoke("get_app_settings") as { claudeBin?: string };
   const target = typeof settings?.claudeBin === "string" ? settings.claudeBin.trim() : "";
-  const res = await invokeHost<ExecRunResult>(
+  const res = await ctx.bridge.invoke<ExecRunResult>(
     "plugin_exec_run",
     {
       bin: "node",

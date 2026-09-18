@@ -18,7 +18,7 @@ import { withRemoteStorage } from "./remote-storage";
  */
 export default function activate(ctx: PluginContext): Disposer {
   ctx = withRemoteStorage(ctx);
-  initReact();
+  initReact(ctx.react);
   void repairLegacyContextSelections().catch(() => {
     console.warn("[model-switcher] 修复旧版上下文模型选择失败，请重新选择模型");
   });
@@ -50,10 +50,10 @@ export default function activate(ctx: PluginContext): Disposer {
   };
 
   ctx.storage
-    .get("state")
+    .get<PluginState>("state")
     .then((saved) => {
       if (saved) {
-        currentState = { ...DEFAULT_STATE, ...(saved as PluginState) };
+        currentState = { ...DEFAULT_STATE, ...saved };
         notify();
       }
     })
@@ -221,8 +221,9 @@ export default function activate(ctx: PluginContext): Disposer {
     disposeHostTransport,
     installCompactModelLabels(),
     installChatLinks(ctx),
-    // 注册 Composer 状态行条目（0.3.9+）
-    ctx.ui.registerComposerStatusItem({
+    // 注册输入框工具栏插槽触发器
+    ctx.ui.registerComposerSlot({
+      slot: "cliMenu",
       key: "model-switcher-slot",
       component: ComposerButton,
       order: 1,

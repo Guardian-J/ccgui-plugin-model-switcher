@@ -3,12 +3,6 @@ import { resolve } from "node:path";
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 
 export default defineConfig({
-  // 插件运行在浏览器/Tauri 渲染进程中，没有 Node.js 的 process 全局对象。
-  // React 等依赖内部通过 process.env.NODE_ENV 判断开发/生产模式，
-  // 这里在编译期将其替换为字面量，避免打包后残留对 process 的运行时引用。
-  define: {
-    "process.env.NODE_ENV": JSON.stringify("production"),
-  },
   esbuild: {
     jsx: "transform",
     jsxFactory: "React.createElement",

@@ -65,7 +65,7 @@ export async function fetchModelsFromProvider(
 
   for (const targetUrl of targetUrls) {
     try {
-      const res = await invokeHost<{ status: number; body: string }>("plugin_http_request", {
+      const res = await ctx.bridge.invoke<{ status: number; body: string }>("plugin_http_request", {
         method: "GET", url: targetUrl, headers,
       });
       if (res.status >= 200 && res.status < 300) {

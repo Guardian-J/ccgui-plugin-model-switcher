@@ -1,6 +1,5 @@
 import { LinkifyIt } from "linkify-it";
 import type { PluginContext, Disposer } from "./ccgui-plugin";
-import { invokeHost } from "./host-transport";
 import browserSource from "../scripts/open-browser.cjs?raw";
 
 const linkify = new LinkifyIt({ fuzzyLink: false, fuzzyEmail: false, fuzzyIP: false });
@@ -46,31 +45,26 @@ export function remarkHttpLinks() {
 export async function openBrowser(ctx: PluginContext, value: string): Promise<void> {
   const url = httpUrl(value);
   if (!url) throw new Error('链接地址无效');
-  // 0.3.0+ 移除了 ctx.host，通过 Tauri API 判断环境
-  const isWeb = typeof window !== "undefined" && !window.__TAURI_INTERNALS__?.invoke;
-  if (isWeb) {
+  if (ctx.host?.isWeb) {
     window.open(url, '_blank', 'noopener,noreferrer');
     return;
   }
-  const result = await invokeHost<{ code: number | null }>('plugin_exec_run', {
+  const result = await ctx.bridge.invoke<{ code: number | null }>('plugin_exec_run', {
     bin: 'node', args: ['-e', browserSource, '--', url], timeoutMs: 15000,
   });
   if (result.code !== 0) throw new Error('无法打开系统浏览器，请检查默认浏览器及插件的 Node 执行权限');
 }
 
 export function installChatLinks(ctx: PluginContext): Disposer {
-  // 0.3.0+ 移除了 registerMarkdownRenderer 和 ctx.theme，手动注入样式
-  const styleEl = document.createElement('style');
-  styleEl.textContent = `
+  const unregister = ctx.ui.registerMarkdownRenderer({ key: 'http-links', remarkPlugins: [remarkHttpLinks] });
+  const removeCss = ctx.theme.injectCss(`
     .prose-chat a[href]:hover { text-decoration: underline; text-underline-offset: 3px; }
     .prose-chat a[href]:focus-visible { outline: 2px solid var(--color-accent-500, #2684ff); outline-offset: 3px; }
     .ms-browser-error { position: fixed; bottom: 32px; inset-inline: 16px; margin-inline: auto;
       max-width: 520px; z-index: 2147483647; padding: 12px 16px; border-radius: 6px;
       background: var(--color-background-primary-default, #fff); color: var(--color-text-primary, #222);
       border: 1px solid var(--color-separator-border, #999); box-shadow: 0 4px 18px #0002; font-size: 13px; }
-  `;
-  document.head.appendChild(styleEl);
-  const removeCss = () => styleEl.remove();
+  `);
   let disposed = false;
   let pending = false;
   let notice: HTMLElement | undefined;
@@ -105,6 +99,7 @@ export function installChatLinks(ctx: PluginContext): Disposer {
     document.removeEventListener('auxclick', onClick, true);
     clearTimeout(timer);
     notice?.remove();
+    unregister();
     removeCss();
   };
 }
