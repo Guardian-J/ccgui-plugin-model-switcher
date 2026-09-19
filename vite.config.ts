@@ -45,6 +45,8 @@ export default defineConfig({
       output: {
         entryFileNames: "main.js",
         assetFileNames: "styles.[ext]",
+        manualChunks: undefined,
+        inlineDynamicImports: true,
       },
     },
     outDir: "dist",

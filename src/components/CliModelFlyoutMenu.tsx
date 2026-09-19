@@ -126,6 +126,7 @@ export function CliModelFlyoutMenu({
   const [channelForm, setChannelForm] = useState({ ...EMPTY_CHANNEL_FORM });
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
   const [viewingChannelId, setViewingChannelId] = useState<string | null>(null);
+  const [pendingDeleteChannel, setPendingDeleteChannel] = useState<{ id: string; name: string } | null>(null);
   const [menuLayout, setMenuLayout] = useState<{ offsetX: number; maxHeight: number; below: boolean }>({
     offsetX: 0,
     maxHeight: 560,
@@ -939,6 +940,20 @@ export function CliModelFlyoutMenu({
     if (busy || fetchingModels || selectionPending.current) return;
     const error = sessionSelectionError(activeEngine);
     if (error) { setStatusMsg(error); return; }
+
+    const currentList = state.pluginChannels?.[activeEngine] || [];
+    const channelToDelete = currentList.find((c) => c.id === channelId);
+    if (!channelToDelete) return;
+
+    // 触发二次确认对话框
+    setPendingDeleteChannel({ id: channelId, name: channelToDelete.name });
+  };
+
+  const confirmDeleteChannel = async () => {
+    if (!pendingDeleteChannel) return;
+    const channelId = pendingDeleteChannel.id;
+    setPendingDeleteChannel(null);
+
     const currentList = state.pluginChannels?.[activeEngine] || [];
     const nextChannels = currentList.filter((c) => c.id !== channelId);
     const isDeletingCurrent = state.activeChannelType === "plugin" && state.activePluginChannelId === channelId;
@@ -1188,7 +1203,7 @@ export function CliModelFlyoutMenu({
               aria-labelledby="ms-delete-title"
             >
               <h3 id="ms-delete-title">移出自选</h3>
-              <p>确定将“{pendingDeleteModel}”移出自选吗？之后可以重新添加。</p>
+              <p>确定将"{pendingDeleteModel}"移出自选吗？之后可以重新添加。</p>
               <div className="ms-confirm-actions">
                 <button type="button" className="ms-button" onClick={() => setPendingDeleteModel(null)}>
                   取消
@@ -1199,6 +1214,36 @@ export function CliModelFlyoutMenu({
                   onClick={() => void confirmDeleteCustomModel()}
                 >
                   确认移出
+                </button>
+              </div>
+            </dialog>
+          </div>
+        )}
+
+        {pendingDeleteChannel && (
+          <div className="ms-confirm-backdrop" role="presentation">
+            <dialog
+              open
+              className="ms-confirm-dialog"
+              aria-labelledby="ms-delete-channel-title"
+            >
+              <h3 id="ms-delete-channel-title">确认删除渠道</h3>
+              <p>确定要删除渠道「{pendingDeleteChannel.name}」吗？</p>
+              <p className="ms-warning-text">该操作不可撤销。</p>
+              <div className="ms-confirm-actions">
+                <button
+                  type="button"
+                  className="ms-button"
+                  onClick={() => setPendingDeleteChannel(null)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="ms-button ms-danger"
+                  onClick={() => void confirmDeleteChannel()}
+                >
+                  删除
                 </button>
               </div>
             </dialog>
