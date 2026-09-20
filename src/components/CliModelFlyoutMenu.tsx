@@ -337,7 +337,7 @@ export function CliModelFlyoutMenu({
     return () => { channelRequest.current++; };
   }, [activeEngine, sessionDisplay?.stableKey]);
 
-  // 系统 tab：原生 + 宿主供应商配置；独立 tab 的「宿主」：OMP/PI YAML 供应商
+  // 系统 tab：原生 + 宿主供应商配置 + OMP/PI 自己 YAML 里的供应商（都是系统渠道）
   const { systemChannels, independentSystemChannels: yamlHostChannels, pluginYamlChannels } = useMemo(
     () => classifyProviderChannels(channels),
     [channels],
@@ -349,8 +349,8 @@ export function CliModelFlyoutMenu({
     [state.pluginChannels, activeEngine, pluginYamlChannels],
   );
 
-  // 去掉与插件行同名同址的重复「宿主」行（同一渠道在 YAML 里有裸 key + plugin_ 两份）
-  const independentSystemChannels = useMemo(
+  // 去掉与插件行同 id 的重复 YAML 行（同一渠道在 YAML 里有裸 key + plugin_ 两份）；同名不同 id 保留
+  const yamlSystemChannels = useMemo(
     () => withoutPluginTwinChannels(
       yamlHostChannels,
       pluginCustomChannels,
@@ -359,18 +359,20 @@ export function CliModelFlyoutMenu({
     [yamlHostChannels, pluginCustomChannels, state.selectedProviderId, currentChannelId],
   );
 
+  // 系统 tab 的完整列表：宿主/原生渠道 + CLI 自己 YAML 里的供应商
+  const allSystemChannels = useMemo(
+    () => [...systemChannels, ...yamlSystemChannels],
+    [systemChannels, yamlSystemChannels],
+  );
+
   const [channelTab, setChannelTab] = useState<"system" | "plugin">(() => {
     return state.activeChannelType === "plugin" ? "plugin" : "system";
   });
 
   useEffect(() => {
-    if (state.activeChannelType === "plugin") setChannelTab("plugin");
-    else if (independentSystemChannels.some((c) => c.id === (state.selectedProviderId || currentChannelId))) {
-      setChannelTab("plugin");
-    } else {
-      setChannelTab("system");
-    }
-  }, [activeEngine, state.activeChannelType, state.selectedProviderId, currentChannelId, independentSystemChannels]);
+    // YAML 供应商已并入系统 tab，只有插件渠道才切到独立 tab
+    setChannelTab(state.activeChannelType === "plugin" ? "plugin" : "system");
+  }, [activeEngine, state.activeChannelType]);
 
   const activeChannel = useMemo(() => {
     if (state.activeChannelType === "plugin") {
@@ -379,9 +381,8 @@ export function CliModelFlyoutMenu({
       return null;
     }
     const targetId = state.selectedProviderId || currentChannelId;
-    const sys = systemChannels.find((c) => c.id === targetId)
-      || independentSystemChannels.find((c) => c.id === targetId)
-      // 若未明确选择且只有一个系统渠道，默认选中（兼容打开已有对话时 loadChannels 尚未完成）
+    const sys = allSystemChannels.find((c) => c.id === targetId)
+      // 若未明确选择且只有一个宿主/原生渠道，默认选中（兼容打开已有对话时 loadChannels 尚未完成）
       || (!targetId && systemChannels.length === 1 ? systemChannels[0] : null);
     if (sys) {
       return {
@@ -397,7 +398,7 @@ export function CliModelFlyoutMenu({
       };
     }
     return null;
-  }, [state.activeChannelType, state.activePluginChannelId, pluginCustomChannels, systemChannels, independentSystemChannels, currentChannelId, state.selectedProviderId]);
+  }, [state.activeChannelType, state.activePluginChannelId, pluginCustomChannels, systemChannels, allSystemChannels, currentChannelId, state.selectedProviderId]);
 
   const nativeActive = activeChannel?.id === NATIVE_PROVIDER_ID;
   const useNativeModels = nativeActive && (!activeChannel?.baseUrl || ["omp", "pi", "kimi", "grok"].includes(activeEngine));
@@ -474,30 +475,17 @@ export function CliModelFlyoutMenu({
   }, [activeEngine, activeChannel?.id, activeChannel?.baseUrl, activeChannel?.apiKey, loadingChannels, useNativeModels, busy]);
 
   const sortedSystemChannels = useMemo(() => {
-    if (systemChannels.length <= 1) return systemChannels;
+    if (allSystemChannels.length <= 1) return allSystemChannels;
     const isSysActive = state.activeChannelType !== "plugin";
     const curId = state.selectedProviderId || currentChannelId || activeChannel?.id;
-    return [...systemChannels].sort((a, b) => {
+    return [...allSystemChannels].sort((a, b) => {
       if (isSysActive) {
         if (a.id === curId) return -1;
         if (b.id === curId) return 1;
       }
       return 0;
     });
-  }, [systemChannels, currentChannelId, activeChannel, state.activeChannelType, state.selectedProviderId]);
-
-  const sortedIndependentSystemChannels = useMemo(() => {
-    if (independentSystemChannels.length <= 1) return independentSystemChannels;
-    const isSysActive = state.activeChannelType !== "plugin";
-    const curId = state.selectedProviderId || currentChannelId || activeChannel?.id;
-    return [...independentSystemChannels].sort((a, b) => {
-      if (isSysActive) {
-        if (a.id === curId) return -1;
-        if (b.id === curId) return 1;
-      }
-      return 0;
-    });
-  }, [independentSystemChannels, currentChannelId, activeChannel, state.activeChannelType, state.selectedProviderId]);
+  }, [allSystemChannels, currentChannelId, activeChannel, state.activeChannelType, state.selectedProviderId]);
 
   const sortedPluginChannels = useMemo(() => {
     if (pluginCustomChannels.length <= 1) return pluginCustomChannels;
@@ -1085,8 +1073,7 @@ export function CliModelFlyoutMenu({
     const error = sessionSelectionError(activeEngine);
     if (error) { setStatusMsg(error); return; }
 
-    const channel = independentSystemChannels.find((c) => c.id === channelId)
-      || systemChannels.find((c) => c.id === channelId);
+    const channel = allSystemChannels.find((c) => c.id === channelId);
     if (!channel) return;
 
     setPendingDeleteChannel({ id: channelId, name: channel.name, source: "host" });
@@ -1243,7 +1230,6 @@ export function CliModelFlyoutMenu({
                   setChannelTab(tab);
                 }}
                 systemChannels={sortedSystemChannels}
-                independentSystemChannels={sortedIndependentSystemChannels}
                 pluginCustomChannels={sortedPluginChannels}
                 loadingChannels={loadingChannels}
                 fetchingModels={fetchingModels}

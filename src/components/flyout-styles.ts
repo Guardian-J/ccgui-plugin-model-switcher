@@ -74,7 +74,7 @@ export const flyoutStyles = `
 .ms-row-title { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 550; min-width: 0; }
 .ms-source-label { display: inline-flex; align-items: center; padding: 1px 5px; border-radius: 3px; font-size: 10px; font-weight: 500; line-height: 1.3; flex-shrink: 0; }
 .ms-source-plugin { color: var(--ms-accent); background: color-mix(in srgb, var(--ms-accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--ms-accent) 25%, transparent); }
-.ms-source-host { color: var(--ms-muted); background: var(--ms-surface); border: 1px solid var(--ms-border); }
+.ms-source-system { color: var(--ms-muted); background: var(--ms-surface); border: 1px solid var(--ms-border); }
 .ms-row-name, .ms-row-detail { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ms-row-detail { font-size: 11px; color: var(--ms-muted); }
 .ms-custom-badge { display: inline-flex; align-items: center; padding: 1px 5px; border-radius: 4px; font-size: 10px; font-weight: 500; line-height: 1.3; color: var(--ms-accent); background: color-mix(in srgb, var(--ms-accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--ms-accent) 25%, transparent); flex-shrink: 0; }

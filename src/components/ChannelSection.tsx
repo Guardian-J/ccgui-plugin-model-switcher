@@ -103,7 +103,7 @@ export function ChannelRow({
   onView?: (e: React.MouseEvent) => void;
   disabled?: boolean;
   selectDisabled?: boolean;
-  sourceLabel?: "插件" | "宿主";
+  sourceLabel?: "插件" | "系统";
   /** YAML / 宿主供应商 id，同名渠道靠它区分 */
   channelId?: string;
 }) {
@@ -125,7 +125,7 @@ export function ChannelRow({
           <span className="ms-row-title">
             <span className="ms-row-name">{name}</span>
             {sourceLabel ? (
-              <span className={`ms-source-label ms-source-${sourceLabel === "插件" ? "plugin" : "host"}`}>
+              <span className={`ms-source-label ms-source-${sourceLabel === "插件" ? "plugin" : "system"}`}>
                 {sourceLabel}
               </span>
             ) : null}
@@ -179,7 +179,6 @@ interface ChannelSectionProps {
   channelTab: "system" | "plugin";
   onTabChange: (tab: "system" | "plugin") => void;
   systemChannels: SystemProviderChannel[];
-  independentSystemChannels: SystemProviderChannel[];
   pluginCustomChannels: CustomPluginChannel[];
   loadingChannels: boolean;
   fetchingModels: boolean;
@@ -212,7 +211,6 @@ export function ChannelSection({
   channelTab,
   onTabChange,
   systemChannels,
-  independentSystemChannels,
   pluginCustomChannels,
   loadingChannels,
   fetchingModels,
@@ -241,7 +239,7 @@ export function ChannelSection({
   const shouldShowForm = showAddChannel && (!channelSupportError || viewingChannelId);
   const channelCount = channelTab === "system"
     ? systemChannels.length
-    : pluginCustomChannels.length + independentSystemChannels.length;
+    : pluginCustomChannels.length;
 
   return (
     <div className="ms-channels">
@@ -310,7 +308,6 @@ export function ChannelSection({
         <ChannelList
           channelTab={channelTab}
           systemChannels={systemChannels}
-          independentSystemChannels={independentSystemChannels}
           pluginCustomChannels={pluginCustomChannels}
           loadingChannels={loadingChannels}
           fetchingModels={fetchingModels}

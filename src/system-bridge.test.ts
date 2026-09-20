@@ -149,7 +149,7 @@ describe('system-bridge', () => {
       remark: '系统供应商',
     });
 
-    it('原生和宿主供应商进系统 tab，YAML 宿主进独立 tab', () => {
+    it('原生和宿主供应商进系统 tab，YAML 宿主单独返回（供去重后并入系统 tab）', () => {
       const { systemChannels, independentSystemChannels, pluginYamlChannels } = classifyProviderChannels([
         native, hostProvider, yamlHost, yamlPlugin,
       ]);
@@ -202,11 +202,15 @@ describe('system-bridge', () => {
   });
 
   describe('withoutPluginTwinChannels', () => {
-    const grokYaml = ch({ id: 'grok', name: 'grok', baseUrl: 'https://tobapi.fullcupai.com' });
+    const grokYaml = ch({ id: 'custom_1', name: 'grok', baseUrl: 'https://tobapi.fullcupai.com' });
     const pluginGrok = { id: 'custom_1', name: 'grok', baseUrl: 'https://tobapi.fullcupai.com/' };
 
-    it('同名同址的宿主行被插件行吸收，不再重复显示', () => {
+    it('同 id 的裸 key 宿主行被插件行吸收，不再重复显示', () => {
       expect(withoutPluginTwinChannels([grokYaml], [pluginGrok])).toEqual([]);
+    });
+
+    it('插件行带 plugin_ 前缀时同样能匹配裸 key 宿主行', () => {
+      expect(withoutPluginTwinChannels([grokYaml], [{ id: pluginProviderId('custom_1') }])).toEqual([]);
     });
 
     it('真·宿主 YAML 渠道无插件孪生时保留', () => {
@@ -214,18 +218,22 @@ describe('system-bridge', () => {
       expect(withoutPluginTwinChannels([google, grokYaml], [pluginGrok])).toEqual([google]);
     });
 
-    it('同名但地址不同不算重复', () => {
-      const other = ch({ id: 'grok-2', name: 'grok', baseUrl: 'https://another.example.com' });
-      expect(withoutPluginTwinChannels([other], [pluginGrok])).toEqual([other]);
+    it('同名不同 id 是不同渠道，全部保留', () => {
+      const sameName = ch({ id: 'grok', name: 'grok', baseUrl: 'https://tobapi.fullcupai.com' });
+      expect(withoutPluginTwinChannels([sameName], [pluginGrok])).toEqual([sameName]);
+    });
+
+    it('同名同址但 id 不同也不去重', () => {
+      const twinAddr = ch({ id: 'grok-2', name: 'grok', baseUrl: 'https://tobapi.fullcupai.com/' });
+      expect(withoutPluginTwinChannels([twinAddr], [pluginGrok])).toEqual([twinAddr]);
     });
 
     it('宿主当前选中的条目即使重复也保留，避免 activeChannel 查不到', () => {
-      expect(withoutPluginTwinChannels([grokYaml], [pluginGrok], 'grok')).toEqual([grokYaml]);
+      expect(withoutPluginTwinChannels([grokYaml], [pluginGrok], 'custom_1')).toEqual([grokYaml]);
     });
 
-    it('缺 name 或 baseUrl 时不判定为重复', () => {
-      const bare = ch({ id: 'x', name: 'grok', baseUrl: '' });
-      expect(withoutPluginTwinChannels([bare], [{ id: 'p', name: 'grok', baseUrl: '' }])).toEqual([bare]);
+    it('插件渠道缺 id 时不判定为重复', () => {
+      expect(withoutPluginTwinChannels([grokYaml], [{ id: '' }])).toEqual([grokYaml]);
     });
 
     it('无插件渠道时原样返回', () => {

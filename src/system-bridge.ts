@@ -697,9 +697,11 @@ export function mergeYamlProviderIntoHostChannel(
 }
 
 /**
- * 把 getSystemProviderChannels 的列表拆到两个 tab：
- * - 系统：CLI 原生 + 宿主供应商配置（非 YAML 独立项）
- * - 独立·宿主：OMP/PI 写在 models.yml / models.json 里、且没有 plugin_ 前缀的供应商
+ * 把 getSystemProviderChannels 的列表拆成三桶：
+ * - 系统：CLI 原生 + 宿主供应商配置
+ * - 系统·YAML：OMP/PI 写在 models.yml / models.json 里、且没有 plugin_ 前缀的供应商。
+ *   这份配置属于 CLI 自己，同样算系统渠道，和上一桶合并后一起显示在「系统渠道」tab；
+ *   单独返回只是为了先剔除与插件行同 id 的孪生条目（withoutPluginTwinChannels）
  * - 独立·插件 YAML：带 plugin_ 前缀的 YAML 条目（与插件存储按 id 合并，不按 name）
  */
 export function classifyProviderChannels(
@@ -725,31 +727,25 @@ export function classifyProviderChannels(
   return { systemChannels, independentSystemChannels, pluginYamlChannels };
 }
 
-/** 同名同址视为同一渠道；name 或 baseUrl 缺失时返回空串，表示无法判定为重复。 */
-function channelTwinKey(name?: string, baseUrl?: string): string {
-  const n = (name || "").trim().toLowerCase();
-  const u = (baseUrl || "").trim().toLowerCase().replace(/\/+$/, "");
-  return n && u ? `${n}\u0000${u}` : "";
-}
-
 /**
- * 独立 tab 的「宿主」行去重：omp/pi 的 models.yml 里既有插件写的 plugin_ 前缀条目，
- * 也可能有同一渠道的裸 key 条目（宿主设置页手编或编辑宿主渠道时写入），
- * 同名同址时它们是同一个渠道，只保留插件行，避免一个渠道显示成「插件」+「宿主」两条。
+ * YAML 系统行去重：omp/pi 的 models.yml 里，同一个插件渠道既有 plugin_ 前缀条目，
+ * 也可能留着同 id 的裸 key 条目，导致一个渠道在「独立」和「系统」两个 tab 里各显示一条。
+ * 只按 id 判定重复（裸 id 与 plugin_ 前缀互为别名），只保留插件行；
+ * 同名不同 id 是不同渠道，必须全部保留。
  * 宿主当前选中的 id 必须保留：activeChannel 依赖它查渠道，过滤掉会中断模型拉取。
  */
 export function withoutPluginTwinChannels(
   independentChannels: SystemProviderChannel[],
-  pluginChannels: { name?: string; baseUrl?: string }[],
+  pluginChannels: { id?: string }[],
   keepId?: string | null,
 ): SystemProviderChannel[] {
-  const twins = new Set(
-    pluginChannels.map(ch => channelTwinKey(ch.name, ch.baseUrl)).filter(Boolean),
-  );
+  const twins = new Set<string>();
+  for (const ch of pluginChannels) {
+    if (!ch.id) continue;
+    for (const alias of pluginIdAliases(ch.id)) twins.add(alias);
+  }
   if (twins.size === 0) return independentChannels;
-  return independentChannels.filter(
-    ch => ch.id === keepId || !twins.has(channelTwinKey(ch.name, ch.baseUrl)),
-  );
+  return independentChannels.filter(ch => ch.id === keepId || !twins.has(ch.id));
 }
 
 /**

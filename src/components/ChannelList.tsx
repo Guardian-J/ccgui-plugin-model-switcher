@@ -6,7 +6,6 @@ import { ChannelRow } from "./ChannelSection";
 interface ChannelListProps {
   channelTab: "system" | "plugin";
   systemChannels: SystemProviderChannel[];
-  independentSystemChannels: SystemProviderChannel[];
   pluginCustomChannels: CustomPluginChannel[];
   loadingChannels: boolean;
   fetchingModels: boolean;
@@ -26,7 +25,6 @@ interface ChannelListProps {
 export function ChannelList({
   channelTab,
   systemChannels,
-  independentSystemChannels,
   pluginCustomChannels,
   loadingChannels,
   fetchingModels,
@@ -61,21 +59,17 @@ export function ChannelList({
     );
   }
 
-  // 独立渠道标签页：显示插件渠道 + YAML/JSON 配置中与插件渠道匹配的系统渠道
+  // 独立渠道标签页：只显示插件自己维护的渠道（CLI YAML 供应商归系统 tab）
   return (
     <PluginChannelList
       pluginCustomChannels={pluginCustomChannels}
-      hostCustomChannels={independentSystemChannels}
       fetchingModels={fetchingModels}
       selectedChannelId={selectedChannelId}
       isPluginActive={isPluginActive}
       channelSupportError={channelSupportError}
       onSelectPluginChannel={onSelectPluginChannel}
-      onSelectSystemProvider={onSelectSystemProvider}
       onEditPluginChannel={onEditPluginChannel}
       onDeletePluginChannel={onDeletePluginChannel}
-      onEditHostChannel={onEditHostChannel}
-      onDeleteHostChannel={onDeleteHostChannel}
       channelBrand={channelBrand}
     />
   );
@@ -141,37 +135,28 @@ function SystemChannelList({
 
 interface PluginChannelListProps {
   pluginCustomChannels: CustomPluginChannel[];
-  hostCustomChannels: SystemProviderChannel[];
   fetchingModels: boolean;
   selectedChannelId: string | null;
   isPluginActive: boolean;
   channelSupportError?: string | null;
   onSelectPluginChannel: (ch: CustomPluginChannel) => void;
-  onSelectSystemProvider: (ch: SystemProviderChannel) => void;
   onEditPluginChannel: (ch: CustomPluginChannel, e: React.MouseEvent) => void;
   onDeletePluginChannel: (id: string, e: React.MouseEvent) => void;
-  onEditHostChannel: (ch: SystemProviderChannel, e: React.MouseEvent) => void;
-  onDeleteHostChannel: (id: string, e: React.MouseEvent) => void;
   channelBrand: (name: string, model?: string, url?: string, isNative?: boolean) => string;
 }
 
 function PluginChannelList({
   pluginCustomChannels,
-  hostCustomChannels,
   fetchingModels,
   selectedChannelId,
   isPluginActive,
   channelSupportError,
   onSelectPluginChannel,
-  onSelectSystemProvider,
   onEditPluginChannel,
   onDeletePluginChannel,
-  onEditHostChannel,
-  onDeleteHostChannel,
   channelBrand,
 }: PluginChannelListProps) {
-  const totalCount = pluginCustomChannels.length + hostCustomChannels.length;
-  if (totalCount === 0) {
+  if (pluginCustomChannels.length === 0) {
     return <span className="ms-empty">暂无独立渠道</span>;
   }
 
@@ -191,23 +176,6 @@ function PluginChannelList({
           onEdit={channelSupportError ? undefined : (e) => onEditPluginChannel(ch, e)}
           sourceLabel="插件"
           channelId={pluginProviderId(ch.id)}
-        />
-      ))}
-      {hostCustomChannels.map((ch) => (
-        <ChannelRow
-          key={`host:${ch.id}`}
-          disabled={fetchingModels}
-          selectDisabled={!!channelSupportError}
-          name={ch.name}
-          url={ch.baseUrl}
-          detail={ch.remark}
-          brand={channelBrand(ch.name, ch.model, ch.baseUrl, false)}
-          selected={!isPluginActive && ch.id === selectedChannelId}
-          onSelect={() => onSelectSystemProvider(ch)}
-          onDelete={(e) => onDeleteHostChannel(ch.id, e)}
-          onEdit={channelSupportError ? undefined : (e) => onEditHostChannel(ch, e)}
-          sourceLabel="宿主"
-          channelId={ch.id}
         />
       ))}
     </>
