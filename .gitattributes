@@ -1,0 +1,4 @@
+# 发版产物的 sha256 要在磁盘、git blob、Release 资产三处一致。
+# core.autocrlf=true 会把工作区检出成 CRLF，与 LF 的 blob 算出两个不同哈希，
+# 导致插件库登记的 sha256 与宿主实际下载到的文件校验不上。此处钉死 LF。
+manifest.json text eol=lf
