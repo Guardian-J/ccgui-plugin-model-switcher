@@ -767,7 +767,8 @@ export async function applyModelSelectionToHost(params: {
   console.warn(`[model-switcher] 切换到 ${engine} / ${finalModel} / ${effort ?? "无"}`);
   console.warn(`[model-switcher] ${summary}`);
   lastDiagnostic = summary;
-  const patched = effort ? await patchSessionEffort(params.ctx, store, engine, effort, active, liveSession) : false;
+  // 只有已有会话（有 sessionId）才尝试 patch；新会话走下面的 setEffort/onEffortChange
+  const patched = effort && active?.sessionId ? await patchSessionEffort(params.ctx, store, engine, effort, active, liveSession) : false;
 
   // 1. 先同步 localStorage，确保数据就绪
   if (effort) syncLocalStorage(engine, finalModel, effort);
