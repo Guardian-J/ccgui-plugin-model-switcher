@@ -126,7 +126,13 @@ export default function activate(ctx: PluginContext): Disposer {
             });
           }
         } catch (err) {
-          console.warn("[model-switcher] 恢复会话渠道失败:", err);
+          // 静默处理渠道不存在等错误，避免干扰用户
+          const errMsg = err instanceof Error ? err.message : String(err);
+          if (errMsg.includes("not found")) {
+            console.warn(`[model-switcher] 会话渠道 ${providerId} 在 ${engine} 中不存在，已跳过恢复`);
+          } else {
+            console.warn("[model-switcher] 恢复会话渠道失败:", err);
+          }
         }
       })();
     }, [sessionDisplay?.stableKey]);
