@@ -6,8 +6,21 @@ import {
   independentChannelError,
   NATIVE_PROVIDER_ID,
   peekNativeCatalog,
-  invalidateNativeCatalogCache
+  invalidateNativeCatalogCache,
+  classifyProviderChannels,
+  mergePluginChannelsById,
+  pluginProviderId,
 } from './system-bridge';
+import type { SystemProviderChannel } from './types';
+
+function ch(partial: Partial<SystemProviderChannel> & Pick<SystemProviderChannel, 'id' | 'name'>): SystemProviderChannel {
+  return {
+    baseUrl: '',
+    apiKey: '',
+    model: '',
+    ...partial,
+  };
+}
 
 describe('system-bridge', () => {
   describe('CLI_DISPLAY_NAMES', () => {
@@ -108,6 +121,89 @@ describe('system-bridge', () => {
     it('应该处理普通模型 ID', () => {
       const result = displayEngineModel('claude', null, 'claude-opus-5');
       expect(result).toBe('claude-opus-5');
+    });
+  });
+
+  describe('classifyProviderChannels', () => {
+    const native = ch({
+      id: NATIVE_PROVIDER_ID,
+      name: 'CLI 原生配置',
+      isNative: true,
+      remark: 'models.yml · agent.db',
+    });
+    const yamlHost = ch({
+      id: 'google',
+      name: 'Google',
+      remark: 'models.yml · 3 个模型',
+    });
+    const yamlPlugin = ch({
+      id: 'plugin_model-switcher_custom_1',
+      name: '插件渠道',
+      remark: 'models.yml · 1 个模型',
+    });
+    const hostProvider = ch({
+      id: 'anthropic',
+      name: 'Anthropic',
+      remark: '系统供应商',
+    });
+
+    it('原生和宿主供应商进系统 tab，YAML 宿主进独立 tab', () => {
+      const { systemChannels, independentSystemChannels, pluginYamlChannels } = classifyProviderChannels([
+        native, hostProvider, yamlHost, yamlPlugin,
+      ]);
+      expect(systemChannels.map((c) => c.id)).toEqual([NATIVE_PROVIDER_ID, 'anthropic']);
+      expect(independentSystemChannels.map((c) => c.id)).toEqual(['google']);
+      expect(pluginYamlChannels.map((c) => c.id)).toEqual(['plugin_model-switcher_custom_1']);
+    });
+
+    it('带 plugin_ 前缀的 YAML 只进插件 YAML 列表', () => {
+      const { systemChannels, independentSystemChannels, pluginYamlChannels } = classifyProviderChannels([yamlPlugin]);
+      expect(systemChannels).toEqual([]);
+      expect(independentSystemChannels).toEqual([]);
+      expect(pluginYamlChannels).toEqual([yamlPlugin]);
+    });
+
+    it('同名不同 id 的 YAML 宿主全部保留', () => {
+      const agvHost = ch({ id: '0b08bc2f-19ba-40b2-ba03-727dcac41fb2', name: 'agv', remark: 'models.yml · 1 个模型' });
+      const geminiHost = ch({ id: 'gemini', name: 'gemini', remark: 'models.yml · 1 个模型' });
+      const { independentSystemChannels } = classifyProviderChannels([agvHost, geminiHost]);
+      expect(independentSystemChannels.map((c) => c.id)).toEqual([
+        '0b08bc2f-19ba-40b2-ba03-727dcac41fb2',
+        'gemini',
+      ]);
+    });
+
+    it('原生 remark 含 models.yml 仍算系统渠道', () => {
+      const { systemChannels, independentSystemChannels, pluginYamlChannels } = classifyProviderChannels([native]);
+      expect(systemChannels).toEqual([native]);
+      expect(independentSystemChannels).toEqual([]);
+      expect(pluginYamlChannels).toEqual([]);
+    });
+  });
+
+  describe('mergePluginChannelsById', () => {
+    it('同名不同 id 的插件与宿主 YAML 都保留', () => {
+      const stored = [{
+        id: '0b08bc2f-19ba-40b2-ba03-727dcac41fb2',
+        name: 'agv',
+        baseUrl: 'https://tobapi.fullcupai.com',
+        apiKey: 'sk-plugin',
+      }];
+      const yamlPlugin = ch({
+        id: pluginProviderId('0b08bc2f-19ba-40b2-ba03-727dcac41fb2'),
+        name: 'agv',
+        remark: 'models.yml · 1 个模型',
+      });
+      const extraYaml = ch({
+        id: pluginProviderId('other-plugin'),
+        name: 'agv',
+        remark: 'models.yml · 1 个模型',
+      });
+      const merged = mergePluginChannelsById(stored, [yamlPlugin, extraYaml]);
+      expect(merged.map((c) => c.id)).toEqual([
+        '0b08bc2f-19ba-40b2-ba03-727dcac41fb2',
+        'other-plugin',
+      ]);
     });
   });
 });

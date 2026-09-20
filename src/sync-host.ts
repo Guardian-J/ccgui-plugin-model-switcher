@@ -549,19 +549,60 @@ async function patchSessionEffort(
   session: HostSession | null,
   live?: HostSessionState | null,
 ): Promise<boolean> {
+  console.warn(`[model-switcher] ===== patchSessionEffort 开始 =====`);
+  console.warn(`[model-switcher] 入参: engine=${engine}, effort=${effort}, sessionId=${session?.sessionId}, ctx.sessions=${ctx?.sessions ? "✓" : "✗"}`);
+
   if (ctx?.sessions?.setEffort && session?.sessionId) {
     try {
+      // 先确保会话已选中并加载到 bySession（触发 selectSession 的加载逻辑）
+      if (ctx.sessions.selectSession) {
+        try {
+          await ctx.sessions.selectSession(engine, session.sessionId, session.workspacePath);
+          console.warn(`[model-switcher] 已确保会话加载: ${engine}/${session.sessionId}`);
+        } catch (err) {
+          console.warn(`[model-switcher] selectSession 调用失败（可能已选中）:`, err);
+        }
+      }
+
+      console.warn(`[model-switcher] 调用 ctx.sessions.setEffort(${engine}, ${session.sessionId}, ${effort})`);
       await ctx.sessions.setEffort(engine, session.sessionId, session.workspacePath, effort);
       const msg = `ctx.sessions.setEffort(${engine}, ${session.sessionId}, ${effort})`;
-      console.warn(`[model-switcher] ${msg}`);
+      console.warn(`[model-switcher] ✓ ${msg} 成功`);
       lastDiagnostic = msg;
+
+      // 等待一帧，让 React 完成状态更新
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // 尝试从全局变量验证 (开发模式下宿主会暴露 __chatStore)
+      const globalStore = (window as any).__chatStore;
+      if (globalStore) {
+        const globalState = globalStore.getState();
+        const key = `${engine}/${session.sessionId}`;
+        const sessionState = globalState.bySession?.[key];
+        console.warn(`[model-switcher] 验证(全局store): bySession[${key}]存在=${!!sessionState}, activeEffort=${sessionState?.activeEffort}`);
+      }
+
+      // 验证是否写入成功
+      if (live) {
+        console.warn(`[model-switcher] 验证(live旧引用): liveSession.activeEffort = ${live.activeEffort}`);
+      }
+      if (store) {
+        const state = store.getState();
+        const key = `${engine}/${session.sessionId}`;
+        const sessionState = (state.bySession as any)?.[key];
+        const bySessionEffort = sessionState?.activeEffort;
+        console.warn(`[model-switcher] 验证(store最新): bySession[${key}]存在=${!!sessionState}, activeEffort=${bySessionEffort}`);
+      }
+      console.warn(`[model-switcher] ===== patchSessionEffort 完成 (成功) =====`);
       return true;
     } catch (err) {
       console.warn(`[model-switcher] ctx.sessions.setEffort 失败，fallback 到 Fiber 猜测:`, err);
       // 继续走下面的 fallback，不 return——旧会话仍需要某种方式落地。
     }
   }
-  return patchHostSessionEffort(store, engine, effort, session, live);
+  const result = patchHostSessionEffort(store, engine, effort, session, live);
+  console.warn(`[model-switcher] ===== patchSessionEffort 完成 (fallback结果=${result}) =====`);
+  return result;
 }
 
 /**
@@ -763,12 +804,24 @@ export async function applyModelSelectionToHost(params: {
   const actions = store ? undefined : findHostStoreActions();
   const active = callbacks?.session !== undefined ? callbacks.session : (store?.getState().active ?? getHostSession());
   const liveSession = effort && active?.sessionId ? findHostSessionState() : null;
-  const summary = `sessionId=${active?.sessionId ?? "null"} liveSession=${liveSession ? "✓" : "✗"} store=${store ? "✓" : "✗"}`;
-  console.warn(`[model-switcher] 切换到 ${engine} / ${finalModel} / ${effort ?? "无"}`);
-  console.warn(`[model-switcher] ${summary}`);
-  lastDiagnostic = summary;
+
+  // 详细日志：当前状态
+  const storeState = store?.getState();
+  const currentStoreEffort = storeState?.efforts?.[engine];
+  const sessionKey = active?.sessionId ? `${engine}/${active.sessionId}` : null;
+  const bySessionEffort = sessionKey ? (storeState?.bySession as any)?.[sessionKey]?.activeEffort : null;
+  const liveEffort = liveSession?.activeEffort;
+
+  console.warn(`[model-switcher] ========== 档位切换开始 ==========`);
+  console.warn(`[model-switcher] 目标: ${engine} / ${finalModel} / effort=${effort ?? "无"}`);
+  console.warn(`[model-switcher] 会话: sessionId=${active?.sessionId ?? "null"}, isNewSession=${!active?.sessionId}`);
+  console.warn(`[model-switcher] 当前状态: store.efforts[${engine}]=${currentStoreEffort}, bySession[${sessionKey}].activeEffort=${bySessionEffort}, liveSession.activeEffort=${liveEffort}`);
+  console.warn(`[model-switcher] 组件: store=${store ? "✓" : "✗"}, liveSession=${liveSession ? "✓" : "✗"}, ctx.sessions=${params.ctx?.sessions ? "✓" : "✗"}`);
+
+  lastDiagnostic = `sessionId=${active?.sessionId ?? "null"} liveSession=${liveSession ? "✓" : "✗"} store=${store ? "✓" : "✗"}`;
   // 只有已有会话（有 sessionId）才尝试 patch；新会话走下面的 setEffort/onEffortChange
   const patched = effort && active?.sessionId ? await patchSessionEffort(params.ctx, store, engine, effort, active, liveSession) : false;
+  console.warn(`[model-switcher] patch 结果: ${patched ? "成功" : "失败/跳过"}`);
 
   // 1. 先同步 localStorage，确保数据就绪
   if (effort) syncLocalStorage(engine, finalModel, effort);
@@ -789,16 +842,27 @@ export async function applyModelSelectionToHost(params: {
     } else if (callbacks?.onModelChange) {
       callbacks.onModelChange(engine, finalModel);
     }
-    if (effort && !patched) {
-      // 已有会话已通过 patchHostSessionEffort 改了 SessionState 或 bySession，不再走 setEffort
-      if (!active?.sessionId) {
+    // 档位处理分两个维度：
+    // 1. 已有会话：通过 patchSessionEffort 更新 bySession[key].activeEffort（已完成）
+    // 2. 引擎默认：通过 setEffort/onEffortChange 更新 efforts[engine]（确保新会话用对档位）
+    if (effort) {
+      if (!patched && !active?.sessionId) {
+        // 新会话：只需要设置引擎默认档位
         console.warn(`[model-switcher] 新会话走 setEffort/onEffortChange`);
         if (actions?.setEffort) {
           await Promise.resolve(actions.setEffort(engine, effort));
         } else if (callbacks?.onEffortChange) {
           callbacks.onEffortChange(engine, effort);
         }
-      } else {
+      } else if (active?.sessionId) {
+        // 已有会话：bySession 已通过 patchSessionEffort 更新，但还要同步更新引擎默认档位
+        console.warn(`[model-switcher] 已有会话：同步更新引擎默认档位 efforts[${engine}] = ${effort}`);
+        if (actions?.setEffort) {
+          await Promise.resolve(actions.setEffort(engine, effort));
+        } else if (callbacks?.onEffortChange) {
+          callbacks.onEffortChange(engine, effort);
+        }
+      } else if (!patched) {
         console.warn(`[model-switcher] ⚠️ 已有会话但 patch 失败，effort 未写入`);
       }
     }
@@ -817,8 +881,31 @@ export async function applyModelSelectionToHost(params: {
 
   // 3. 同步写入系统后端 AppSettings（确保新会话与默认配置生效）
   await syncAppSettings(engine, finalModel, effort ?? "");
+  console.warn(`[model-switcher] 已写入 AppSettings: defaultEfforts[${engine}]=${effort ?? ""}`);
 
-  // 4. 派发通知事件
+  // 4. 已有会话切换档位后，同步更新宿主 store 的内存状态 efforts[engine]
+  //    确保后续新会话能读取到正确的默认档位
+  if (effort && active?.sessionId && store) {
+    try {
+      const state = store.getState();
+      const oldEffort = state.efforts?.[engine];
+      store.setState({ efforts: { ...state.efforts, [engine]: effort } });
+      const newState = store.getState();
+      const updatedEffort = newState.efforts?.[engine];
+      console.warn(`[model-switcher] 已同步更新 store.efforts[${engine}]: ${oldEffort} → ${updatedEffort}`);
+
+      // 验证 bySession 是否正确更新
+      const key = `${engine}/${active.sessionId}`;
+      const bySessionEffort = (newState.bySession as any)?.[key]?.activeEffort;
+      console.warn(`[model-switcher] 验证: bySession[${key}].activeEffort = ${bySessionEffort}`);
+    } catch (err) {
+      console.warn("[model-switcher] 同步 store.efforts 失败:", err);
+    }
+  }
+
+  console.warn(`[model-switcher] ========== 档位切换完成 ==========`);
+
+  // 5. 派发通知事件
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("ccgui:model-changed", { detail: { engine, model: finalModel, effort } }));
   }

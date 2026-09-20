@@ -54,6 +54,10 @@ export default function activate(ctx: PluginContext): Disposer {
     .then((saved) => {
       if (saved) {
         currentState = { ...DEFAULT_STATE, ...saved };
+        // 根据配置禁用主题时清理主题样式
+        if (saved.enableTheme === false) {
+          themeManager.dispose();
+        }
         notify();
       }
     })

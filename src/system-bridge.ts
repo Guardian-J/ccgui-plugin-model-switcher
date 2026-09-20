@@ -302,7 +302,7 @@ export function revalidateSystemEngines(): void {
   void getSystemEngines(true).catch(() => {});
 }
 
-function getCliConfig(): Promise<CliConfigMap> {
+export function getCliConfig(): Promise<CliConfigMap> {
   if (cliConfigInflight) return cliConfigInflight;
   const pending = invokeTauri<CliConfigMap>("get_cli_config");
   cliConfigInflight = pending;
@@ -545,7 +545,7 @@ export async function getSystemProviderChannels(
             modelsRes.file?.format || (engine === "omp" ? "yaml" : "json"),
           );
           for (const [pId, pData] of Object.entries(parsedProviders)) {
-            if (isPluginProviderId(pId)) continue;
+            // 按 YAML key（id）收录全部供应商；plugin_ 前缀条目交给独立 tab 的插件行，不按 name 去重
             const channel: SystemProviderChannel = {
               id: pId,
               name: pData.name || pId,
@@ -555,6 +555,7 @@ export async function getSystemProviderChannels(
               model: pData.models?.[0]?.id || "",
               remark: `${engine === "omp" ? "models.yml" : "models.json"} · ${pData.models?.length || 0} 个模型`,
               isCurrent: pId === currentId,
+              isNative: false,
               settingsConfig: {
                 models: pData.models,
                 api: pData.api,
@@ -637,6 +638,84 @@ export function pluginProviderId(channelId: string): string {
 
 export function isPluginProviderId(providerId: string): boolean {
   return providerId.startsWith(PLUGIN_PROVIDER_PREFIX);
+}
+
+/** 去掉独立渠道在 YAML/宿主里的 plugin_ 前缀，得到插件存储用的裸 id。 */
+export function stripPluginProviderPrefix(providerId: string): string {
+  return isPluginProviderId(providerId)
+    ? providerId.slice(PLUGIN_PROVIDER_PREFIX.length)
+    : providerId;
+}
+
+function pluginIdAliases(id: string): string[] {
+  const stripped = stripPluginProviderPrefix(id);
+  return stripped === id ? [id, pluginProviderId(id)] : [id, stripped];
+}
+
+/**
+ * 把 getSystemProviderChannels 的列表拆到两个 tab：
+ * - 系统：CLI 原生 + 宿主供应商配置（非 YAML 独立项）
+ * - 独立·宿主：OMP/PI 写在 models.yml / models.json 里、且没有 plugin_ 前缀的供应商
+ * - 独立·插件 YAML：带 plugin_ 前缀的 YAML 条目（与插件存储按 id 合并，不按 name）
+ */
+export function classifyProviderChannels(
+  channels: SystemProviderChannel[],
+): {
+  systemChannels: SystemProviderChannel[];
+  independentSystemChannels: SystemProviderChannel[];
+  pluginYamlChannels: SystemProviderChannel[];
+} {
+  const systemChannels: SystemProviderChannel[] = [];
+  const independentSystemChannels: SystemProviderChannel[] = [];
+  const pluginYamlChannels: SystemProviderChannel[] = [];
+  for (const ch of channels) {
+    if (isPluginProviderId(ch.id)) {
+      pluginYamlChannels.push(ch);
+      continue;
+    }
+    // OMP/PI 供应商渠道的 remark 格式是 "models.yml · N 个模型"，不应误判为宿主 YAML 渠道
+    const yamlHost = !ch.isNative && ch.id !== NATIVE_PROVIDER_ID &&
+      typeof ch.remark === "string" && /models\.(yml|json)/.test(ch.remark) &&
+      !/·\s*\d+\s*个模型/.test(ch.remark);
+    if (yamlHost) independentSystemChannels.push(ch);
+    else systemChannels.push(ch);
+  }
+  return { systemChannels, independentSystemChannels, pluginYamlChannels };
+}
+
+/**
+ * 独立 tab 的插件行：插件存储 ∪ YAML 中带 plugin_ 前缀的供应商。
+ * 只按 id 去重（plugin_ 前缀与裸 id 视为同一条），同名不同 id 全部保留。
+ */
+export function mergePluginChannelsById(
+  pluginChannels: CustomPluginChannel[],
+  pluginYamlChannels: SystemProviderChannel[],
+): CustomPluginChannel[] {
+  const result: CustomPluginChannel[] = [];
+  const seen = new Set<string>();
+  const mark = (id: string) => {
+    for (const alias of pluginIdAliases(id)) seen.add(alias);
+  };
+  for (const ch of pluginChannels) {
+    if (!ch.id || seen.has(ch.id)) continue;
+    mark(ch.id);
+    result.push(ch);
+  }
+  for (const ch of pluginYamlChannels) {
+    const id = stripPluginProviderPrefix(ch.id);
+    if (!id || seen.has(ch.id) || seen.has(id)) continue;
+    mark(id);
+    const api = ch.api && isPiFamilyApiProtocol(ch.api) ? ch.api : undefined;
+    result.push({
+      id,
+      name: ch.name,
+      baseUrl: ch.baseUrl,
+      apiKey: ch.apiKey,
+      model: ch.model,
+      api,
+    });
+  }
+  return result;
 }
 
 function piFamilyProviderId(
@@ -752,9 +831,10 @@ async function readPiFamilyModelsConfig(engine: "pi" | "omp"): Promise<{
 async function applyPiFamilyPluginChannel(
   engine: "pi" | "omp",
   channel: CustomPluginChannel,
+  providerId = pluginProviderId(channel.id),
 ): Promise<void> {
   const { text, format } = await readPiFamilyModelsConfig(engine);
-  const next = upsertPiFamilyProviderText(text, format, pluginProviderId(channel.id), {
+  const next = upsertPiFamilyProviderText(text, format, providerId, {
     name: channel.name,
     baseUrl: channel.baseUrl,
     apiKey: channel.apiKey,
@@ -816,32 +896,53 @@ export async function ensurePiFamilyModelConfigured(
   }
 }
 
+async function deletePiFamilyYamlProvider(
+  engine: "pi" | "omp",
+  yamlId: string,
+): Promise<void> {
+  const { text, format } = await readPiFamilyModelsConfig(engine);
+  const next = removePiFamilyProviderText(text, format, yamlId);
+  if (next === text) return;
+  await invokeTauri("pi_family_models_config_write", { engine, text: next });
+  invalidateNativeCatalogCache(engine);
+}
+
 async function deletePiFamilyPluginChannel(
   engine: "pi" | "omp",
   channelId: string,
 ): Promise<void> {
-  const { text, format } = await readPiFamilyModelsConfig(engine);
-  const next = removePiFamilyProviderText(text, format, pluginProviderId(channelId));
-  if (next === text) return;
-  await invokeTauri("pi_family_models_config_write", { engine, text: next });
-  invalidateNativeCatalogCache(engine);
+  await deletePiFamilyYamlProvider(engine, pluginProviderId(channelId));
+}
+
+/** 删除 OMP/PI 宿主 YAML 供应商（裸 id，不加 plugin_ 前缀）。 */
+export async function deleteHostProviderChannel(
+  engine: CliEngineId,
+  channelId: string,
+): Promise<void> {
+  if (isPiFamilyEngine(engine)) {
+    await deletePiFamilyYamlProvider(engine, channelId);
+  }
+  await invokeTauri("delete_provider", { engine, id: channelId });
+  invalidateCliConfig();
+  notifyCliConfigChanged();
 }
 
 /**
  * 把独立渠道 upsert 到宿主供应商列表；会话绑定由调用方执行，不改写全局默认渠道。
  * Codex 附带 settingsConfig（auth.json + requires_openai_auth），omp / pi 写入 models.yml / models.json。
  * skipHostWrite=true 时（新宿主模式）跳过所有 CLI 配置文件写入和 upsert_provider，仅由调用方持久化到插件存储。
+ * keepOriginalId=true 时（编辑系统渠道）使用原始 ID，不添加 plugin_model-switcher_ 前缀。
  */
 export async function applyCustomPluginChannelToEngine(
   _ctx: PluginContext,
   engine: CliEngineId,
   channel: CustomPluginChannel,
-  { skipHostWrite = false }: { skipHostWrite?: boolean } = {},
+  { skipHostWrite = false, keepOriginalId = false }: { skipHostWrite?: boolean; keepOriginalId?: boolean } = {},
 ): Promise<void> {
   const error = independentChannelError(engine);
   if (error) throw new Error(error);
   if (skipHostWrite) return;
-  const id = pluginProviderId(channel.id);
+  const id = keepOriginalId ? channel.id : pluginProviderId(channel.id);
   const json: Record<string, unknown> = {
     name: channel.name,
     baseUrl: channel.baseUrl,
@@ -852,12 +953,19 @@ export async function applyCustomPluginChannelToEngine(
   if (engine === "codex") {
     json.settingsConfig = buildCodexPluginSettingsConfig(id, channel);
   }
-  // Claude CLI 独立渠道默认注入 attribution 和 ENABLE_TOOL_SEARCH
+  // Claude CLI 独立渠道默认注入 attribution、ENABLE_TOOL_SEARCH，CLAUDE_CODE_EFFORT_LEVEL 由开关控制
   if (engine === "claude") {
+    const env: Record<string, string> = {
+      ENABLE_TOOL_SEARCH: "true",
+    };
+    // 仅当开关开启时注入 CLAUDE_CODE_EFFORT_LEVEL
+    if (channel.enableEffortLevel) {
+      env.CLAUDE_CODE_EFFORT_LEVEL = "max";
+    }
     json.settingsConfig = {
       ...(json.settingsConfig as Record<string, unknown> || {}),
       attribution: { commit: "", pr: "" },
-      env: { ENABLE_TOOL_SEARCH: "true" },
+      env,
     };
   }
   if (isPiFamilyEngine(engine)) {
@@ -869,7 +977,7 @@ export async function applyCustomPluginChannelToEngine(
       if (registered && ["name", "baseUrl", "apiKey", "api", "model"].every(key =>
           (registered[key] || "") === (json[key] || ""))) return;
     }
-    await applyPiFamilyPluginChannel(engine, { ...channel, api: json.api as CustomPluginChannel["api"] });
+    await applyPiFamilyPluginChannel(engine, { ...channel, api: json.api as CustomPluginChannel["api"] }, id);
   }
   await invokeTauri("upsert_provider", { engine, id, json });
   invalidateCliConfig();

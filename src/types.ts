@@ -51,6 +51,8 @@ export interface CustomPluginChannel {
   /** omp / pi 自定义供应商必填协议；其他 CLI 忽略 */
   api?: PiFamilyApiProtocol;
   createdAt?: number;
+  /** claude-cli 渠道是否注入 CLAUDE_CODE_EFFORT_LEVEL=max */
+  enableEffortLevel?: boolean;
 }
 
 export const EMPTY_CHANNEL_FORM = {
@@ -59,6 +61,7 @@ export const EMPTY_CHANNEL_FORM = {
   apiKey: "",
   model: "",
   api: DEFAULT_PI_FAMILY_API as string,
+  enableEffortLevel: false,
 };
 
 export type ChannelFormState = typeof EMPTY_CHANNEL_FORM;
@@ -89,4 +92,6 @@ export interface PluginState {
   activeChannelName?: string; // 当前生效渠道的显示名称（系统渠道或插件渠道均适用）
   sessionChannels?: Record<string, SessionChannelRecord>; // stableSessionKey -> 对话级渠道覆盖
   claudeScrubStatus?: "clean" | "unscrubbed" | "not_found" | "unknown"; // Legacy persisted field; live status always comes from a fresh check.
+  /** 是否启用主题功能 */
+  enableTheme?: boolean;
 }

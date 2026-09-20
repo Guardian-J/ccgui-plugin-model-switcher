@@ -89,6 +89,8 @@ export function ChannelRow({
   onView,
   disabled,
   selectDisabled,
+  sourceLabel,
+  channelId,
 }: {
   name: string;
   url?: string;
@@ -101,7 +103,13 @@ export function ChannelRow({
   onView?: (e: React.MouseEvent) => void;
   disabled?: boolean;
   selectDisabled?: boolean;
+  sourceLabel?: "插件" | "宿主";
+  /** YAML / 宿主供应商 id，同名渠道靠它区分 */
+  channelId?: string;
 }) {
+  const hostLine = url ? url.replace(/^https?:\/\//, "") : detail;
+  const subtitle = hostLine || channelId;
+  const tooltip = [name, channelId, url, detail].filter(Boolean).join("\n");
   return (
     <div className={`ms-channel-row ${selected ? ROW_ON : ROW_OFF}`}>
       <button
@@ -110,16 +118,19 @@ export function ChannelRow({
         onClick={onSelect}
         disabled={disabled || selectDisabled}
         aria-pressed={selected}
-        title={url || detail ? `${name}\n${url || detail}` : name}
+        title={tooltip}
       >
         <ProjectEngineIcon engine={brand} size={18} />
         <span className="ms-row-copy">
-          <span className="ms-row-title">{name}</span>
-          {url || detail ? (
-            <span className="ms-row-detail">
-              {url ? url.replace(/^https?:\/\//, "") : detail}
-            </span>
-          ) : null}
+          <span className="ms-row-title">
+            <span className="ms-row-name">{name}</span>
+            {sourceLabel ? (
+              <span className={`ms-source-label ms-source-${sourceLabel === "插件" ? "plugin" : "host"}`}>
+                {sourceLabel}
+              </span>
+            ) : null}
+          </span>
+          {subtitle ? <span className="ms-row-detail">{subtitle}</span> : null}
         </span>
         {selected ? <CheckIcon size={16} className="ms-check" /> : null}
       </button>
@@ -168,6 +179,7 @@ interface ChannelSectionProps {
   channelTab: "system" | "plugin";
   onTabChange: (tab: "system" | "plugin") => void;
   systemChannels: SystemProviderChannel[];
+  independentSystemChannels: SystemProviderChannel[];
   pluginCustomChannels: CustomPluginChannel[];
   loadingChannels: boolean;
   fetchingModels: boolean;
@@ -187,7 +199,11 @@ interface ChannelSectionProps {
   onViewSystemChannel: (ch: SystemProviderChannel, e: React.MouseEvent) => void;
   onEditPluginChannel: (ch: CustomPluginChannel, e: React.MouseEvent) => void;
   onDeletePluginChannel: (id: string, e: React.MouseEvent) => void;
+  onEditHostChannel: (ch: SystemProviderChannel, e: React.MouseEvent) => void;
+  onDeleteHostChannel: (id: string, e: React.MouseEvent) => void;
   channelBrand: (name: string, model?: string, url?: string, isNative?: boolean) => string;
+  /** 是否显示 CLAUDE_CODE_EFFORT_LEVEL 开关（仅 claude-cli 渠道显示） */
+  showEffortLevelToggle?: boolean;
   children?: React.ReactNode;
 }
 
@@ -196,6 +212,7 @@ export function ChannelSection({
   channelTab,
   onTabChange,
   systemChannels,
+  independentSystemChannels,
   pluginCustomChannels,
   loadingChannels,
   fetchingModels,
@@ -215,11 +232,16 @@ export function ChannelSection({
   onViewSystemChannel,
   onEditPluginChannel,
   onDeletePluginChannel,
+  onEditHostChannel,
+  onDeleteHostChannel,
   channelBrand,
+  showEffortLevelToggle,
   children,
 }: ChannelSectionProps) {
   const shouldShowForm = showAddChannel && (!channelSupportError || viewingChannelId);
-  const channelCount = channelTab === "system" ? systemChannels.length : pluginCustomChannels.length;
+  const channelCount = channelTab === "system"
+    ? systemChannels.length
+    : pluginCustomChannels.length + independentSystemChannels.length;
 
   return (
     <div className="ms-channels">
@@ -275,6 +297,7 @@ export function ChannelSection({
           editingChannelId={editingChannelId}
           viewingChannelId={viewingChannelId}
           showProtocol={showProtocol}
+          showEffortLevelToggle={showEffortLevelToggle}
         />
       )}
 
@@ -287,6 +310,7 @@ export function ChannelSection({
         <ChannelList
           channelTab={channelTab}
           systemChannels={systemChannels}
+          independentSystemChannels={independentSystemChannels}
           pluginCustomChannels={pluginCustomChannels}
           loadingChannels={loadingChannels}
           fetchingModels={fetchingModels}
@@ -298,6 +322,8 @@ export function ChannelSection({
           onViewSystemChannel={onViewSystemChannel}
           onEditPluginChannel={onEditPluginChannel}
           onDeletePluginChannel={onDeletePluginChannel}
+          onEditHostChannel={onEditHostChannel}
+          onDeleteHostChannel={onDeleteHostChannel}
           channelBrand={channelBrand}
         />
       </div>

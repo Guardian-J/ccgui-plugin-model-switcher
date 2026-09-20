@@ -64,6 +64,38 @@ describe('pi-family-parser', () => {
       expect(result.anthropic.models).toHaveLength(2);
     });
 
+    it('同名不同 YAML key 的供应商都按 id 保留', () => {
+      const yaml = `providers:
+  plugin_model-switcher_0b08bc2f-19ba-40b2-ba03-727dcac41fb2:
+    name: "agv"
+    baseUrl: "https://tobapi.fullcupai.com"
+    api: anthropic-messages
+    models:
+      - id: "gemini-3.8-flash"
+  0b08bc2f-19ba-40b2-ba03-727dcac41fb2:
+    name: "agv"
+    baseUrl: "https://tobapi.fullcupai.com"
+    api: openai-completions
+    models:
+      - id: "gemini-3.8-flash"
+  gemini:
+    name: "gemini"
+    baseUrl: "https://tobapi.fullcupai.com"
+    api: openai-completions
+    models:
+      - id: "gemini-3.8-flash"`;
+
+      const result = parsePiFamilyProviders(yaml, 'yaml');
+      expect(Object.keys(result)).toEqual([
+        'plugin_model-switcher_0b08bc2f-19ba-40b2-ba03-727dcac41fb2',
+        '0b08bc2f-19ba-40b2-ba03-727dcac41fb2',
+        'gemini',
+      ]);
+      expect(result['plugin_model-switcher_0b08bc2f-19ba-40b2-ba03-727dcac41fb2'].name).toBe('agv');
+      expect(result['0b08bc2f-19ba-40b2-ba03-727dcac41fb2'].name).toBe('agv');
+      expect(result.gemini.name).toBe('gemini');
+    });
+
     it('应该返回空对象当输入为空', () => {
       expect(parsePiFamilyProviders('', 'json')).toEqual({});
       expect(parsePiFamilyProviders('   ', 'yaml')).toEqual({});

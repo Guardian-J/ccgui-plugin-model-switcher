@@ -18,6 +18,8 @@ interface ChannelFormProps {
   editingChannelId: string | null;
   viewingChannelId: string | null;
   showProtocol: boolean;
+  /** 是否显示 CLAUDE_CODE_EFFORT_LEVEL 开关（仅 claude-cli 渠道显示） */
+  showEffortLevelToggle?: boolean;
 }
 
 export function ChannelForm({
@@ -28,6 +30,7 @@ export function ChannelForm({
   editingChannelId,
   viewingChannelId,
   showProtocol,
+  showEffortLevelToggle,
 }: ChannelFormProps) {
   const isReadOnly = !!viewingChannelId;
 
@@ -91,6 +94,17 @@ export function ChannelForm({
           className="ms-field"
         />
       </label>
+      {showEffortLevelToggle && (
+        <label className="ms-checkbox-label">
+          <input
+            type="checkbox"
+            checked={channelForm.enableEffortLevel}
+            disabled={isReadOnly}
+            onChange={(e) => onFormChange({ ...channelForm, enableEffortLevel: e.target.checked })}
+          />
+          <span>注入 CLAUDE_CODE_EFFORT_LEVEL=max</span>
+        </label>
+      )}
       <div className="ms-form-actions">
         <button type="button" onClick={onCloseForm} className="ms-button">
           {isReadOnly ? "关闭" : "取消"}

@@ -13,6 +13,8 @@ import geminiIcon from "./assets/model-icons/gemini.svg";
 import mistralIcon from "./assets/model-icons/mistral.svg";
 import cohereIcon from "./assets/model-icons/cohere.svg";
 import perplexityIcon from "./assets/model-icons/perplexity.svg";
+import opencodeIcon from "./assets/model-icons/opencode.svg";
+import qoderIcon from "./assets/model-icons/qoder.svg";
 
 /**
  * CLI Engine Icons
@@ -586,38 +588,6 @@ function OmpEngineIcon({ size }: { size: number }) {
   );
 }
 
-function QoderEngineIcon({ size }: { size: number }) {
-  return (
-    <svg viewBox="0 0 64 64" width={size} height={size} className="shrink-0" aria-hidden>
-      <defs>
-        <linearGradient id="plugin-qoder-grad" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#3b82f6" />
-          <stop offset=".5" stopColor="#8b5cf6" />
-          <stop offset="1" stopColor="#ec4899" />
-        </linearGradient>
-      </defs>
-      <circle cx="32" cy="32" r="24" fill="url(#plugin-qoder-grad)" />
-      <text x="32" y="40" fontSize="28" fontWeight="bold" fill="white" textAnchor="middle" fontFamily="sans-serif">Q</text>
-    </svg>
-  );
-}
-
-function OpenCodeEngineIcon({ size }: { size: number }) {
-  return (
-    <svg viewBox="0 0 64 64" width={size} height={size} className="shrink-0" aria-hidden>
-      <defs>
-        <linearGradient id="plugin-opencode-grad" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#10b981" />
-          <stop offset=".5" stopColor="#3b82f6" />
-          <stop offset="1" stopColor="#06b6d4" />
-        </linearGradient>
-      </defs>
-      <rect x="8" y="8" width="48" height="48" rx="8" fill="url(#plugin-opencode-grad)" />
-      <path d="M20 32l8-8m0 16l-8-8m16 0l8 8m0-16l-8 8" stroke="white" strokeWidth="3" strokeLinecap="round" fill="none" />
-    </svg>
-  );
-}
-
 function QwenEngineIcon({ size }: { size: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden>
@@ -671,6 +641,8 @@ const RASTER_ICONS: Record<string, { src: string; alt: string }> = {
   perplexity: { src: perplexityIcon, alt: "Perplexity" },
   dsh: { src: deepseekIcon, alt: "DeepSeek Harness" },
   agy: { src: geminiIcon, alt: "Antigravity CLI" },
+  opencode: { src: opencodeIcon, alt: "OpenCode" },
+  qoder: { src: qoderIcon, alt: "Qoder CLI" },
 };
 
 function FallbackEngineIcon({ size }: { size: number }) {
@@ -755,16 +727,21 @@ function resolveEngineIcon(norm: string, size: number) {
     const raster = RASTER_ICONS.agy;
     return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
   }
+  if (norm.includes("opencode")) {
+    const raster = RASTER_ICONS.opencode;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("qoder")) {
+    const raster = RASTER_ICONS.qoder;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
 
-  // Inline SVG for OMP, Qoder, OpenCode, and monochrome icons
+  // Inline SVG for OMP and other monochrome icons
   if (norm.includes("codex") || norm.includes("gpt") || norm.includes("openai")) return <CodexEngineIcon size={size} />;
   if (norm.includes("grok")) return <GrokEngineIcon size={size} />;
   if (norm.includes("kimi")) return <KimiEngineIcon size={size} />;
   if (norm.includes("pi")) return <PiEngineIcon size={size} />;
   if (norm.includes("omp")) return <OmpEngineIcon size={size} />;
-  if (norm.includes("qoder-cn")) return <QoderEngineIcon size={size} />;
-  if (norm.includes("qoder")) return <QoderEngineIcon size={size} />;
-  if (norm.includes("opencode")) return <OpenCodeEngineIcon size={size} />;
 
   return <FallbackEngineIcon size={size} />;
 }

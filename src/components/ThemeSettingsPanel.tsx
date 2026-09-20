@@ -11,9 +11,11 @@ import { ThemeCustomizationPanel } from "./ThemeCustomizationPanel";
 interface Props {
   manager: GuiThemeManager;
   onClose?: () => void;
+  enableTheme: boolean;
+  onToggleTheme: (enabled: boolean) => void;
 }
 
-export function ThemeSettingsPanel({ manager, onClose }: Props) {
+export function ThemeSettingsPanel({ manager, onClose, enableTheme, onToggleTheme }: Props) {
   const [config, setConfig] = useState<GuiThemeConfig>(manager.getConfig());
   const [saveError, setSaveError] = useState("");
   const update = async (partial: Partial<GuiThemeConfig>) => {
@@ -65,6 +67,24 @@ export function ThemeSettingsPanel({ manager, onClose }: Props) {
       </div>
 
       {saveError && <div role="alert" className="ms-status">{saveError}</div>}
+
+      <section className="ms-theme-section" aria-label="主题功能">
+        <button
+          type="button"
+          role="switch"
+          aria-label="启用主题功能"
+          aria-checked={enableTheme}
+          className="ms-theme-toggle"
+          onClick={() => onToggleTheme(!enableTheme)}
+        >
+          <span className="ms-theme-name">启用主题功能</span>
+          <span aria-hidden className="ms-switch">
+            <span />
+          </span>
+        </button>
+      </section>
+
+      <div style={{ opacity: enableTheme ? 1 : 0.5, pointerEvents: enableTheme ? 'auto' : 'none' }}>
       <div className="ms-theme-modes ms-palette-mode" role="group" aria-label="主题模式">
         <button type="button" aria-pressed={config.paletteMode === "preset"} onClick={() => void update({ paletteMode: "preset" })}>内置主题</button>
         <button type="button" aria-pressed={config.paletteMode === "custom"} onClick={() => void update({ paletteMode: "custom" })}>调色盘</button>
@@ -142,6 +162,7 @@ export function ThemeSettingsPanel({ manager, onClose }: Props) {
             </button>
           );
         })}
+      </div>
       </div>
     </div>
   );

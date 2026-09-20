@@ -18,9 +18,12 @@ import {
   optimisticSystemEngines,
   getSystemProviderChannels,
   isPluginProviderId,
+  classifyProviderChannels,
+  mergePluginChannelsById,
   applyCustomPluginChannelToEngine,
   independentChannelError,
   deleteCustomPluginChannel,
+  deleteHostProviderChannel,
   pluginProviderId,
   qualifyEngineModel,
   displayEngineModel,
@@ -111,6 +114,7 @@ export function CliModelFlyoutMenu({
   const [nativeAuthoritative, setNativeAuthoritative] = useState(() => initialCachedCatalog?.authoritative ?? false);
   const channelRequest = useRef(0);
   const [currentChannelId, setCurrentChannelId] = useState<string | null>(null);
+  const lastFetchedChannelId = useRef<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [customInput, setCustomInput] = useState("");
   const [loadingChannels, setLoadingChannels] = useState(true);
@@ -125,8 +129,9 @@ export function CliModelFlyoutMenu({
   const [showAddChannel, setShowAddChannel] = useState(false);
   const [channelForm, setChannelForm] = useState({ ...EMPTY_CHANNEL_FORM });
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
+  const [editingChannelSource, setEditingChannelSource] = useState<"plugin" | "host" | null>(null);
   const [viewingChannelId, setViewingChannelId] = useState<string | null>(null);
-  const [pendingDeleteChannel, setPendingDeleteChannel] = useState<{ id: string; name: string } | null>(null);
+  const [pendingDeleteChannel, setPendingDeleteChannel] = useState<{ id: string; name: string; source: "plugin" | "host" } | null>(null);
   const [menuLayout, setMenuLayout] = useState<{ offsetX: number; maxHeight: number; below: boolean }>({
     offsetX: 0,
     maxHeight: 560,
@@ -330,21 +335,30 @@ export function CliModelFlyoutMenu({
     return () => { channelRequest.current++; };
   }, [activeEngine, sessionDisplay?.stableKey]);
 
-  const pluginCustomChannels = useMemo(() => {
-    return state.pluginChannels?.[activeEngine] || [];
-  }, [state.pluginChannels, activeEngine]);
+  // 系统 tab：原生 + 宿主供应商配置；独立 tab 的「宿主」：OMP/PI YAML 供应商
+  const { systemChannels, independentSystemChannels, pluginYamlChannels } = useMemo(
+    () => classifyProviderChannels(channels),
+    [channels],
+  );
 
-  const systemChannels = useMemo(() => {
-    return channels.filter((c) => !isPluginProviderId(c.id));
-  }, [channels]);
+  // 独立 tab 的「插件」行：插件存储 ∪ YAML 带 plugin_ 前缀的条目，按 id 合并，同名不同 id 都显示
+  const pluginCustomChannels = useMemo(
+    () => mergePluginChannelsById(state.pluginChannels?.[activeEngine] || [], pluginYamlChannels),
+    [state.pluginChannels, activeEngine, pluginYamlChannels],
+  );
 
   const [channelTab, setChannelTab] = useState<"system" | "plugin">(() => {
     return state.activeChannelType === "plugin" ? "plugin" : "system";
   });
 
   useEffect(() => {
-    setChannelTab(state.activeChannelType === "plugin" ? "plugin" : "system");
-  }, [activeEngine, state.activeChannelType]);
+    if (state.activeChannelType === "plugin") setChannelTab("plugin");
+    else if (independentSystemChannels.some((c) => c.id === (state.selectedProviderId || currentChannelId))) {
+      setChannelTab("plugin");
+    } else {
+      setChannelTab("system");
+    }
+  }, [activeEngine, state.activeChannelType, state.selectedProviderId, currentChannelId, independentSystemChannels]);
 
   const activeChannel = useMemo(() => {
     if (state.activeChannelType === "plugin") {
@@ -354,6 +368,7 @@ export function CliModelFlyoutMenu({
     }
     const targetId = state.selectedProviderId || currentChannelId;
     const sys = systemChannels.find((c) => c.id === targetId)
+      || independentSystemChannels.find((c) => c.id === targetId)
       // 若未明确选择且只有一个系统渠道，默认选中（兼容打开已有对话时 loadChannels 尚未完成）
       || (!targetId && systemChannels.length === 1 ? systemChannels[0] : null);
     if (sys) {
@@ -370,7 +385,7 @@ export function CliModelFlyoutMenu({
       };
     }
     return null;
-  }, [state.activeChannelType, state.activePluginChannelId, pluginCustomChannels, systemChannels, currentChannelId, state.selectedProviderId]);
+  }, [state.activeChannelType, state.activePluginChannelId, pluginCustomChannels, systemChannels, independentSystemChannels, currentChannelId, state.selectedProviderId]);
 
   const nativeActive = activeChannel?.id === NATIVE_PROVIDER_ID;
   const useNativeModels = nativeActive && (!activeChannel?.baseUrl || ["omp", "pi", "kimi", "grok"].includes(activeEngine));
@@ -457,7 +472,20 @@ export function CliModelFlyoutMenu({
       }
       return 0;
     });
-  }, [systemChannels, currentChannelId, activeChannel, state.activeChannelType]);
+  }, [systemChannels, currentChannelId, activeChannel, state.activeChannelType, state.selectedProviderId]);
+
+  const sortedIndependentSystemChannels = useMemo(() => {
+    if (independentSystemChannels.length <= 1) return independentSystemChannels;
+    const isSysActive = state.activeChannelType !== "plugin";
+    const curId = state.selectedProviderId || currentChannelId || activeChannel?.id;
+    return [...independentSystemChannels].sort((a, b) => {
+      if (isSysActive) {
+        if (a.id === curId) return -1;
+        if (b.id === curId) return 1;
+      }
+      return 0;
+    });
+  }, [independentSystemChannels, currentChannelId, activeChannel, state.activeChannelType, state.selectedProviderId]);
 
   const sortedPluginChannels = useMemo(() => {
     if (pluginCustomChannels.length <= 1) return pluginCustomChannels;
@@ -717,8 +745,10 @@ export function CliModelFlyoutMenu({
   };
 
   const handleSearchFocus = () => {
-    // 只在当前渠道还没有模型数据时才拉取，避免重复请求禁用输入框
-    if (catalogModelOptions.length === 0) {
+    // 只在切换渠道后首次点击时从接口拉取模型列表，避免在用户搜索时重复拉取
+    const channelKey = activeChannel ? `${activeEngine}:${activeChannel.id}` : null;
+    if (channelKey && channelKey !== lastFetchedChannelId.current) {
+      lastFetchedChannelId.current = channelKey;
       void handleFetchModels();
     }
   };
@@ -896,7 +926,11 @@ export function CliModelFlyoutMenu({
       return;
     }
 
+    // 编辑来源单独记录：插件 YAML 剥前缀后可能与宿主 YAML 的裸 id 相同
+    const isEditingHostChannel = editingChannelSource === "host";
+
     const newChan: CustomPluginChannel = {
+      // 编辑时保持原 ID，新建时生成新 ID
       id: editingChannelId || `custom_${Date.now()}`,
       name: channelForm.name.trim(),
       baseUrl: channelForm.baseUrl.trim().replace(/\/+$/, ""),
@@ -905,24 +939,37 @@ export function CliModelFlyoutMenu({
       api: needsProtocol
         ? (isPiFamilyApiProtocol(channelForm.api) ? channelForm.api : DEFAULT_PI_FAMILY_API)
         : undefined,
+      enableEffortLevel: activeEngine === "claude" ? channelForm.enableEffortLevel : undefined,
       createdAt: Date.now(),
     };
 
     const currentList = state.pluginChannels?.[activeEngine] || [];
+    const existsInPluginStore = currentList.some((c) => c.id === newChan.id);
+    const nextPluginList = isEditingHostChannel
+      ? currentList
+      : existsInPluginStore
+        ? currentList.map((c) => (c.id === newChan.id ? newChan : c))
+        : [newChan, ...currentList];
     const nextState: PluginState = {
       ...state,
       pluginChannels: {
         ...state.pluginChannels,
-        [activeEngine]: editingChannelId ? currentList.map((c) => (c.id === editingChannelId ? newChan : c)) : [newChan, ...currentList],
+        [activeEngine]: nextPluginList,
       },
     };
 
     selectionPending.current = true;
     setSwitching(true);
     try {
-      await applyCustomPluginChannelToEngine(ctx, activeEngine, newChan);
-      await onSave(nextState);
-      setState(nextState);
+      if (isEditingHostChannel && needsProtocol) {
+        await applyCustomPluginChannelToEngine(ctx, activeEngine, newChan, { keepOriginalId: true });
+        await onSave(state);
+        await loadChannels(activeEngine);
+      } else {
+        await applyCustomPluginChannelToEngine(ctx, activeEngine, newChan);
+        await onSave(nextState);
+        setState(nextState);
+      }
       setChannelTab("plugin");
       closeChannelForm();
       setStatusMsg(`已保存渠道: ${newChan.name}`);
@@ -941,19 +988,25 @@ export function CliModelFlyoutMenu({
     const error = sessionSelectionError(activeEngine);
     if (error) { setStatusMsg(error); return; }
 
-    const currentList = state.pluginChannels?.[activeEngine] || [];
-    const channelToDelete = currentList.find((c) => c.id === channelId);
+    const channelToDelete = pluginCustomChannels.find((c) => c.id === channelId);
     if (!channelToDelete) return;
 
-    // 触发二次确认对话框
-    setPendingDeleteChannel({ id: channelId, name: channelToDelete.name });
+    setPendingDeleteChannel({ id: channelId, name: channelToDelete.name, source: "plugin" });
   };
 
   const confirmDeleteChannel = async () => {
     if (!pendingDeleteChannel) return;
-    const channelId = pendingDeleteChannel.id;
+    const { id: channelId, source } = pendingDeleteChannel;
     setPendingDeleteChannel(null);
 
+    if (source === "host") {
+      await confirmDeleteHostChannel(channelId);
+    } else {
+      await confirmDeletePluginChannel(channelId);
+    }
+  };
+
+  const confirmDeletePluginChannel = async (channelId: string) => {
     const currentList = state.pluginChannels?.[activeEngine] || [];
     const nextChannels = currentList.filter((c) => c.id !== channelId);
     const isDeletingCurrent = state.activeChannelType === "plugin" && state.activePluginChannelId === channelId;
@@ -972,7 +1025,6 @@ export function CliModelFlyoutMenu({
           ...state.pluginChannels,
           [activeEngine]: nextChannels,
         },
-        // 清除所有会话里指向被删除渠道的记录，避免切换回来时静默恢复失败
         sessionChannels: state.sessionChannels
           ? Object.fromEntries(
               Object.entries(state.sessionChannels).filter(
@@ -988,6 +1040,71 @@ export function CliModelFlyoutMenu({
       }
       await onSave(nextState);
       setState(nextState);
+      await loadChannels(activeEngine);
+      setStatusMsg("已删除该渠道");
+    } catch (e) {
+      setStatusMsg(`删除渠道失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      selectionPending.current = false;
+      setSwitching(false);
+    }
+    setTimeout(() => setStatusMsg(null), 1500);
+  };
+
+  const handleEditHostChannel = async (ch: SystemProviderChannel, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setViewingChannelId(null);
+    setEditingChannelSource("host");
+    setEditingChannelId(ch.id);
+    setChannelForm({
+      name: ch.name,
+      baseUrl: ch.baseUrl || "",
+      apiKey: ch.apiKey || "",
+      model: ch.model || "",
+      api: isPiFamilyApiProtocol(ch.api || "") ? ch.api! : DEFAULT_PI_FAMILY_API,
+    });
+    setShowAddChannel(true);
+  };
+
+  const handleDeleteHostChannel = async (channelId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (busy || fetchingModels || selectionPending.current) return;
+    const error = sessionSelectionError(activeEngine);
+    if (error) { setStatusMsg(error); return; }
+
+    const channel = independentSystemChannels.find((c) => c.id === channelId)
+      || systemChannels.find((c) => c.id === channelId);
+    if (!channel) return;
+
+    setPendingDeleteChannel({ id: channelId, name: channel.name, source: "host" });
+  };
+
+  const confirmDeleteHostChannel = async (channelId: string) => {
+    const isDeletingCurrent = state.activeChannelType !== "plugin" && state.selectedProviderId === channelId;
+
+    selectionPending.current = true;
+    setSwitching(true);
+    try {
+      const fallbackId = NATIVE_PROVIDER_ID;
+      const nextState: PluginState = {
+        ...state,
+        selectedProviderId: isDeletingCurrent ? fallbackId : state.selectedProviderId,
+        sessionChannels: state.sessionChannels
+          ? Object.fromEntries(
+              Object.entries(state.sessionChannels).filter(
+                ([, rec]) => !(rec.selectedProviderId === channelId && rec.selectedCli === activeEngine),
+              ),
+            )
+          : undefined,
+      };
+      await deleteHostProviderChannel(activeEngine, channelId);
+      if (isDeletingCurrent) {
+        await applyChannelSelectionToHost({ engine: activeEngine, providerId: fallbackId });
+        setCurrentChannelId(fallbackId);
+      }
+      await onSave(nextState);
+      setState(nextState);
+      await loadChannels(activeEngine);
       setStatusMsg("已删除该渠道");
     } catch (e) {
       setStatusMsg(`删除渠道失败: ${e instanceof Error ? e.message : String(e)}`);
@@ -1001,6 +1118,7 @@ export function CliModelFlyoutMenu({
   const closeChannelForm = () => {
     setShowAddChannel(false);
     setEditingChannelId(null);
+    setEditingChannelSource(null);
     setViewingChannelId(null);
     setChannelForm({ ...EMPTY_CHANNEL_FORM });
   };
@@ -1087,7 +1205,20 @@ export function CliModelFlyoutMenu({
 
         {showThemePanel && themeManager ? (
           <div className="ms-theme-scroll">
-            <ThemeSettingsPanel manager={themeManager} onClose={() => setShowThemePanel(false)} />
+            <ThemeSettingsPanel
+              manager={themeManager}
+              onClose={() => setShowThemePanel(false)}
+              enableTheme={state.enableTheme !== false}
+              onToggleTheme={async (enabled) => {
+                await onSave({ ...state, enableTheme: enabled });
+                if (enabled) {
+                  themeManager.apply();
+                } else {
+                  themeManager.dispose();
+                }
+                window.location.reload();
+              }}
+            />
           </div>
         ) : (
           <div className="ms-body">
@@ -1099,23 +1230,26 @@ export function CliModelFlyoutMenu({
                   setChannelTab(tab);
                 }}
                 systemChannels={sortedSystemChannels}
+                independentSystemChannels={sortedIndependentSystemChannels}
                 pluginCustomChannels={sortedPluginChannels}
                 loadingChannels={loadingChannels}
                 fetchingModels={fetchingModels}
                 selectedChannelId={state.activeChannelType === "plugin" ? state.activePluginChannelId ?? null : state.selectedProviderId || currentChannelId || activeChannel?.id || null}
                 isPluginActive={state.activeChannelType === "plugin"}
                 showAddChannel={showAddChannel}
+                showProtocol={activeEngine === "omp" || activeEngine === "pi"}
+                showEffortLevelToggle={activeEngine === "claude"}
                 onToggleAddChannel={() => {
                   if (showAddChannel) closeChannelForm();
                   else {
                     setViewingChannelId(null);
                     setEditingChannelId(null);
+                    setEditingChannelSource(null);
                     setChannelForm({ ...EMPTY_CHANNEL_FORM });
                     setShowAddChannel(true);
                   }
                 }}
                 onCloseForm={closeChannelForm}
-                showProtocol={activeEngine === "omp" || activeEngine === "pi"}
                 channelForm={channelForm}
                 onFormChange={setChannelForm}
                 editingChannelId={editingChannelId}
@@ -1126,6 +1260,7 @@ export function CliModelFlyoutMenu({
                 onViewSystemChannel={(ch, e) => {
                   e.stopPropagation();
                   setEditingChannelId(null);
+                  setEditingChannelSource(null);
                   setViewingChannelId(ch.id);
                   setChannelForm({
                     name: ch.name,
@@ -1140,6 +1275,7 @@ export function CliModelFlyoutMenu({
                 onEditPluginChannel={(ch, e) => {
                   e.stopPropagation();
                   setViewingChannelId(null);
+                  setEditingChannelSource("plugin");
                   setEditingChannelId(ch.id);
                   setChannelForm({
                     name: ch.name,
@@ -1147,11 +1283,14 @@ export function CliModelFlyoutMenu({
                     apiKey: ch.apiKey,
                     model: ch.model || "",
                     api: isPiFamilyApiProtocol(ch.api || "") ? ch.api! : DEFAULT_PI_FAMILY_API,
+                    enableEffortLevel: ch.enableEffortLevel || false,
                   });
                   setChannelTab("plugin");
                   setShowAddChannel(true);
                 }}
                 onDeletePluginChannel={(id, e) => void handleDeletePluginChannel(id, e)}
+                onEditHostChannel={(ch, e) => void handleEditHostChannel(ch, e)}
+                onDeleteHostChannel={(id, e) => void handleDeleteHostChannel(id, e)}
                 channelBrand={channelBrand}
               >
                 {activeEngine === "claude" ? <ScrubSection ctx={ctx} activeEngine={activeEngine} /> : null}

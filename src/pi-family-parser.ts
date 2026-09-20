@@ -96,8 +96,10 @@ export function parsePiFamilyProviders(text: string, format: string): Record<str
     }
     if (!inProviders) continue;
 
+    // 供应商 key 以 YAML 映射键为准（id）。`name: value` 同行赋值不能当成新 key。
     if (indent >= 2 && indent <= 4 && trimmed.endsWith(":") && !trimmed.startsWith("-") && !trimmed.startsWith("models:")) {
-      const id = trimmed.slice(0, -1).trim().replace(/^['"]|['"]$/g, "");
+      const id = yamlProviderKey(line);
+      if (!id) continue;
       curProvider = { id, name: id, baseUrl: "", apiKey: "", models: [] };
       providers[id] = curProvider;
       inModels = false;
