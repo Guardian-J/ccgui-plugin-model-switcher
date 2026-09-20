@@ -725,6 +725,33 @@ export function classifyProviderChannels(
   return { systemChannels, independentSystemChannels, pluginYamlChannels };
 }
 
+/** 同名同址视为同一渠道；name 或 baseUrl 缺失时返回空串，表示无法判定为重复。 */
+function channelTwinKey(name?: string, baseUrl?: string): string {
+  const n = (name || "").trim().toLowerCase();
+  const u = (baseUrl || "").trim().toLowerCase().replace(/\/+$/, "");
+  return n && u ? `${n}\u0000${u}` : "";
+}
+
+/**
+ * 独立 tab 的「宿主」行去重：omp/pi 的 models.yml 里既有插件写的 plugin_ 前缀条目，
+ * 也可能有同一渠道的裸 key 条目（宿主设置页手编或编辑宿主渠道时写入），
+ * 同名同址时它们是同一个渠道，只保留插件行，避免一个渠道显示成「插件」+「宿主」两条。
+ * 宿主当前选中的 id 必须保留：activeChannel 依赖它查渠道，过滤掉会中断模型拉取。
+ */
+export function withoutPluginTwinChannels(
+  independentChannels: SystemProviderChannel[],
+  pluginChannels: { name?: string; baseUrl?: string }[],
+  keepId?: string | null,
+): SystemProviderChannel[] {
+  const twins = new Set(
+    pluginChannels.map(ch => channelTwinKey(ch.name, ch.baseUrl)).filter(Boolean),
+  );
+  if (twins.size === 0) return independentChannels;
+  return independentChannels.filter(
+    ch => ch.id === keepId || !twins.has(channelTwinKey(ch.name, ch.baseUrl)),
+  );
+}
+
 /**
  * 独立 tab 的插件行：插件存储 ∪ YAML 中带 plugin_ 前缀的供应商。
  * 只按 id 去重（plugin_ 前缀与裸 id 视为同一条），同名不同 id 全部保留。

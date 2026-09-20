@@ -10,6 +10,7 @@ import {
   classifyProviderChannels,
   mergeYamlProviderIntoHostChannel,
   mergePluginChannelsById,
+  withoutPluginTwinChannels,
   pluginProviderId,
 } from './system-bridge';
 import type { SystemProviderChannel } from './types';
@@ -197,6 +198,38 @@ describe('system-bridge', () => {
       expect(systemChannels).toEqual([native]);
       expect(independentSystemChannels).toEqual([]);
       expect(pluginYamlChannels).toEqual([]);
+    });
+  });
+
+  describe('withoutPluginTwinChannels', () => {
+    const grokYaml = ch({ id: 'grok', name: 'grok', baseUrl: 'https://tobapi.fullcupai.com' });
+    const pluginGrok = { id: 'custom_1', name: 'grok', baseUrl: 'https://tobapi.fullcupai.com/' };
+
+    it('同名同址的宿主行被插件行吸收，不再重复显示', () => {
+      expect(withoutPluginTwinChannels([grokYaml], [pluginGrok])).toEqual([]);
+    });
+
+    it('真·宿主 YAML 渠道无插件孪生时保留', () => {
+      const google = ch({ id: 'google', name: 'Google', baseUrl: 'https://generativelanguage.googleapis.com' });
+      expect(withoutPluginTwinChannels([google, grokYaml], [pluginGrok])).toEqual([google]);
+    });
+
+    it('同名但地址不同不算重复', () => {
+      const other = ch({ id: 'grok-2', name: 'grok', baseUrl: 'https://another.example.com' });
+      expect(withoutPluginTwinChannels([other], [pluginGrok])).toEqual([other]);
+    });
+
+    it('宿主当前选中的条目即使重复也保留，避免 activeChannel 查不到', () => {
+      expect(withoutPluginTwinChannels([grokYaml], [pluginGrok], 'grok')).toEqual([grokYaml]);
+    });
+
+    it('缺 name 或 baseUrl 时不判定为重复', () => {
+      const bare = ch({ id: 'x', name: 'grok', baseUrl: '' });
+      expect(withoutPluginTwinChannels([bare], [{ id: 'p', name: 'grok', baseUrl: '' }])).toEqual([bare]);
+    });
+
+    it('无插件渠道时原样返回', () => {
+      expect(withoutPluginTwinChannels([grokYaml], [])).toEqual([grokYaml]);
     });
   });
 

@@ -20,6 +20,7 @@ import {
   isPluginProviderId,
   classifyProviderChannels,
   mergePluginChannelsById,
+  withoutPluginTwinChannels,
   applyCustomPluginChannelToEngine,
   independentChannelError,
   deleteCustomPluginChannel,
@@ -337,7 +338,7 @@ export function CliModelFlyoutMenu({
   }, [activeEngine, sessionDisplay?.stableKey]);
 
   // 系统 tab：原生 + 宿主供应商配置；独立 tab 的「宿主」：OMP/PI YAML 供应商
-  const { systemChannels, independentSystemChannels, pluginYamlChannels } = useMemo(
+  const { systemChannels, independentSystemChannels: yamlHostChannels, pluginYamlChannels } = useMemo(
     () => classifyProviderChannels(channels),
     [channels],
   );
@@ -346,6 +347,16 @@ export function CliModelFlyoutMenu({
   const pluginCustomChannels = useMemo(
     () => mergePluginChannelsById(state.pluginChannels?.[activeEngine] || [], pluginYamlChannels),
     [state.pluginChannels, activeEngine, pluginYamlChannels],
+  );
+
+  // 去掉与插件行同名同址的重复「宿主」行（同一渠道在 YAML 里有裸 key + plugin_ 两份）
+  const independentSystemChannels = useMemo(
+    () => withoutPluginTwinChannels(
+      yamlHostChannels,
+      pluginCustomChannels,
+      state.selectedProviderId || currentChannelId,
+    ),
+    [yamlHostChannels, pluginCustomChannels, state.selectedProviderId, currentChannelId],
   );
 
   const [channelTab, setChannelTab] = useState<"system" | "plugin">(() => {
