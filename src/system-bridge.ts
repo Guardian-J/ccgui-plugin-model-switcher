@@ -37,6 +37,12 @@ export const CLI_DISPLAY_NAMES: Record<string, string> = {
 };
 
 export const NATIVE_PROVIDER_ID = "__local_settings_json__";
+/**
+ * v1 配置导入留下的遗留写法，与 NATIVE_PROVIDER_ID 同义（宿主 config.rs 的
+ * LEGACY_LOCAL_CONFIG_TOML_ID / is_official_provider 把两者等同看待）。
+ * 读到时要接受，写回宿主时统一归一成 NATIVE_PROVIDER_ID。
+ */
+export const LEGACY_NATIVE_PROVIDER_ID = "__local_config_toml__";
 export function independentChannelError(engine: string): string | null {
   return null;
 }
@@ -488,7 +494,7 @@ export async function getSystemProviderChannels(
     const section = config?.[engine];
     const configuredId = section?.current;
     const currentId =
-      !configuredId || configuredId === "__local_config_toml__"
+      !configuredId || configuredId === LEGACY_NATIVE_PROVIDER_ID
         ? NATIVE_PROVIDER_ID
         : configuredId;
     const channels: SystemProviderChannel[] = Object.entries(
@@ -498,7 +504,7 @@ export async function getSystemProviderChannels(
         ([id]) =>
           ![
             NATIVE_PROVIDER_ID,
-            "__local_config_toml__",
+            LEGACY_NATIVE_PROVIDER_ID,
             "__disabled__",
           ].includes(id) && !isPluginProviderId(id),
       )
@@ -615,14 +621,18 @@ export function notifyCliConfigChanged(): void {
 }
 
 /**
- * 把宿主当前供应商切到指定渠道。新宿主会同时改写 CLI 原生配置，调用方须先确认。
+ * 把宿主当前供应商切到指定渠道。
+ *
+ * 只改宿主自己的配置（set_current_provider 写 ProviderSection.current），不会落盘
+ * 到 CLI 自己的配置文件——宿主是在 spawn 时注入环境变量。因此这里没有需要用户
+ * 二次确认的破坏性写入。
  */
 export async function setSystemCurrentProvider(
   engine: CliEngineId,
   providerId: string,
 ): Promise<void> {
   const error = independentChannelError(engine);
-  if (error && providerId && ![NATIVE_PROVIDER_ID, "__local_config_toml__"].includes(providerId)) throw new Error(error);
+  if (error && providerId && ![NATIVE_PROVIDER_ID, LEGACY_NATIVE_PROVIDER_ID].includes(providerId)) throw new Error(error);
   if (engine !== "pi" && engine !== "omp") {
     await invokeTauri("set_current_provider", { engine, id: providerId });
   }

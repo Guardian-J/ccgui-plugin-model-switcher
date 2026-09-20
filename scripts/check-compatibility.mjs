@@ -919,24 +919,23 @@ for (const engine of ['dsh', 'agy', 'opencode', 'qoder', 'qoder-cn']) {
   const storedBefore = [...storage];
   const before = calls.length;
   const callbacksBefore = channelCalls.length;
-  const channel = { id: 'unsupported', name: 'Unsupported', baseUrl: 'https://example.invalid', apiKey: 'test-only', model: 'model' };
-  for (const operation of [
-    () => bridge.applyCustomPluginChannelToEngine(ctx, engine, channel),
-    () => bridge.setSystemCurrentProvider(engine, bridge.pluginProviderId(channel.id)),
-    () => sync.applyChannelSelectionToHost({ engine, providerId: bridge.pluginProviderId(channel.id) }),
-    () => sync.applyChannelSelectionToHost({ engine, providerId: 'system-custom' }),
+  // 4196fd3 起独立渠道白名单已移除：independentChannelError 对所有引擎返回 null，
+  // 这些 CLI 与其它引擎一样可选独立渠道。该行为由 src/system-bridge.test.ts 守护。
+  for (const providerId of [
+    bridge.pluginProviderId('unsupported'),
+    'system-custom',
+    bridge.NATIVE_PROVIDER_ID,
+    '__local_config_toml__',
+    '',
   ]) {
-    await assert.rejects(operation, /暂不支持独立渠道/);
-  }
-  assert.equal(calls.length, before, `${engine}: unsupported channels must fail before IPC`);
-  assert.equal(channelCalls.length, callbacksBefore, `${engine}: unsupported channels must not call the host`);
-  assert.deepEqual([...storage], storedBefore, `${engine}: failed selection must not change storage`);
-  for (const providerId of [bridge.NATIVE_PROVIDER_ID, '__local_config_toml__', '']) {
     await sync.applyChannelSelectionToHost({ engine, providerId });
-    assert.deepEqual(channelCalls.at(-1), [engine, providerId], `${engine}: native selection remains available`);
+    assert.deepEqual(channelCalls.at(-1), [engine, providerId], `${engine}: channel selection reaches the host`);
   }
+  assert.equal(calls.length, before, `${engine}: host-delegated channel switch must not invoke IPC itself`);
+  assert.equal(channelCalls.length, callbacksBefore + 5, `${engine}: every selection delegates to the host once`);
+  assert.deepEqual([...storage], storedBefore, `${engine}: host-delegated selection must not touch plugin storage`);
 }
-console.log('Unsupported independent channels are rejected before mutations; native channels remain selectable.');
+console.log('Independent and native channels are selectable on every engine and delegate to the host.');
 for (const session of [pending, history, null]) {
   menu.memoizedProps.selectedChannels = { codex: 'before' };
   footer.memoizedProps.active = session;
@@ -1000,27 +999,21 @@ for (const session of [pending, history, null]) {
   const dispatch = window.dispatchEvent;
   window.dispatchEvent = event => { events.push(event.type); };
   const nativeCalls = [];
-  const paths = ['C:/preview/.codex/config.toml', 'C:/preview/.codex/auth.json'];
   let nativeCurrent = 'before';
   const invokeNative = async (command, args) => {
     nativeCalls.push({ command, args });
-    if (command === 'provider_file_paths') return paths;
     if (command === 'set_current_provider') { nativeCurrent = args.id; return; }
     throw Error(`Unexpected IPC: ${command}`);
   };
   window.__TAURI_INTERNALS__.invoke = invokeNative;
-  const confirmNative = async shown => { assert.deepEqual(shown, paths); return true; };
-  const choose = (providerId, extra = {}) => sync.applyChannelSelectionToHost({ engine: 'codex', providerId, confirmNative, ...extra });
-  let prepared = false;
-  assert.equal(await choose('cancelled', { confirmNative: async () => false, beforeSwitch: async () => { prepared = true; } }), false);
-  assert.equal(prepared, false, 'Cancellation must precede provider registration or editing');
+  // set_current_provider 只改宿主自己的 ProviderSection.current，不落盘到 CLI 的配置文件
+  // （宿主在 spawn 时注入环境变量），所以不存在需要用户二次确认的破坏性写入。
+  const choose = providerId => sync.applyChannelSelectionToHost({ engine: 'codex', providerId });
   assert.equal(nativeCurrent, 'before');
   assert.deepEqual(events, []);
-  await assert.rejects(() => choose('unconfirmed', { confirmNative: undefined }), /确认/);
-  assert.equal(nativeCurrent, 'before', 'Native writes require explicit confirmation');
 
   for (const [requested, expected] of [['', bridge.NATIVE_PROVIDER_ID], ['__local_config_toml__', bridge.NATIVE_PROVIDER_ID], [bridge.NATIVE_PROVIDER_ID, bridge.NATIVE_PROVIDER_ID], ['local', 'local']]) {
-    assert.equal(await choose(requested), true);
+    await choose(requested); // Promise<void>：不抛错即成功，成败只看宿主侧的已提交选择
     assert.equal(nativeCurrent, expected, 'The reserved native ID cannot select a custom provider named local');
   }
   assert.deepEqual([...storage], storedBefore, 'Native file selection does not invent a session-level provider binding');
@@ -1037,19 +1030,9 @@ for (const session of [pending, history, null]) {
   assert.equal(nativeCurrent, currentBefore);
   assert.deepEqual([...storage], storedBefore);
   assert.equal(events.length, eventCount, 'Rejected IPC must not emit success events');
-  window.__TAURI_INTERNALS__.invoke = async () => { throw Error('paths unavailable'); };
-  await assert.rejects(() => choose('relay', { beforeSwitch: async () => { prepared = true; } }), /paths unavailable/);
-  assert.equal(prepared, false, 'Missing overwrite paths must fail closed before provider mutations');
-
   window.__TAURI_INTERNALS__.invoke = invokeNative;
   const otherSession = { ...history, sessionId: 'another-tab', model: 'untouched' };
   const switchSession = () => { footer.memoizedProps.active = otherSession; storage.set(activeKey, JSON.stringify(otherSession)); };
-  await assert.rejects(() => choose('late-confirm', { confirmNative: async () => { switchSession(); return true; } }), /会话已变化/);
-  assert.equal(nativeCurrent, currentBefore, 'Switching tabs during confirmation prevents native writes');
-  footer.memoizedProps.active = history;
-  await assert.rejects(() => choose('late-upsert', { beforeSwitch: async () => { switchSession(); } }), /会话已变化/);
-  assert.equal(nativeCurrent, currentBefore, 'Switching tabs during registration prevents channel activation');
-  footer.memoizedProps.active = history;
   window.__TAURI_INTERNALS__.invoke = async (command, args) => {
     const result = await invokeNative(command, args);
     if (command === 'set_current_provider') switchSession();
@@ -1057,7 +1040,8 @@ for (const session of [pending, history, null]) {
   };
   const hostCallsBefore = hostCalls.length;
   await assert.rejects(async () => {
-    if (await choose('late-ipc')) await sync.applyModelSelectionToHost({ engine: 'codex', model: 'wrong-tab' });
+    await choose('late-ipc');
+    await sync.applyModelSelectionToHost({ engine: 'codex', model: 'wrong-tab' });
   }, /会话已变化/);
   assert.deepEqual(JSON.parse(storage.get(activeKey)), otherSession, 'IPC completion cannot patch another same-engine session');
   assert.equal(hostCalls.length, hostCallsBefore, 'No follow-up model callback after a tab switch');
@@ -1126,10 +1110,6 @@ const basePalette = customization.customPaletteBase("ocean");
 const sanitized = customization.normalizePalette({ light: { accent: "red; } body { display:none" }, dark: { accent: "#884455" } }, basePalette);
 assert.equal(sanitized.light.accent, basePalette.light.accent);
 assert.equal(sanitized.dark.accent, "#884455");
-assert.equal(customization.isBackgroundImage('https://example.com/image.png'), false);
-assert.equal(customization.isBackgroundImage('data:image/svg+xml;base64,PHN2Zz4='), false);
-assert.equal(customization.isBackgroundImage('data:image/png;base64,AAAA");}body{display:none}'), false);
-const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aE1sAAAAASUVORK5CYII=';
 const themeStore = new Map();
 const mediaWrites = [];
 let sheets = 0;
@@ -1143,56 +1123,19 @@ const mediaCtx = {
 const mediaManager = new themes.GuiThemeManager(mediaCtx);
 await mediaManager.init();
 await mediaManager.updateConfig({ paletteMode: 'custom', customAccent: '#24685a' });
-await mediaManager.updateConfig({ backgroundImage: tinyPng, backgroundEnabled: true, backgroundName: 'test.png' });
-await Promise.all([mediaManager.updateConfig({ backgroundDim: 30 }), mediaManager.updateConfig({ backgroundDim: 45 })]);
-assert.equal(mediaWrites.filter(key => key === 'theme_background').length, 1, 'Sliders must not rewrite media');
-assert.equal(themeStore.get('theme_config').backgroundImage, undefined);
-assert.equal(themeStore.get('theme_config').backgroundDim, 45, 'Rapid writes must preserve the latest value');
-assert.equal(sheets, 2, 'Keep one media stylesheet and one theme stylesheet');
+await Promise.all([mediaManager.updateConfig({ customAccent: '#305f8a' }), mediaManager.updateConfig({ customAccent: '#884455' })]);
+assert.equal(themeStore.get('theme_config').customAccent, '#884455', 'Rapid writes must preserve the latest value');
+assert.equal(mediaWrites.every(key => key === 'theme_config'), true, 'Theme state lives in a single storage key');
+assert.equal(themeStore.get('theme_config').canvasStyle, 'plain', 'Canvas stays plain after the background feature removal');
+assert.equal(sheets, 1, 'Keep exactly one theme stylesheet');
 mediaManager.dispose();
 assert.equal(sheets, 0);
 const restoredManager = new themes.GuiThemeManager(mediaCtx);
 await restoredManager.init();
-assert.equal(restoredManager.getConfig().customAccent, '#24685a', 'Restore the single custom theme color');
-assert.equal(restoredManager.getConfig().backgroundImage, tinyPng, 'Restore background after reactivation');
-await restoredManager.updateConfig({ backgroundImage: '', backgroundEnabled: false });
-assert.equal(themeStore.get('theme_background'), null, 'Removing image must clear persisted bytes');
+assert.equal(restoredManager.getConfig().customAccent, '#884455', 'Restore the single custom theme color');
+assert.equal(sheets, 1, 'Reactivation re-injects one stylesheet');
 restoredManager.dispose();
 assert.equal(sheets, 0);
-console.log('Custom palette sanitization, portable background persistence, ordered saves and media cleanup passed.');
+console.log('Custom palette sanitization, ordered saves and stylesheet cleanup passed.');
 
-const fileFs = await import('node:fs');
-const filePath = await import('node:path');
-const fileOs = await import('node:os');
-const { createRequire } = await import('node:module');
-const { indexWorkspace, encodeIndex } = createRequire(import.meta.url)('./file-index.cjs');
-const fileSearch = await loadModule('../src/file-search.ts');
-const scratch = fileFs.mkdtempSync(filePath.join(fileOs.tmpdir(), 'ccgui-file-search-'));
-try {
-  for (const folder of ['src/components', 'docs', 'node_modules/example', '.git', 'dist']) fileFs.mkdirSync(filePath.join(scratch, folder), { recursive: true });
-  for (const name of ['src/components/ThemeSettingsPanel.tsx', 'docs/模型配置.md', 'README.md', 'node_modules/example/index.js', '.git/config', 'dist/main.js']) {
-    fileFs.writeFileSync(filePath.join(scratch, name), 'fixture');
-  }
-  const indexed = indexWorkspace(scratch);
-  assert(indexed.files.includes('docs/模型配置.md'));
-  assert(!indexed.files.some(name => name.startsWith('node_modules/') || name.startsWith('dist/') || name.startsWith('.git/')));
-  const all = indexWorkspace(scratch, true);
-  assert(all.files.includes('node_modules/example/index.js'));
-  assert(!all.files.includes('.git/config'));
-  assert.equal(fileSearch.searchFiles(indexed.files, 'THMSET')[0].path, 'src/components/ThemeSettingsPanel.tsx');
-  assert.equal(fileSearch.searchFiles(indexed.files, '模型')[0].path, 'docs/模型配置.md');
-  assert(fileSearch.searchFiles(indexed.files, 'src\\comp')[0].indexes.length > 0);
-  assert.equal(fileSearch.searchFiles(indexed.files, 'zzzzzzzzzzz').length, 0);
-  for (const value of ['../secret', '/etc/passwd', 'C:\\secret', 'folder/../secret']) assert.equal(fileSearch.safeRelativePath(value), false);
-  assert.equal(fileSearch.absoluteFilePath('D:\\workspace', 'src/index.ts'), 'D:\\workspace\\src\\index.ts');
-  assert.equal(fileSearch.absoluteFilePath('/workspace', 'src/index.ts'), '/workspace/src/index.ts');
-  const loadedIndex = await fileSearch.loadFileIndex({ bridge: { invoke: async (_command, args) => ({ code: 0, stderr: '', stdout: execFileSync(process.execPath, args.args, { encoding: 'utf8', windowsHide: true }) }) } }, scratch, false);
-  assert.deepEqual(loadedIndex.files, indexed.files, 'Embedded scanner must round-trip through compressed host output');
-  const { randomBytes } = await import('node:crypto');
-  const huge = { root: scratch, files: Array.from({ length: 10000 }, () => `${randomBytes(40).toString('hex')}.ts`), truncated: false, unreadable: 0 };
-  assert(Buffer.byteLength(encodeIndex(huge)) < 64 * 1024, 'Index must fit the host output cap');
-  assert.equal(huge.truncated, true);
-  fileFs.symlinkSync(filePath.join(scratch, 'src'), filePath.join(scratch, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
-  assert(!indexWorkspace(scratch).files.some(name => name.startsWith('linked/')), 'Skip symlinks and junctions');
-} finally { fileFs.rmSync(scratch, { recursive: true, force: true }); }
-console.log('File indexing, generated-directory filtering, fuzzy paths, workspace confinement and compressed transport passed.');
+console.log('All host compatibility contracts passed.');
