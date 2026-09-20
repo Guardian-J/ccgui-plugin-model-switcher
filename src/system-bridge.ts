@@ -564,7 +564,7 @@ export async function getSystemProviderChannels(
             };
             const existingIndex = channels.findIndex(item => item.id === pId);
             if (existingIndex < 0) channels.push(channel);
-            else channels[existingIndex] = channel;
+            else channels[existingIndex] = mergeYamlProviderIntoHostChannel(channels[existingIndex], channel);
           }
         }
       } catch (err) {
@@ -647,9 +647,43 @@ export function stripPluginProviderPrefix(providerId: string): string {
     : providerId;
 }
 
+/**
+ * 从宿主渠道的 settingsConfig 读回 CLAUDE_CODE_EFFORT_LEVEL 开关状态。
+ * 与写入端（buildProviderJson 里的 env 注入）对称，供编辑/查看表单回填。
+ */
+export function readEnableEffortLevel(channel: SystemProviderChannel): boolean {
+  const env = (channel.settingsConfig as { env?: Record<string, unknown> } | undefined)?.env;
+  return typeof env?.CLAUDE_CODE_EFFORT_LEVEL === "string"
+    && env.CLAUDE_CODE_EFFORT_LEVEL.trim() !== "";
+}
+
 function pluginIdAliases(id: string): string[] {
   const stripped = stripPluginProviderPrefix(id);
   return stripped === id ? [id, pluginProviderId(id)] : [id, stripped];
+}
+
+/**
+ * 宿主 providers 已登记的渠道又出现在 models.yml / models.json 里时的合并策略。
+ * 宿主登记过的 id 属于系统渠道：只补 YAML 带来的模型信息，保留原 name/remark/isNative，
+ * 否则 remark 被改成 "models.yml · N 个模型"，会被 classifyProviderChannels 误判成独立宿主渠道。
+ * @param host 宿主 providers 解析出的系统渠道
+ * @param yaml 同 id 的 models.yml / models.json 供应商渠道
+ * @returns 保留系统渠道身份、补齐模型信息的渠道
+ */
+export function mergeYamlProviderIntoHostChannel(
+  host: SystemProviderChannel,
+  yaml: SystemProviderChannel,
+): SystemProviderChannel {
+  return {
+    ...host,
+    baseUrl: host.baseUrl || yaml.baseUrl,
+    apiKey: host.apiKey || yaml.apiKey,
+    model: host.model || yaml.model,
+    api: host.api || yaml.api,
+    // YAML 的 models 列表垫底，宿主已有的同名字段优先
+    settingsConfig: { ...yaml.settingsConfig, ...host.settingsConfig },
+    raw: host.raw ?? yaml.raw,
+  };
 }
 
 /**
@@ -673,10 +707,8 @@ export function classifyProviderChannels(
       pluginYamlChannels.push(ch);
       continue;
     }
-    // OMP/PI 供应商渠道的 remark 格式是 "models.yml · N 个模型"，不应误判为宿主 YAML 渠道
     const yamlHost = !ch.isNative && ch.id !== NATIVE_PROVIDER_ID &&
-      typeof ch.remark === "string" && /models\.(yml|json)/.test(ch.remark) &&
-      !/·\s*\d+\s*个模型/.test(ch.remark);
+      typeof ch.remark === "string" && /models\.(yml|json)/.test(ch.remark);
     if (yamlHost) independentSystemChannels.push(ch);
     else systemChannels.push(ch);
   }

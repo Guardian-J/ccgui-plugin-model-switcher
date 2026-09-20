@@ -8,6 +8,7 @@ import {
   peekNativeCatalog,
   invalidateNativeCatalogCache,
   classifyProviderChannels,
+  mergeYamlProviderIntoHostChannel,
   mergePluginChannelsById,
   pluginProviderId,
 } from './system-bridge';
@@ -171,6 +172,24 @@ describe('system-bridge', () => {
         '0b08bc2f-19ba-40b2-ba03-727dcac41fb2',
         'gemini',
       ]);
+    });
+
+    it('宿主已登记的 id 被 YAML 补模型后仍算系统渠道', () => {
+      const hostRegistered = ch({ id: 'kimi-cn', name: 'Kimi 国内', remark: '系统供应商' });
+      const fromYaml = ch({
+        id: 'kimi-cn',
+        name: 'kimi-cn',
+        remark: 'models.yml · 2 个模型',
+        isNative: false,
+        settingsConfig: { models: [{ id: 'k2' }] },
+      });
+      const merged = mergeYamlProviderIntoHostChannel(hostRegistered, fromYaml);
+      expect(merged.remark).toBe('系统供应商');
+      expect(merged.name).toBe('Kimi 国内');
+      expect((merged.settingsConfig as { models?: unknown[] }).models).toEqual([{ id: 'k2' }]);
+      const { systemChannels, independentSystemChannels } = classifyProviderChannels([merged]);
+      expect(systemChannels.map((c) => c.id)).toEqual(['kimi-cn']);
+      expect(independentSystemChannels).toEqual([]);
     });
 
     it('原生 remark 含 models.yml 仍算系统渠道', () => {

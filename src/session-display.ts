@@ -25,11 +25,11 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
   const matchingHost = host?.value === engine ? host : null;
   // Prefer the mounted tab and the host's resolved selection; raw history is a fallback.
   const model = session?.model || matchingHost?.models?.[engine] || host?.lastUsedModel || "";
-  // 已有会话的 tab.effort 会被宿主清空；真正展示/发送的是 displayEfforts（来自 activeEffort）
+  // 档位由细到粗：会话自身 → 宿主 activeEffort/消息历史 → 引擎默认 efforts
   const effort = (
-    (session?.sessionId == null ? session?.effort as EffortLevel : undefined) ||
-    matchingHost?.efforts?.[engine] as EffortLevel ||
+    session?.effort as EffortLevel ||
     host?.lastUsedEffort ||
+    matchingHost?.efforts?.[engine] as EffortLevel ||
     "high"
   );
 
@@ -64,9 +64,12 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
   // 兜底：localStorage、props、全局默认
   if (!selectedProviderId) {
     const localStorageSession = getHostSession();
+    // 新宿主（无 onChannelChange）自己管理渠道绑定，props 上的 session.provider
+    // 可能是早已废弃的历史值；只有旧宿主才认这份会话级绑定
+    const legacyBinding = host?.onChannelChange ? session?.provider : undefined;
     selectedProviderId = (
       (localStorageSession?.engine === engine ? localStorageSession?.provider : undefined) ||
-      session?.provider ||
+      legacyBinding ||
       matchingHost?.selectedChannels?.[engine] ||
       ""
     );
@@ -129,10 +132,18 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
   } else {
     // 宿主未提供 providerId 且未切换引擎，优先从对话级记录恢复，兜底插件当前选择（兼容旧版宿主）
     const sessionRecord = display.stableKey ? state.sessionChannels?.[display.stableKey] : undefined;
+    // 已经在用对话级记录时，"本页签没有记录"就是真的没有：不能拿全局/别的页签的渠道顶上，
+    // 否则 flyout 的首次记录写入会把这个错误值固化成本会话的渠道
+    const hasSessionRecords = !!state.sessionChannels && Object.keys(state.sessionChannels).length > 0;
     if (sessionRecord) {
       finalProviderId = sessionRecord.selectedProviderId || "";
       activeChannelType = sessionRecord.activeChannelType || "system";
       activePluginChannelId = sessionRecord.activePluginChannelId;
+    } else if (hasSessionRecords) {
+      // 清空后交由宿主重新确定（useSessionDisplay 每秒回读）
+      finalProviderId = "";
+      activeChannelType = "system";
+      activePluginChannelId = undefined;
     } else {
       // 无对话级记录，保留当前状态（loadChannels 可能已回填或用户已选择）
       finalProviderId = state.selectedProviderId || "";

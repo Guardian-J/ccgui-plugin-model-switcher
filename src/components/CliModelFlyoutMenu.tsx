@@ -37,6 +37,7 @@ import {
   type NativeModel,
   CLI_ENGINES_CHANGED_EVENT,
   CLI_CONFIG_CHANGED_EVENT,
+  readEnableEffortLevel,
 } from "../system-bridge";
 import { fetchModelsFromProvider, loadNativeChannelModels } from "../api";
 import {
@@ -1062,6 +1063,7 @@ export function CliModelFlyoutMenu({
       apiKey: ch.apiKey || "",
       model: ch.model || "",
       api: isPiFamilyApiProtocol(ch.api || "") ? ch.api! : DEFAULT_PI_FAMILY_API,
+      enableEffortLevel: readEnableEffortLevel(ch),
     });
     setShowAddChannel(true);
   };
@@ -1268,6 +1270,7 @@ export function CliModelFlyoutMenu({
                     apiKey: ch.apiKey || "",
                     model: ch.model || "",
                     api: isPiFamilyApiProtocol(ch.api || "") ? ch.api! : DEFAULT_PI_FAMILY_API,
+                    enableEffortLevel: readEnableEffortLevel(ch),
                   });
                   setChannelTab("system");
                   setShowAddChannel(true);
