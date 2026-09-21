@@ -1,6 +1,6 @@
 import { useEffect, useState } from "./react-context";
 import { getHostSession, isConcreteModel } from "./selection-policy";
-import { findBuiltinTriggerButton, getHostCliMenuProps, repairLegacyHostModel, findHostChatStoreFromFiber, committedFiber } from "./sync-host";
+import { findBuiltinTriggerButton, getHostCliMenuProps, repairLegacyHostModel, findHostChatStoreFromFiber, committedFiber, normalizeEffort } from "./sync-host";
 import type { CliEngineId, EffortLevel, PluginState } from "./types";
 import { isPluginProviderId, pluginProviderId } from "./system-bridge";
 
@@ -25,22 +25,12 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
   const matchingHost = host?.value === engine ? host : null;
   // Prefer the mounted tab and the host's resolved selection; raw history is a fallback.
   const model = session?.model || matchingHost?.models?.[engine] || host?.lastUsedModel || "";
-  // 档位由细到粗：会话自身 → 宿主 activeEffort/消息历史 → 引擎默认 efforts
-  const effort = (
-    session?.effort as EffortLevel ||
-    host?.lastUsedEffort ||
-    matchingHost?.efforts?.[engine] as EffortLevel ||
-    "high"
-  );
-
-  // 会话级渠道优先级：
-  // 1. bySession[sessionKey].activeProvider（已创建会话的真实渠道）
-  // 2. localStorage activeSession.provider（新会话的渠道选择）
-  // 3. session.provider（React props，可能滞后）
-  // 4. selectedChannels[engine]（全局默认）
+  // 会话级渠道与档位：
+  // 1. bySession[sessionKey]（已创建会话的真实 activeProvider 和 activeEffort）
   let selectedProviderId = "";
+  let sessionActiveEffort: EffortLevel | undefined;
 
-  // 已创建的会话：从 bySession 读取
+  // 已创建的会话：从 bySession 读取真实状态
   if (session?.sessionId) {
     try {
       const sessionKey = `${engine}/${session.sessionId}`;
@@ -52,7 +42,14 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
           const state = store.getState();
           const bySessionState = state.bySession?.[sessionKey];
           if (bySessionState && typeof bySessionState === "object") {
-            selectedProviderId = (bySessionState as { activeProvider?: string }).activeProvider || "";
+            const rawProvider = "activeProvider" in bySessionState ? bySessionState.activeProvider : undefined;
+            if (typeof rawProvider === "string") {
+              selectedProviderId = rawProvider;
+            }
+            const rawEffort = "activeEffort" in bySessionState ? bySessionState.activeEffort : undefined;
+            if (rawEffort) {
+              sessionActiveEffort = normalizeEffort(rawEffort);
+            }
           }
         }
       }
@@ -61,6 +58,14 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
     }
   }
 
+  // 档位由细到粗：会话真实 activeEffort → 宿主 displayEfforts → 待建会话 tab 显式选择 → 消息历史兜底 → 默认
+  const effort = (
+    sessionActiveEffort ||
+    (matchingHost?.efforts?.[engine] as EffortLevel) ||
+    (session?.sessionId === null ? (session?.effort as EffortLevel) : undefined) ||
+    host?.lastUsedEffort ||
+    "high"
+  );
   // 兜底：localStorage、props、全局默认
   if (!selectedProviderId) {
     const localStorageSession = getHostSession();
