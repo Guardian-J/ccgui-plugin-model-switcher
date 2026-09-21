@@ -57,13 +57,12 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
       // 读取失败时降级到 localStorage
     }
   }
-
-  // 档位由细到粗：会话真实 activeEffort → 宿主 displayEfforts → 待建会话 tab 显式选择 → 消息历史兜底 → 默认
+  // 档位由细到粗：会话真实 activeEffort -> 会话显式 effort -> 消息历史兜底 -> 引擎默认 -> 默认
   const effort = (
     sessionActiveEffort ||
-    (matchingHost?.efforts?.[engine] as EffortLevel) ||
-    (session?.sessionId === null ? (session?.effort as EffortLevel) : undefined) ||
+    (session?.effort as EffortLevel) ||
     host?.lastUsedEffort ||
+    (matchingHost?.efforts?.[engine] as EffortLevel) ||
     "high"
   );
   // 兜底：localStorage、props、全局默认
