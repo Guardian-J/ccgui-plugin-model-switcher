@@ -1,10 +1,11 @@
 import { React } from "../react-context";
 import { PlusIcon } from "../icons";
+import type { ChannelIdentity } from "./FavoriteModelsList";
 
 interface CustomModelInputProps {
   customInput: string;
   fetchingModels: boolean;
-  activeChannel: { id: string } | null;
+  activeChannel: ChannelIdentity | null;
   onCustomInputChange: (value: string) => void;
   onAddCustomModel: () => void;
 }

@@ -4,7 +4,7 @@ import { RefreshIcon } from "../icons";
 import { EffortSection } from "./EffortSection";
 import { ModelSearchInput } from "./ModelSearchInput";
 import { ModelSearchDropdown } from "./ModelSearchDropdown";
-import { FavoriteModelsList } from "./FavoriteModelsList";
+import { FavoriteModelsList, type ChannelIdentity } from "./FavoriteModelsList";
 import { CustomModelInput } from "./CustomModelInput";
 
 export interface ModelOptionItem {
@@ -17,7 +17,7 @@ export interface ModelOptionItem {
 
 interface ModelListSectionProps {
   activeEngine: CliEngineId;
-  activeChannel: { id: string } | null;
+  activeChannel: ChannelIdentity | null;
   favoriteModelOptions: ModelOptionItem[];
   catalogModelOptions: ModelOptionItem[];
   onAddFavorite: (modelId: string) => void;

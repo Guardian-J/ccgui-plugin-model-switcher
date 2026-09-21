@@ -1,12 +1,16 @@
 import { React } from "../react-context";
 import type { CliEngineId } from "../types";
 import { ProjectEngineIcon, CheckIcon, TrashIcon, RefreshIcon, inferModelEngine } from "../icons";
+import { displayEngineModel } from "../system-bridge";
 import type { ModelOptionItem } from "./ModelListSection";
+
+/** 归一化模型 ID 所需的渠道身份：插件渠道要按 plugin_<id> 而非裸 id 去前缀。 */
+export type ChannelIdentity = { id: string; isPlugin?: boolean; isNative?: boolean };
 
 interface FavoriteModelsListProps {
   favoriteModelOptions: ModelOptionItem[];
   bareSelectedModel: string;
-  activeChannel: { id: string } | null;
+  activeChannel: ChannelIdentity | null;
   activeEngine: CliEngineId;
   fetchingModels: boolean;
   selectionError: (modelId: string) => string | null;
@@ -54,7 +58,7 @@ export function FavoriteModelsList({
         <ModelRow
           key={opt.id}
           model={opt}
-          isSelected={isModelSelected(opt.id, bareSelectedModel, activeChannel)}
+          isSelected={isModelSelected(opt.id, bareSelectedModel, activeChannel, activeEngine)}
           activeEngine={activeEngine}
           selectionError={selectionError}
           onSelectModel={onSelectModel}
@@ -65,17 +69,21 @@ export function FavoriteModelsList({
   );
 }
 
-function isModelSelected(
+/**
+ * 判断模型行是否为当前选中项。
+ * omp/pi 的模型 ID 带供应商前缀，而插件渠道在 CLI 配置里的供应商 id 是 plugin_<渠道 id>，
+ * 不是渠道裸 id；统一交给 displayEngineModel 按渠道身份（id + isPlugin/isNative）归一化后再比，
+ * 不要手工拼 `渠道 id/模型`，否则同名不同 id 的插件渠道会匹配错。
+ */
+export function isModelSelected(
   modelId: string,
   bareSelectedModel: string,
-  activeChannel: { id: string } | null
+  activeChannel: ChannelIdentity | null,
+  activeEngine: CliEngineId
 ): boolean {
-  return Boolean(
-    bareSelectedModel === modelId ||
-      (activeChannel &&
-        (bareSelectedModel === `${activeChannel.id}/${modelId}` ||
-          modelId === `${activeChannel.id}/${bareSelectedModel}`))
-  );
+  if (!bareSelectedModel) return false;
+  const bare = (id: string) => displayEngineModel(activeEngine, activeChannel, id);
+  return bare(modelId) === bare(bareSelectedModel);
 }
 
 interface ModelRowProps {
