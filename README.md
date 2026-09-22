@@ -1,6 +1,6 @@
 # CC GUI Model Switcher
 
-本项目是针对 [cc-gui（desktop-cc-gui）](https://github.com/zhukunpenglinyutong/desktop-cc-gui) 开发的扩展插件，需要在 cc-gui 宿主中安装使用。插件提供模型与 CLI 选择、供应商渠道切换、独立渠道管理、全局主题、会话模型显示、文件模糊搜索、幕布链接跳转，以及可选的 Claude Agent SDK 提示词清洗。
+本项目是针对 [cc-gui（desktop-cc-gui）](https://github.com/zhukunpenglinyutong/desktop-cc-gui) 开发的扩展插件，需要在 cc-gui 宿主中安装使用。插件提供模型与 CLI 选择、供应商渠道切换、独立渠道管理、全局主题、会话模型显示，以及可选的 Claude Agent SDK 提示词清洗。
 
 宿主项目地址：https://github.com/zhukunpenglinyutong/desktop-cc-gui
 
@@ -56,54 +56,23 @@ CLI 配置如何应用取决于宿主版本：早期宿主可能改写原生文�
 
 点击弹窗右上角的调色盘图标进入“全局主题”。
 
-- 内置 12 个主题选项：原生极简、深空毛玻璃、赛博霓虹、北欧极夜、落樱浅绛、翡翠森林、石墨、潮汐、钴蓝、梅影、青柠终端、朱砂。
+- 内置 12 个主题选项：原生极简、深空雅致、赛博霓虹、北欧极夜、落樱浅绛、翡翠森林、石墨、潮汐、钴蓝、梅影、青柠终端、朱砂。
 - 调色盘仅保留一个原生自由选色器，自动生成浅色、深色配色。为保证白色按钮文字可读，过亮的选色会在实际强调色中适当压暗。
 - 主题跟随宿主浅色/深色模式，覆盖侧栏、聊天、表单、菜单和弹窗。
-- 支持毛玻璃、全局聚焦光晕、细滚动条、代码块精修和字体平滑开关。
+- 支持全局聚焦光晕、细滚动条和字体平滑开关。
 - 旧版多色配置沿用已保存的浅色强调色，旧网格和斜纹背景按纯色处理。
-
-### 幕布与时间线玻璃效果
-
-启用“毛玻璃”和“时间线精修”后，过程摘要、工具步骤、思考内容、参数/结果面板及消息导航预览使用统一的玻璃样式。
-
-- 半透明底色、柔和模糊、细高光边缘和主题色连接线。
-- 收起后的过程摘要仍有样式，展开后新挂载的工具步骤继续生效。
-- 命令使用等宽字体，长命令和路径自动换行，参数/结果保持一致的视觉层次。
-- 保留宿主的展开收起、虚拟列表定位、错误状态颜色和原始命令文字。
-- “幕布渲染”独立控制遮罩，浓度范围为 20%–80%，模糊范围为 0–16 px。
-- 支持键盘焦点、减少动效及减少透明效果的系统设置；不支持背景模糊的环境使用实色回退。
 
 ### 应用背景
 
 在主题设置的“应用背景”中选择纯色或图片/GIF。
 
-- 图片背景覆盖整个应用的主要面板和侧栏；启用毛玻璃时，弹窗通过半透明模糊呈现背景。
+- 图片背景覆盖整个应用的主要面板和侧栏。
 - 支持本地 PNG、JPEG、WebP 和 GIF，单文件不超过 4 MB，解码尺寸不超过 4000 万像素。
 - 支持铺满、完整显示和 0%–100% 阅读遮罩。
 - 保留原始图片字节及 GIF/WebP 动画，媒体单独保存，重载后可继续使用。
 - 可更换、移除图片，或暂时切回纯色而保留已导入图片。
 - 系统启用“减少动态效果”时，GIF/WebP 应用背景会停用；输入框、状态色和代码区域保留各自的可读底色。
 
-### 文件模糊搜索
-
-右侧面板在“文件”旁增加“搜索”页签。
-
-- 按当前工作区的文件名和相对路径模糊匹配，支持不连续字符、中文和大小写不敏感搜索。
-- 高亮匹配字符，每次最多显示 100 个结果；方向键选择，回车打开，Esc 清空搜索。
-- 结果通过宿主文件编辑器打开。切换工作区后重置搜索和索引，避免旧结果串入新工作区。
-- 按需建立索引，支持手动刷新；新增、删除或重命名文件后可刷新索引获取最新结果。
-- 默认跳过 `node_modules`、`dist`、`build`、`target`、`.next`、`.cache`、`__pycache__`、`.venv`、`vendor`，可勾选“包含依赖与构建目录”。始终跳过 `.git` 和符号链接/目录联接。
-- 扫描仅读取目录和文件名，不做文件内容全文搜索，也不上传索引。
-
-索引有文件数、目录数、时间及传输大小限制，最多收录 20,000 个文件，实际可能更少。达到上限或目录无法读取时会提示；当前过滤使用上述目录规则，不解析项目的 `.gitignore`。
-
-### HTTP/HTTPS 链接跳转
-
-- 识别 Markdown 正文及行内代码中的 HTTP/HTTPS 网址，支持本地地址、端口、查询参数和中文标点边界。
-- 鼠标点击、中键或键盘回车可打开系统默认浏览器；Web 客户端使用新标签页。
-- 连续点击期间避免重复启动，打开失败会显示提示。
-- 文件链接仍交由宿主处理，不作为网页打开；代码块不会自动转换为链接。
-- 仅接受有效 HTTP/HTTPS 网址，不接受带用户名/密码的地址。
 
 ## 环境要求
 
@@ -111,17 +80,16 @@ CLI 配置如何应用取决于宿主版本：早期宿主可能改写原生文�
 | --- | --- |
 | 宿主 | CC GUI，清单声明最低版本 `1.0.5`，插件 SDK 范围 `^0.3.11` |
 | 平台 | Windows、macOS、Linux 桌面版；Web 模式不具备桌面执行桥能力 |
-| Node.js | 文件索引、桌面浏览器跳转、提示词清洗需要宿主能从 PATH 找到 `node`，并授予 `exec:node` 权限 |
-| 浏览器跳转 | Windows 使用 PowerShell，macOS 使用 `open`，Linux 使用 `xdg-open`；需配置默认浏览器 |
+| Node.js | 提示词清洗需要宿主能从 PATH 找到 `node`，并授予 `exec:node` 权限 |
 | 本地开发 | 推荐 Node.js 22、pnpm 10，与仓库 CI 配置一致 |
 
-模型/会话同步和文件打开依赖宿主内部 IPC、持久化结构及 React 组件回调；主题依赖宿主 DOM 结构。SDK 版本匹配不代表所有内部接口始终兼容，宿主升级后需要回归验证。
+模型/会话同步依赖宿主内部 IPC、持久化结构及 React 组件回调；主题依赖宿主 DOM 结构。SDK 版本匹配不代表所有内部接口始终兼容，宿主升级后需要回归验证。
 
 ### 远程访问
 
-在宿主提供的远程访问网页中，插件使用同源认证 WebSocket 读取宿主的 CLI、供应商配置、模型目录和工作区文件索引。模型接口请求也由宿主执行，因此渠道地址里的 `localhost` 指宿主电脑。模型 ID、渠道和推理强度跟随网页中当前打开的会话，支持窄屏布局。
+在宿主提供的远程访问网页中，插件使用同源认证 WebSocket 读取宿主的 CLI、供应商配置和模型目录。模型接口请求也由宿主执行，因此渠道地址里的 `localhost` 指宿主电脑。模型 ID、渠道和推理强度跟随网页中当前打开的会话，支持窄屏布局。
 
-部分宿主版本只开放插件存储读取，未开放写入；此时自选和主题等插件偏好保存在当前浏览器，继承宿主已有配置，但不回写桌面插件存储。网络错误仍会报告失败。远程文件搜索遵循宿主索引的忽略规则，不支持包含依赖目录选项。
+部分宿主版本只开放插件存储读取，未开放写入；此时自选和主题等插件偏好保存在当前浏览器，继承宿主已有配置，但不回写桌面插件存储。网络错误仍会报告失败。
 
 未开放 OMP/PI 配置管理的宿主版本仍可读取原生模型目录、选择已注册且未改动的渠道和模型；新增或修改其配置需要在桌面端完成。提示词清洗也仅在桌面端提供。
 
@@ -151,7 +119,7 @@ pnpm build
 2. 选择当前仓库的 `dist` 目录，按宿主流程授予所需权限并启用插件。
 3. 更新时重新构建并更新整个 `dist` 目录，然后重载插件。
 
-不要仅替换 `main.js`：`manifest.json` 中的权限声明也需要一起更新，尤其是文件搜索和链接增强使用的 `ui:panel-tab`、`ui:markdown`。
+不要仅替换 `main.js`：`manifest.json` 中的权限声明也需要一起更新。
 
 构建会生成 `dist/main.js`、`dist/manifest.json` 等安装产物，并同步仓库根目录的 `main.js`。源码修改或本地构建不会自动安装到个人配置目录，也不会修改宿主源代码。
 
@@ -165,10 +133,8 @@ Git 仓库保留源码、兼容性验证脚本和依赖锁文件；`.gitignore` 
 | --- | --- |
 | `storage` | 保存独立渠道、模型记录、主题设置和背景媒体 |
 | `ui:composer`、`ui:status-bar` | 模型弹窗入口与状态显示 |
-| `ui:panel-tab` | 文件搜索页签 |
-| `ui:markdown` | 网址识别和链接增强 |
-| `theme` | 注入主题、背景、幕布和时间线样式 |
-| `exec:node` | 执行内嵌文件索引、浏览器启动及提示词清洗脚本 |
+| `theme` | 注入主题和时间线样式 |
+| `exec:node` | 执行内嵌提示词清洗脚本 |
 | `network:<host>` | 插件 HTTP 模型查询的域名与端口授权 |
 
 清单还声明了 `ui:settings-section`、`ui:command`、`i18n` 和 `events`；这不代表当前版本一定提供对应的独立界面或命令。
@@ -210,12 +176,6 @@ You are Claude Code, Anthropic's official CLI for Claude.
 | 问题 | 检查方式 |
 | --- | --- |
 | 切换渠道后 CLI 配置被改写 | 预期行为：插件切换/创建/删除渠道会同步宿主并改写 Claude / Codex / Kimi / Grok 的 CLI 原生文件 |
-| 时间线没有玻璃效果 | 更新完整插件并重载，开启“毛玻璃”和“时间线精修”；同时检查系统减少透明效果设置及宿主版本兼容性 |
-| 幕布模糊不明显 | 开启“幕布渲染”，调整浓度和模糊值；实色背景下玻璃效果较弱 |
-| 背景导入失败 | 检查格式、4 MB 大小限制和 4000 万像素限制；SVG 和损坏文件不支持 |
-| 文件搜索缺少结果 | 刷新索引，检查工作区、目录过滤、读取权限及索引上限；需要时包含依赖与构建目录 |
-| 搜索结果无法打开 | 先打开宿主“文件”页签再重试；宿主组件变化可能影响编辑器回调适配 |
-| HTTP 链接无法打开 | 检查 `exec:node` 权限、宿主 PATH、平台启动命令和默认浏览器；Web 模式检查弹窗限制 |
 | 模型列表为空 | 检查当前实际渠道、Base URL、API Key 和模型接口响应；原生渠道无 URL 时才回退 CLI 内置目录，必要时重新拉取 |
 | 已清洗仍出现 429 | 检查本地检测结果、旧进程和会话快照，并结合中转站响应判断；用新会话验证 |
 
@@ -235,11 +195,9 @@ pnpm preview:ui
 | --- | --- | --- |
 | `/preview/` | 模型与渠道弹窗 | `check-layout.js`、`check-selection.js`、`check-provider-protection.js`、`check-scrub.js` |
 | `/preview/?sessions` | 会话状态显示 | `check-sessions.js` |
-| `/preview/theme.html` | 全局主题、背景、幕布与时间线 | `check-theme.js`、`check-theme-controls.js`、`check-custom-theme.js`、`check-tool-theme.js`、`check-glass.js`、`check-timeline-coverage.js` |
-| `/preview/files.html` | 文件搜索 | `check-files.js` |
-| `/preview/links.html` | 网址识别和浏览器调用 | `check-links.js` |
+| `/preview/theme.html` | 全局主题 | `check-theme.js`、`check-theme-controls.js`、`check-custom-theme.js`、`check-tool-theme.js` |
 
-上述脚本位于本地 `preview/`。预览使用模拟宿主接口；链接预览不会实际启动桌面浏览器，不能替代真实宿主集成验证。
+上述脚本位于本地 `preview/`。预览使用模拟宿主接口，不能替代真实宿主集成验证。
 
 仓库中的 `/scripts/check-remote-host.html` 可直接在 Vite 预览服务器中运行，覆盖无 Tauri 接口的远程读取、文本及二进制消息、断线重连、会话定位、浏览器保存回退和窄屏弹窗；使用模拟通道和假凭据，不连接真实宿主。
 
@@ -267,7 +225,7 @@ Get-Content -Encoding utf8 -Raw preview/check-provider-protection.js | agent-bro
 | 命令 | 用途 |
 | --- | --- |
 | `pnpm typecheck` | 检查 `src` 中的 TypeScript 类型 |
-| `pnpm check:compatibility` | 验证渠道切换、模型协议、会话隔离、主题迁移、媒体持久化、文件索引、浏览器参数和清洗逻辑 |
+| `pnpm check:compatibility` | 验证渠道切换、模型协议、会话隔离、主题迁移和清洗逻辑 |
 | `pnpm build` | 生成完整插件安装目录 |
 | `pnpm dev` | 监听源码变化并重新构建，不启动 UI 预览服务器 |
 | `pnpm preview:ui` | 启动 UI 预览服务器，页面需本地 `preview/` 文件 |
@@ -290,20 +248,13 @@ src/index.tsx                             插件激活、界面注册与卸载
 src/components/CliModelFlyoutMenu.tsx      模型与渠道弹窗
 src/components/ThemeSettingsPanel.tsx     主题设置
 src/components/ThemeCustomizationPanel.tsx 自由选色与背景导入
-src/components/FileSearchPanel.tsx        文件搜索界面
 src/system-bridge.ts                      宿主渠道读取与切换
 src/selection-policy.ts                   会话与模型兼容性校验
 src/session-display.ts                    当前会话显示适配
 src/sync-host.ts                          模型与推理强度同步
 src/theme-manager.ts                      主题生成、持久化与样式生命周期
 src/theme-palette.ts                      内置主题与颜色变量
-src/theme-customization.ts                自由选色和背景文件校验
-src/tool-timeline-theme.ts                时间线与工具玻璃样式
-src/chat-links.ts                         网址识别与打开交互
-src/file-search.ts                        索引解码与模糊匹配
-src/host-files.ts                         宿主编辑器打开适配
-scripts/file-index.cjs                    只读文件名索引
-scripts/open-browser.cjs                  跨平台默认浏览器启动
+src/theme-customization.ts                自由选色
 scripts/scrub-core.cjs                    提示词清洗核心
 scripts/check-compatibility.mjs           模拟兼容性回归
 preview/                                 本地预览页面与浏览器检查脚本（Git 忽略）

@@ -39,47 +39,6 @@ assert.deepEqual(bridge.withoutCustomModel('omp', { id: 'relay' }, ['relay/model
 assert.deepEqual(bridge.withoutCustomModel('claude', null, ['sonnet[1m]', 'opus'], 'sonnet'), ['opus']);
 const scrub = await loadModule("../src/prompt-scrubber.ts");
 const policy = await loadModule("../src/selection-policy.ts");
-const links = await loadModule("../src/chat-links.ts");
-const { browserCommand } = (await import('./open-browser.cjs')).default;
-for (const invalid of ['javascript:alert(1)', 'file:///tmp/a', '//example.com', 'https://user:pass@example.com', 'http://']) {
-  assert.equal(links.httpUrl(invalid), null);
-}
-const url = 'http://localhost:5173/path?q=%22&x=1#section';
-assert.equal(links.httpUrl(url), url);
-assert.equal(browserCommand(url, 'win32').env.CCGUI_BROWSER_URL, url);
-assert.ok(!browserCommand(url, 'win32').args.join(' ').includes(url));
-assert.deepEqual(browserCommand(url, 'darwin'), { bin: 'open', args: [url] });
-assert.deepEqual(browserCommand(url, 'linux'), { bin: 'xdg-open', args: [url] });
-assert.throws(() => browserCommand('file:///tmp/a', 'linux'));
-const linkTree = { type: 'root', children: [
-  { type: 'text', value: `地址：${url}。` },
-  { type: 'inlineCode', value: 'https://example.com/docs' },
-  { type: 'link', url: 'https://example.com', children: [{ type: 'text', value: 'https://example.com' }] },
-  { type: 'code', value: 'curl https://example.com' },
-] };
-links.remarkHttpLinks()(linkTree);
-assert.equal(linkTree.children.filter(node => node.type === 'link').length, 3);
-assert.equal(linkTree.children.find(node => node.type === 'link').url, url);
-const once = JSON.stringify(linkTree);
-links.remarkHttpLinks()(linkTree);
-assert.equal(JSON.stringify(linkTree), once, 'streaming reparse must not nest links');
-let browserArgs;
-await links.openBrowser({ host: { isWeb: false }, bridge: { invoke: async (command, args) => { browserArgs = { command, args }; return { code: 0 }; } } }, url);
-assert.equal(browserArgs.command, 'plugin_exec_run');
-assert.equal(browserArgs.args.args[3], url);
-for (const platform of ['win32', 'darwin', 'linux']) {
-  let launched;
-  runInNewContext(browserArgs.args.args[1], {
-    module: { id: '[eval]', exports: {} },
-    require: () => ({ execFileSync: (...args) => { launched = args; } }),
-    process: { platform, argv: ['node', url], env: {}, stderr: { write: message => assert.fail(message) } },
-    URL,
-  });
-  assert.equal(launched[0], browserCommand(url, platform).bin, 'embedded Node entry invokes platform opener');
-  assert.equal(launched[2].windowsHide, true);
-}
-await assert.rejects(() => links.openBrowser({ bridge: { invoke: async () => ({ code: 1 }) } }, url));
-console.log('Chat HTTP links, URL validation and Windows/macOS/Linux browser arguments passed.');
 const calls = [];
 let current = null;
 const piFamilyModels = {
@@ -1087,10 +1046,9 @@ const manager = new themes.GuiThemeManager(themeCtx);
 await manager.init();
 assert.equal(manager.getConfig().canvasStyle, "plain", "Migrate old theme settings with new defaults");
 assert.equal(manager.getConfig().enableTabPolish, true, "Default tab polish to enabled");
-await manager.updateConfig({ preset: "graphite", backdropOpacity: 60, canvasStyle: "grid" });
+await manager.updateConfig({ preset: "graphite", canvasStyle: "grid" });
 assert.equal(activeStyles, 1, "Live theme replacement must not accumulate stylesheets");
 assert.equal(savedTheme.preset, "graphite");
-assert.equal(savedTheme.backdropOpacity, 60);
 assert.equal(savedTheme.canvasStyle, 'plain', 'Legacy texture values must normalize on save');
 assert.equal(savedTheme.customCss, ".user-rule { color: red; }");
 manager.dispose();

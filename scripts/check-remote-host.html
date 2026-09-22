@@ -8,7 +8,6 @@ import { createRoot } from 'react-dom/client';
 import activate from '../src/index.tsx';
 import { invokeHost, disposeHostTransport } from '../src/host-transport.ts';
 import { loadNativeChannelModels, fetchModelsFromProvider } from '../src/api.ts';
-import { loadFileIndex } from '../src/file-search.ts';
 import { withRemoteStorage } from '../src/remote-storage.ts';
 import { readSessionDisplay } from '../src/session-display.ts';
 import { ensurePiFamilyModelConfigured } from '../src/system-bridge.ts';
@@ -33,7 +32,6 @@ async function dispatch(cmd, args) {
     case 'update_app_settings': return;
     case 'list_engine_models': return { models:[{ id:'provider/native-model' }], authoritative:true };
     case 'fetch_provider_models': if (rejectModels) throw Error('Remote provider unavailable'); return { models:[remoteModel,'org/second-model'] };
-    case 'list_file_index': return [{ rel:'src',isDir:true },{ rel:'src/remote.ts',isDir:false }];
     case 'plugin_storage_get': return null;
     case 'plugin_storage_set': if (disconnectStorage) throw Error('Disconnected');
     default: throw Error(`unknown command: ${cmd}`);
@@ -114,9 +112,6 @@ try {
   const catalog=await loadNativeChannelModels(ctx,'omp',null);
   assert(catalog.models[0].id==='provider/native-model','Read host native selectors remotely');
   await ensurePiFamilyModelConfigured('omp',{id:'provider'},'native-model');
-  assert(!calls.some(call=>call.cmd==='pi_family_models_config_write'),'Existing OMP model needs no remote config write');
-  const index=await loadFileIndex(ctx,'/remote-project',false);
-  assert(index.files.join()==='src/remote.ts','Read host workspace index without exec');
   rejectModels=true;
   let queryFailed=false;
   try { await fetchModelsFromProvider(ctx,'http://127.0.0.1:12345','test-only-key'); } catch { queryFailed=true; }

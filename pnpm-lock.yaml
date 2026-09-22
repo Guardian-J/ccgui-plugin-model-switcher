@@ -8,15 +8,6 @@ importers:
 
   .:
     dependencies:
-      fflate:
-        specifier: ^0.8.3
-        version: 0.8.3
-      fuzzysort:
-        specifier: ^4.0.2
-        version: 4.0.2
-      linkify-it:
-        specifier: ^6.1.0
-        version: 6.1.0
     devDependencies:
       '@types/react':
         specifier: ^18.3.18
@@ -675,16 +666,12 @@ packages:
       picomatch:
         optional: true
 
-  fflate@0.8.3:
-    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
 
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
-  fuzzysort@4.0.2:
-    resolution: {integrity: sha512-3c7yD6rK1EXIsqpcu1ZVzXJugODWNMzvUij6yTiziaAHrpNS8kzFOI9mJLE8pmG4K9JOaVgzQRgklfOEk8f4Tg==}
 
   gensync@1.0.0-beta.2:
     resolution: {integrity: sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==}
@@ -722,8 +709,6 @@ packages:
     engines: {node: '>=6'}
     hasBin: true
 
-  linkify-it@6.1.0:
-    resolution: {integrity: sha512-wJ/TwpSDTLepCrQoYWYIExIKg5Zchex2Nn5yk2mFnB+6PtdkHtyLx742md9csRjjOnGkKIS/RrbY7l8D6gT9Vw==}
 
   loose-envify@1.4.0:
     resolution: {integrity: sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q==}
@@ -876,8 +861,6 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
-  uc.micro@3.0.0:
-    resolution: {integrity: sha512-U3PppEkleoTnIfi8BozMx3yju3qc/L6SwqWo2Sw+54PX+PX0q9I+r1Um5HCmqD7n9VDX5/v3vQH/AjA6deDdtw==}
 
   undici@8.10.2:
     resolution: {integrity: sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==}
@@ -1533,12 +1516,10 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.7
 
-  fflate@0.8.3: {}
 
   fsevents@2.3.3:
     optional: true
 
-  fuzzysort@4.0.2: {}
 
   gensync@1.0.0-beta.2: {}
 
@@ -1584,9 +1565,6 @@ snapshots:
 
   json5@2.2.3: {}
 
-  linkify-it@6.1.0:
-    dependencies:
-      uc.micro: 3.0.0
 
   loose-envify@1.4.0:
     dependencies:
@@ -1733,7 +1711,6 @@ snapshots:
 
   typescript@5.9.3: {}
 
-  uc.micro@3.0.0: {}
 
   undici@8.10.2: {}
 

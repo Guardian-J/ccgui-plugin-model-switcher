@@ -41,11 +41,9 @@ export function ThemeSettingsPanel({ manager, onClose, enableTheme, onToggleThem
   };
 
   const toggles: { key: keyof GuiThemeConfig; label: string }[] = [
-    { key: "enableTimelinePolish", label: "时间线精修" },
     { key: "enableTabPolish", label: "页签精修" },
     { key: "enableComposerGlow", label: "全局聚焦光晕" },
     { key: "enableSleekScrollbars", label: "细滚动条" },
-    { key: "enableCardPolish", label: "代码块精修" },
     { key: "enableFontSmoothing", label: "字体平滑" },
   ];
 
@@ -123,25 +121,6 @@ export function ThemeSettingsPanel({ manager, onClose, enableTheme, onToggleThem
           );
         })}
       </div>}
-      <section className="ms-theme-section" aria-label="幕布">
-        <button type="button" role="switch" aria-label="幕布渲染" aria-checked={config.enableBackdropPolish}
-          className="ms-theme-toggle" onClick={() => handleToggle("enableBackdropPolish")}>
-          <span className="ms-theme-name">幕布渲染</span><span aria-hidden className="ms-switch"><span /></span>
-        </button>
-        <div className="ms-theme-sliders">
-          {([{ key: "backdropOpacity", label: "幕布浓度", min: 20, max: 80, step: 5, unit: "%" },
-            { key: "backdropBlur", label: "幕布模糊", min: 0, max: 16, step: 1, unit: "px" }] as const).map(item =>
-            <div className="ms-theme-slider" key={item.key}>
-              <span>{item.label}<output>{config[item.key]}{item.unit}</output></span>
-              <div className="ms-effort-track">
-                <div className="ms-effort-fill" style={{ width: `calc(${(config[item.key] - item.min) / (item.max - item.min)} * (100% - 21px) + 21px)` }} />
-                <input className="ms-range" type="range" min={item.min} max={item.max} step={item.step}
-                  aria-label={item.label} value={config[item.key]} disabled={!config.enableBackdropPolish}
-                  onChange={event => void update({ [item.key]: Number(event.target.value) })} />
-              </div>
-            </div>)}
-        </div>
-      </section>
       <div className="ms-theme-toggles">
         {toggles.map((item) => {
           const on = Boolean(config[item.key]);

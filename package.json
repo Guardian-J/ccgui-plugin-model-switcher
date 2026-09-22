@@ -1,7 +1,7 @@
 {
   "name": "ccgui-plugin-model-switcher",
-  "version": "1.0.29",
-  "description": "针对 cc-gui（https://github.com/zhukunpenglinyutong/desktop-cc-gui）的扩展插件：模型与 CLI 选择、独立渠道管理、全局主题、文件模糊搜索和链接跳转",
+  "version": "1.0.30",
+  "description": "针对 cc-gui（https://github.com/zhukunpenglinyutong/desktop-cc-gui）的扩展插件：模型与 CLI 选择、独立渠道管理、全局主题",
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -29,10 +29,5 @@
   "peerDependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
-  },
-  "dependencies": {
-    "fflate": "^0.8.3",
-    "fuzzysort": "^4.0.2",
-    "linkify-it": "^6.1.0"
   }
 }

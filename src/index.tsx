@@ -7,7 +7,6 @@ import { ProjectEngineIcon, inferModelEngine } from "./icons";
 import { CLI_DISPLAY_NAMES, prefetchSystemSnapshot, qualifyEngineModel } from "./system-bridge";
 import { DEFAULT_STATE } from "./constants";
 import { useSessionDisplay, withSessionDisplay } from "./session-display";
-import { installChatLinks } from "./chat-links";
 import { repairLegacyContextSelections, findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost } from "./sync-host";
 import { compactPluginModelLabel, installCompactModelLabels } from "./model-display";
 import { disposeHostTransport } from "./host-transport";
@@ -38,9 +37,9 @@ export default function activate(ctx: PluginContext): Disposer {
     window.addEventListener("focus", handleWindowFocus);
   }
 
-  // 初始化 GUI 美化主题管理器
+  // 主题样式在插件状态读完后、浏览器空闲时再注入，避免挡住宿主首屏。
   const themeManager = new GuiThemeManager(ctx);
-  void themeManager.init();
+  let alive = true;
 
   let currentState: PluginState = { ...DEFAULT_STATE };
   const listeners = new Set<() => void>();
@@ -52,17 +51,16 @@ export default function activate(ctx: PluginContext): Disposer {
   ctx.storage
     .get<PluginState>("state")
     .then((saved) => {
+      if (!alive) return;
       if (saved) {
         currentState = { ...DEFAULT_STATE, ...saved };
-        // 根据配置禁用主题时清理主题样式
-        if (saved.enableTheme === false) {
-          themeManager.dispose();
-        }
         notify();
       }
+      if (saved?.enableTheme !== false) void themeManager.init();
     })
     .catch((err) => {
       console.warn("[model-switcher] 读取配置失败:", err);
+      if (alive) void themeManager.init();
     });
 
   const saveState = async (nextState: PluginState) => {
@@ -231,7 +229,6 @@ export default function activate(ctx: PluginContext): Disposer {
   const disposers: Disposer[] = [
     disposeHostTransport,
     installCompactModelLabels(),
-    installChatLinks(ctx),
     // 注册到输入框工具栏 cliMenu 插槽（宿主 SDK 0.3.11 起，registerComposerSlot
     // 与 registerComposerStatusItem 共享同一权限 ui:composer-status；此前
     // registerComposerSlot 误校验不存在的 ui:composer，导致该插槽在 0.3.9~0.3.10
@@ -244,6 +241,7 @@ export default function activate(ctx: PluginContext): Disposer {
     }),
     // 释放主题管理器
     () => {
+      alive = false;
       themeManager.dispose();
     },
     // 清理窗口聚焦监听
