@@ -428,51 +428,6 @@ export function CliModelFlyoutMenu({
     return () => { cancelled = true; };
   }, [activeEngine, useNativeModels, loadingChannels]);
 
-  // 当渠道切换或打开弹窗时：若当前渠道配置了 Base URL 且尚未拉取过模型，自动调用接口拉取
-  useEffect(() => {
-    if (!activeChannel || loadingChannels || useNativeModels || busy) return;
-    const baseUrl = activeChannel.baseUrl?.trim();
-    if (!baseUrl) return;
-
-    const pId = channelModelKey(activeEngine, activeChannel.id);
-    const existing = state.fetchedModels?.[pId];
-    if (existing && existing.length > 0) return;
-
-    let cancelled = false;
-    const request = ++modelRequest.current;
-    setFetchingModels(true);
-    setStatusMsg("正在通过接口获取模型列表…");
-
-    fetchModelsFromProvider(ctx, baseUrl, activeChannel.apiKey || "")
-      .then(async (models) => {
-        if (cancelled || request !== modelRequest.current) return;
-        if (models.length === 0) {
-          setStatusMsg("接口返回的模型列表为空");
-          return;
-        }
-        const nextState: PluginState = {
-          ...state,
-          fetchedModels: { ...state.fetchedModels, [pId]: models },
-        };
-        setState(nextState);
-        await onSave(nextState);
-        setStatusMsg(`已通过接口获取 ${models.length} 个模型`);
-      })
-      .catch((err) => {
-        if (cancelled || request !== modelRequest.current) return;
-        setStatusMsg(err instanceof Error ? err.message : "接口获取模型失败");
-      })
-      .finally(() => {
-        if (!cancelled && request === modelRequest.current) {
-          setFetchingModels(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      if (request === modelRequest.current) setFetchingModels(false);
-    };
-  }, [activeEngine, activeChannel?.id, activeChannel?.baseUrl, activeChannel?.apiKey, loadingChannels, useNativeModels, busy]);
 
   const sortedSystemChannels = useMemo(() => {
     if (allSystemChannels.length <= 1) return allSystemChannels;
@@ -727,12 +682,17 @@ export function CliModelFlyoutMenu({
         setStatusMsg("接口返回的模型列表为空");
       } else {
         const pId = channelModelKey(activeEngine, activeChannel.id);
-        const nextState: PluginState = {
-          ...state,
-          fetchedModels: { ...state.fetchedModels, [pId]: models },
-        };
-        setState(nextState);
-        await onSave(nextState);
+        const saved = await new Promise<PluginState>((resolve) => {
+          setState((prev) => {
+            const next = {
+              ...prev,
+              fetchedModels: { ...prev.fetchedModels, [pId]: models },
+            };
+            resolve(next);
+            return next;
+          });
+        });
+        await onSave(saved);
         setStatusMsg(`已通过接口获取 ${models.length} 个模型`);
       }
     } catch (e) {
