@@ -358,6 +358,7 @@ export interface NativeOfficialFields {
   baseUrl: string;
   apiKey: string;
   model: string;
+  api?: PiFamilyApiProtocol;
 }
 
 const EMPTY_NATIVE_FIELDS: NativeOfficialFields = {
@@ -479,6 +480,44 @@ async function getNativeOfficialFields(
   }
 }
 
+const PI_FAMILY_AUTH_METADATA: Record<string, { name: string; baseUrl: string; api: PiFamilyApiProtocol }> = {
+  anthropic: { name: "Anthropic", baseUrl: "https://api.anthropic.com", api: "anthropic-messages" },
+  openai: { name: "OpenAI", baseUrl: "https://api.openai.com/v1", api: "openai-responses" },
+  "openai-codex": { name: "ChatGPT (Codex)", baseUrl: "https://chatgpt.com/backend-api", api: "openai-responses" },
+  google: { name: "Google Gemini", baseUrl: "https://generativelanguage.googleapis.com", api: "google-generative-ai" },
+  deepseek: { name: "DeepSeek", baseUrl: "https://api.deepseek.com", api: "openai-completions" },
+  xai: { name: "xAI (Grok)", baseUrl: "https://api.x.ai/v1", api: "openai-completions" },
+  "xai-oauth": { name: "xAI (Grok)", baseUrl: "https://api.x.ai/v1", api: "openai-completions" },
+  openrouter: { name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", api: "openai-completions" },
+  groq: { name: "Groq", baseUrl: "https://api.groq.com/openai/v1", api: "openai-completions" },
+  mistral: { name: "Mistral", baseUrl: "https://api.mistral.ai/v1", api: "openai-completions" },
+  zai: { name: "ZAI Coding Plan", baseUrl: "https://open.bigmodel.cn/api/paas/v4", api: "openai-completions" },
+  "zai-coding-cn": { name: "ZAI Coding Plan (China)", baseUrl: "https://open.bigmodel.cn/api/paas/v4", api: "openai-completions" },
+  "kimi-coding": { name: "Kimi For Coding", baseUrl: "https://api.moonshot.cn/v1", api: "openai-completions" },
+  "kimi-code": { name: "Kimi Code", baseUrl: "https://api.moonshot.cn/v1", api: "openai-completions" },
+  moonshotai: { name: "Moonshot AI", baseUrl: "https://api.moonshot.cn/v1", api: "openai-completions" },
+  "moonshotai-cn": { name: "Moonshot AI (China)", baseUrl: "https://api.moonshot.cn/v1", api: "openai-completions" },
+  minimax: { name: "MiniMax", baseUrl: "https://api.minimax.chat/v1", api: "openai-completions" },
+  "minimax-cn": { name: "MiniMax (China)", baseUrl: "https://api.minimax.chat/v1", api: "openai-completions" },
+  together: { name: "Together AI", baseUrl: "https://api.together.xyz/v1", api: "openai-completions" },
+  fireworks: { name: "Fireworks", baseUrl: "https://api.fireworks.ai/inference/v1", api: "openai-completions" },
+  cerebras: { name: "Cerebras", baseUrl: "https://api.cerebras.ai/v1", api: "openai-completions" },
+  "qwen-token-plan": { name: "Qwen Token Plan", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", api: "openai-completions" },
+  "qwen-token-plan-cn": { name: "Qwen Token Plan (China)", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", api: "openai-completions" },
+  "qwen-token-plan-individual": { name: "Qwen Token Plan", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", api: "openai-completions" },
+  "github-copilot": { name: "GitHub Copilot", baseUrl: "https://api.githubcopilot.com", api: "anthropic-messages" },
+  "azure-openai-responses": { name: "Azure OpenAI Responses", baseUrl: "", api: "openai-responses" },
+  "amazon-bedrock": { name: "Amazon Bedrock", baseUrl: "", api: "anthropic-messages" },
+  "cloudflare-ai-gateway": { name: "Cloudflare AI Gateway", baseUrl: "", api: "openai-completions" },
+  "cloudflare-workers-ai": { name: "Cloudflare Workers AI", baseUrl: "", api: "openai-completions" },
+  "vercel-ai-gateway": { name: "Vercel AI Gateway", baseUrl: "https://gateway.ai.cloudflare.com/v1", api: "openai-completions" },
+  opencode: { name: "OpenCode Zen", baseUrl: "https://opencode.ai/zen/v1", api: "openai-completions" },
+  "opencode-go": { name: "OpenCode Go", baseUrl: "https://opencode.ai/go/v1", api: "openai-completions" },
+  huggingface: { name: "Hugging Face", baseUrl: "https://api-inference.huggingface.co/v1", api: "openai-completions" },
+  baseten: { name: "Baseten", baseUrl: "https://bridge.baseten.co/v1", api: "openai-completions" },
+  xiaomi: { name: "Xiaomi MiMo", baseUrl: "https://api.mimo.mi.com/v1", api: "openai-completions" },
+};
+
 /**
  * 从系统（图 2 供应商配置）中读取指定 CLI 的所有供应商渠道
  */
@@ -578,30 +617,97 @@ export async function getSystemProviderChannels(
       }
     }
 
-    // Every engine can return to its native account/service configuration.
-    const nativeChannel: SystemProviderChannel = {
-      id: NATIVE_PROVIDER_ID,
-      name: engine === "dsh" ? "宿主服务配置" : "CLI 原生配置",
-      remark: NATIVE_CONFIG_NAMES[engine],
-      baseUrl: nativeFields.baseUrl,
-      apiKey: nativeFields.apiKey,
-      model: nativeFields.model,
-      isNative: true,
-      isCurrent: currentId === NATIVE_PROVIDER_ID,
-    };
+    // 增加兼容 pi_family_auth_list 的已授权凭证渠道
+    if (engine === "pi" || engine === "omp") {
+      try {
+        const authRes = await invokeTauri<{
+          store?: { path: string; kind: string; exists: boolean };
+          providers?: Array<{
+            id: string;
+            envVar?: string;
+            state?: string;
+            maskedKey?: string;
+            keySource?: string;
+          }>;
+          oauthProviders?: string[];
+        }>("pi_family_auth_list", { engine });
 
-    // Claude CLI 原生渠道默认注入 attribution 和 ENABLE_TOOL_SEARCH
-    if (engine === "claude" && nativeChannel.id === NATIVE_PROVIDER_ID) {
-      nativeChannel.settingsConfig = {
-        ...nativeChannel.settingsConfig,
-        attribution: { commit: "", pr: "" },
-        ENABLE_TOOL_SEARCH: "true",
-      };
+        const oauthSet = new Set(authRes?.oauthProviders || []);
+        for (const p of authRes?.providers || []) {
+          const isConfigured = p.state === "configured";
+          const isOauth = oauthSet.has(p.id);
+          if (!isConfigured && !isOauth) continue;
+
+          const meta = PI_FAMILY_AUTH_METADATA[p.id];
+          const providerName = meta?.name || p.id;
+          const baseUrl = meta?.baseUrl || "";
+          const api = meta?.api || DEFAULT_PI_FAMILY_API;
+          const apiKey = p.maskedKey || (p.envVar ? `$${p.envVar}` : (isOauth ? "OAuth 授权" : "已授权"));
+          const remark = isOauth
+            ? "OAuth 授权凭证"
+            : (p.keySource === "envRef" ? `环境变量 · ${p.envVar}` : `${engine === "omp" ? "agent.db" : "auth.json"} · 已授权凭证`);
+
+          const authChannel: SystemProviderChannel = {
+            id: p.id,
+            name: providerName,
+            baseUrl,
+            apiKey,
+            api,
+            model: "",
+            remark,
+            isNative: false,
+            isCurrent: p.id === currentId,
+            settingsConfig: {
+              api,
+            },
+            raw: p,
+          };
+
+          const existingIndex = channels.findIndex(item => item.id === p.id);
+          if (existingIndex < 0) {
+            channels.push(authChannel);
+          } else {
+            const existing = channels[existingIndex];
+            if (!existing.apiKey && apiKey) existing.apiKey = apiKey;
+            if (!existing.baseUrl && baseUrl) existing.baseUrl = baseUrl;
+          }
+        }
+      } catch (err) {
+        console.warn(`[model-switcher] 读取 ${engine} 的 auth_list 凭证失败:`, err);
+      }
     }
 
-    channels.unshift(nativeChannel);
+    // Every engine can return to its native account/service configuration.
+    // omp / pi 去除 CLI 原生配置渠道，由已授权凭证与 models 渠道提供
+    if (engine !== "omp" && engine !== "pi") {
+      const nativeChannel: SystemProviderChannel = {
+        id: NATIVE_PROVIDER_ID,
+        name: engine === "dsh" ? "宿主服务配置" : "CLI 原生配置",
+        remark: NATIVE_CONFIG_NAMES[engine],
+        baseUrl: nativeFields.baseUrl,
+        apiKey: nativeFields.apiKey,
+        model: nativeFields.model,
+        isNative: true,
+        isCurrent: currentId === NATIVE_PROVIDER_ID,
+      };
 
-    return { current: currentId, channels };
+      // Claude CLI 原生渠道默认注入 attribution 和 ENABLE_TOOL_SEARCH
+      if (engine === "claude" && nativeChannel.id === NATIVE_PROVIDER_ID) {
+        nativeChannel.settingsConfig = {
+          ...nativeChannel.settingsConfig,
+          attribution: { commit: "", pr: "" },
+          ENABLE_TOOL_SEARCH: "true",
+        };
+      }
+
+      channels.unshift(nativeChannel);
+    }
+
+    const effectiveCurrentId = (engine === "omp" || engine === "pi") && currentId === NATIVE_PROVIDER_ID
+      ? (channels.find(c => c.isCurrent)?.id || channels[0]?.id || null)
+      : currentId;
+
+    return { current: effectiveCurrentId, channels };
   } catch (error) {
     console.warn(
       "[model-switcher] 读取系统供应商配置失败，使用降级数据:",

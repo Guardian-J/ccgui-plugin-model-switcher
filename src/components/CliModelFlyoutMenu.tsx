@@ -258,8 +258,10 @@ export function CliModelFlyoutMenu({
   const loadChannels = async (engine: CliEngineId) => {
     const request = ++channelRequest.current;
     setLoadingChannels(true);
-    setChannels([]);
-    setCurrentChannelId(null);
+    if (engine !== activeEngine) {
+      setChannels([]);
+      setCurrentChannelId(null);
+    }
     setStatusMsg(null);
     try {
       const res = await getSystemProviderChannels(engine);
@@ -321,7 +323,7 @@ export function CliModelFlyoutMenu({
 
     // 如果当前会话无对话级记录，立即保存当前状态（避免下次切换回来丢失）
     const stableKey = sessionDisplay?.stableKey;
-    if (stableKey && !state.sessionChannels?.[stableKey] && state.selectedProviderId) {
+    if (stableKey && sessionDisplay?.sessionId && !state.sessionChannels?.[stableKey] && state.selectedProviderId) {
       const sessionChannels = {
         ...state.sessionChannels,
         [stableKey]: {
@@ -1006,8 +1008,10 @@ export function CliModelFlyoutMenu({
     selectionPending.current = true;
     setSwitching(true);
     try {
-      const fallbackId = !independentChannelError(activeEngine) && currentChannelId && !isPluginProviderId(currentChannelId)
-        ? currentChannelId : NATIVE_PROVIDER_ID;
+      const fallbackId = (activeEngine === "omp" || activeEngine === "pi")
+        ? (allSystemChannels[0]?.id || nextChannels[0]?.id || "")
+        : (!independentChannelError(activeEngine) && currentChannelId && !isPluginProviderId(currentChannelId)
+          ? currentChannelId : NATIVE_PROVIDER_ID);
       const nextState: PluginState = {
         ...state,
         activeChannelType: isDeletingCurrent ? "system" : state.activeChannelType,
@@ -1077,7 +1081,10 @@ export function CliModelFlyoutMenu({
     selectionPending.current = true;
     setSwitching(true);
     try {
-      const fallbackId = NATIVE_PROVIDER_ID;
+      const remainingHostChannels = allSystemChannels.filter((c) => c.id !== channelId);
+      const fallbackId = (activeEngine === "omp" || activeEngine === "pi")
+        ? (remainingHostChannels[0]?.id || pluginCustomChannels[0]?.id || "")
+        : NATIVE_PROVIDER_ID;
       const nextState: PluginState = {
         ...state,
         selectedProviderId: isDeletingCurrent ? fallbackId : state.selectedProviderId,
@@ -1136,7 +1143,12 @@ export function CliModelFlyoutMenu({
     setState((prev) => ({ ...prev, selectedCli: item.id, selectedModel: "", selectedProviderId: "", activeChannelType: "system", activePluginChannelId: undefined }));
   };
 
-  const currentEngineObj = engines.find((e) => e.id === activeEngine);
+  const visibleEngines = useMemo(
+    () => engines.filter((item) => item.available || item.id === activeEngine),
+    [engines, activeEngine],
+  );
+
+  const currentEngineObj = visibleEngines.find((e) => e.id === activeEngine) || engines.find((e) => e.id === activeEngine);
   const engineHeader = currentEngineObj?.label ?? activeEngine;
 
   const channelBrand = (name: string, model?: string, url?: string, isNative?: boolean) => {
@@ -1202,6 +1214,7 @@ export function CliModelFlyoutMenu({
               onClose={() => setShowThemePanel(false)}
               enableTheme={state.enableTheme !== false}
               onToggleTheme={async (enabled) => {
+                setState((prev) => ({ ...prev, enableTheme: enabled }));
                 await onSave({ ...state, enableTheme: enabled });
                 if (enabled) {
                   themeManager.apply();
@@ -1397,7 +1410,7 @@ export function CliModelFlyoutMenu({
             }
           }}
         >
-          {engines.map((item) => {
+          {visibleEngines.map((item) => {
             const isSelected = activeEngine === item.id;
             return (
               <button

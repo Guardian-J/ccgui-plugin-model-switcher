@@ -149,6 +149,15 @@ globalThis.window = {
         }
         return { file: { format: "yaml", path: "", exists: false }, text: "" };
       }
+      if (command === "pi_family_auth_list") {
+        return {
+          store: { path: "auth", kind: args.engine === "omp" ? "sqlite" : "authJson", exists: true },
+          providers: [
+            { id: "anthropic", state: "configured", maskedKey: "sk-ant-***" },
+          ],
+          oauthProviders: ["github-copilot"],
+        };
+      }
       throw new Error(`Unexpected command: ${command}`);
     },
   },
@@ -188,10 +197,12 @@ for (const engine of ["codex", "kimi", "grok"]) {
 }
 const ompChannels = (await bridge.getSystemProviderChannels("omp")).channels;
 assert.ok(ompChannels.some((c) => c.id === "custom-omp" && c.baseUrl === "https://omp-relay.example.com"), "omp must load custom-omp provider channel from models.yml");
-assert.equal(ompChannels.some((c) => c.isNative), true, "OMP built-in providers must remain selectable alongside custom providers");
+assert.ok(ompChannels.some((c) => c.id === "anthropic" && c.baseUrl === "https://api.anthropic.com"), "omp must expose authorized credential channels from pi_family_auth_list");
+assert.equal(ompChannels.some((c) => c.isNative), false, "OMP must not expose blank CLI 原生配置 channel");
 const piChannels = (await bridge.getSystemProviderChannels("pi")).channels;
 assert.ok(piChannels.some((c) => c.id === "custom-pi" && c.baseUrl === "https://pi-relay.example.com"), "pi must load custom-pi provider channel from models.json");
-assert.equal(piChannels.some((c) => c.isNative), true, "PI built-in providers must remain selectable alongside custom providers");
+assert.ok(piChannels.some((c) => c.id === "anthropic" && c.baseUrl === "https://api.anthropic.com"), "pi must expose authorized credential channels from pi_family_auth_list");
+assert.equal(piChannels.some((c) => c.isNative), false, "PI must not expose blank CLI 原生配置 channel");
 const dshChannels = await bridge.getSystemProviderChannels("dsh");
 assert.equal(dshChannels.current, bridge.NATIVE_PROVIDER_ID);
 assert.deepEqual(dshChannels.channels.map(({ id, name, isNative }) => ({ id, name, isNative })),

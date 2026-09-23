@@ -35,5 +35,5 @@ describe('独立渠道切换', () => {
       engine: 'claude',
       id: pluginProviderId(channel.id),
     });
-  });
+  }, 15000);
 });

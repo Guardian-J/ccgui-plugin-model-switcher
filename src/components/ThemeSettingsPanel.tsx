@@ -15,9 +15,15 @@ interface Props {
   onToggleTheme: (enabled: boolean) => void;
 }
 
-export function ThemeSettingsPanel({ manager, onClose, enableTheme, onToggleTheme }: Props) {
+export function ThemeSettingsPanel({ manager, onClose, enableTheme: initialEnableTheme, onToggleTheme }: Props) {
   const [config, setConfig] = useState<GuiThemeConfig>(manager.getConfig());
+  const [enableTheme, setEnableTheme] = useState(initialEnableTheme);
   const [saveError, setSaveError] = useState("");
+
+  useEffect(() => {
+    setEnableTheme(initialEnableTheme);
+  }, [initialEnableTheme]);
+
   const update = async (partial: Partial<GuiThemeConfig>) => {
     setSaveError("");
     try { await manager.updateConfig(partial); }
@@ -73,7 +79,11 @@ export function ThemeSettingsPanel({ manager, onClose, enableTheme, onToggleThem
           aria-label="启用主题功能"
           aria-checked={enableTheme}
           className="ms-theme-toggle"
-          onClick={() => onToggleTheme(!enableTheme)}
+          onClick={() => {
+            const next = !enableTheme;
+            setEnableTheme(next);
+            onToggleTheme(next);
+          }}
         >
           <span className="ms-theme-name">启用主题功能</span>
           <span aria-hidden className="ms-switch">
