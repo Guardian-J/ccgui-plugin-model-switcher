@@ -1,5 +1,5 @@
 import { React, useEffect, useMemo, useRef, useState } from "../react-context";
-import type { CliEngineId, EffortLevel } from "../types";
+import type { EffortLevel } from "../types";
 import { EffortSlider } from "./EffortSlider";
 
 export const EFFORT_LEVELS: readonly EffortLevel[] = [
@@ -12,7 +12,6 @@ export const EFFORT_LEVELS: readonly EffortLevel[] = [
 ];
 
 interface Props {
-  engine: CliEngineId;
   effort: EffortLevel;
   onChange: (level: EffortLevel) => boolean | void | Promise<boolean | void>;
   disabled?: boolean;
@@ -76,7 +75,6 @@ function useMediaQueries() {
 }
 
 export function EffortSection({
-  engine,
   effort,
   onChange,
   disabled = false,
@@ -142,13 +140,13 @@ export function EffortSection({
           type="button"
           role="switch"
           aria-label="1M 上下文"
-          aria-checked={engine === "claude" && enable1M}
-          disabled={engine !== "claude" || disabled || state.pending}
-          title={engine === "claude" ? "1M 上下文（需要模型支持）" : "上下文容量由 CLI 和模型配置决定，不支持通过此开关开启 1M"}
+          aria-checked={enable1M}
+          disabled={disabled || state.pending}
+          title="1M 上下文（需要模型支持）"
           onClick={() => onToggle1M(!enable1M)}
           className="ms-switch-button"
         >
-          <span>{engine === "claude" ? "1M 上下文" : "原生上下文"}</span>
+          <span>1M 上下文</span>
           <span aria-hidden className="ms-switch">
             <span />
           </span>

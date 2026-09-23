@@ -26,7 +26,7 @@
     };
     return React.createElement('div', { className: 'ms-flyout', style: { position: 'relative', width: 560, height: 'auto', padding: 20 } },
       React.createElement('style', null, flyoutStyles),
-      React.createElement(EffortSection, { engine: 'codex', effort, onChange: save, enable1M: false, onToggle1M() {} }));
+      React.createElement(EffortSection, { effort, onChange: save, enable1M: false, onToggle1M() {} }));
   }
   window.readEffort = () => ({ ...window.stats, value: Number(document.querySelector('input').value),
     label: document.querySelector('output').textContent, disabled: document.querySelector('input').disabled,

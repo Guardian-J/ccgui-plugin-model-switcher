@@ -1,6 +1,6 @@
 import { useEffect, useState } from "./react-context";
 import { getHostSession, isConcreteModel } from "./selection-policy";
-import { findBuiltinTriggerButton, getHostCliMenuProps, repairLegacyHostModel, findHostChatStoreFromFiber, committedFiber, normalizeEffort } from "./sync-host";
+import { findBuiltinTriggerButton, getHostCliMenuProps, findHostChatStoreFromFiber, committedFiber, normalizeEffort } from "./sync-host";
 import type { CliEngineId, EffortLevel, PluginState } from "./types";
 import { isPluginProviderId, pluginProviderId } from "./system-bridge";
 
@@ -87,13 +87,13 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
     selectedCli: engine as CliEngineId,
     selectedModel: isConcreteModel(model) ? model.replace(/\[1m\]$/i, "").trim() : "",
     effort: effort as EffortLevel,
-    enable1MContext: engine === "claude" && /\[1m\]$/i.test(model),
+    enable1MContext: /\[1m\]$/i.test(model),
     selectedProviderId,
   };
 }
 
 export function withSessionDisplay(state: PluginState, display: SessionDisplay | null): PluginState {
-  if (!display) return state.selectedCli === "claude" ? state : { ...state, enable1MContext: false };
+  if (!display) return state;
   const { sessionKey: _key, selectedProviderId, ...selection } = display;
 
   // 查找插件渠道：尝试完整 providerId 或去掉前缀后的原始 ID
@@ -180,7 +180,6 @@ export function useSessionDisplay(anchor?: { current: HTMLElement | null }): Ses
     const observer = new MutationObserver(() => refresh());
 
     const refresh = () => {
-      repairLegacyHostModel(anchor?.current);
       // 缓存触发按钮引用 1s，避免每次 MutationObserver 回调都重走 Fiber 树扫描
       const now = Date.now();
       if (now > cacheExpiry) {

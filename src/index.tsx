@@ -7,7 +7,7 @@ import { ProjectEngineIcon, inferModelEngine } from "./icons";
 import { CLI_DISPLAY_NAMES, prefetchSystemSnapshot, qualifyEngineModel } from "./system-bridge";
 import { DEFAULT_STATE } from "./constants";
 import { useSessionDisplay, withSessionDisplay } from "./session-display";
-import { repairLegacyContextSelections, findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost } from "./sync-host";
+import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost } from "./sync-host";
 import { compactPluginModelLabel, installCompactModelLabels } from "./model-display";
 import { disposeHostTransport } from "./host-transport";
 import { withRemoteStorage } from "./remote-storage";
@@ -18,9 +18,6 @@ import { withRemoteStorage } from "./remote-storage";
 export default function activate(ctx: PluginContext): Disposer {
   ctx = withRemoteStorage(ctx);
   initReact(ctx.react);
-  void repairLegacyContextSelections().catch(() => {
-    console.warn("[model-switcher] 修复旧版上下文模型选择失败，请重新选择模型");
-  });
   // 尽早启动 list_engines PATH 探测，避免用户点开弹窗才开始扫盘。
   prefetchSystemSnapshot();
 
@@ -64,9 +61,8 @@ export default function activate(ctx: PluginContext): Disposer {
     });
 
   const saveState = async (nextState: PluginState) => {
-    const saved = nextState.selectedCli === "claude" ? nextState : { ...nextState, enable1MContext: false };
-    await ctx.storage.set("state", saved);
-    currentState = saved;
+    await ctx.storage.set("state", nextState);
+    currentState = nextState;
     notify();
   };
 

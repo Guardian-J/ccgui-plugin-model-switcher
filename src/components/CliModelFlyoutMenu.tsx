@@ -1101,7 +1101,7 @@ export function CliModelFlyoutMenu({
     setSearchQuery("");
     setCustomInput("");
     closeChannelForm();
-    setState((prev) => ({ ...prev, selectedCli: item.id, selectedModel: "", selectedProviderId: "", activeChannelType: "system", activePluginChannelId: undefined, enable1MContext: item.id === "claude" && prev.enable1MContext }));
+    setState((prev) => ({ ...prev, selectedCli: item.id, selectedModel: "", selectedProviderId: "", activeChannelType: "system", activePluginChannelId: undefined }));
   };
 
   const currentEngineObj = engines.find((e) => e.id === activeEngine);

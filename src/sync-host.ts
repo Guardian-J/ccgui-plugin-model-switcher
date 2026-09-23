@@ -825,10 +825,7 @@ export async function applyModelSelectionToHost(params: {
   }
   if (finalModel) {
     finalModel = finalModel.replace(/\[1m\]$/i, "");
-    // [1m] is a Claude selector, not part of an OMP/PI (or other CLI) model ID.
-    if (engine === "claude" && enable1M) {
-      finalModel = `${finalModel}[1m]`;
-    }
+    if (enable1M) finalModel = `${finalModel}[1m]`;
   }
 
   // 在任何宿主改动之前取快照：模型切换允许把待建会话改派到 engine，但不允许换页签
@@ -950,49 +947,6 @@ export async function applyModelSelectionToHost(params: {
   }
 }
 
-/** Repair selectors written by older plugin versions without changing CLI config. */
-export async function repairLegacyContextSelections(): Promise<void> {
-  const strip = (engine: string, model: unknown) =>
-    engine !== "claude" && typeof model === "string" ? model.replace(/\[1m\]$/i, "") : model;
-  if (typeof localStorage !== "undefined") {
-    for (const key of ["ccgui-next.activeSession:v1", "ccgui-next.openTabs:v1"]) {
-      const raw = localStorage.getItem(key);
-      if (!raw) continue;
-      try {
-        const value = JSON.parse(raw);
-        let changed = false;
-        for (const session of Array.isArray(value) ? value : [value]) {
-          if (!session || typeof session.engine !== "string") continue;
-          const model = strip(session.engine, session.model);
-          if (model !== session.model) { session.model = model; changed = true; }
-        }
-        if (changed) localStorage.setItem(key, JSON.stringify(value));
-      } catch { /* Leave malformed persisted sessions to the host's recovery path. */ }
-    }
-  }
-  const settings = await invokeHost("get_app_settings") as { defaultModels?: Record<string, string> } | null;
-  if (!settings?.defaultModels) return;
-  let changed = false;
-  const defaultModels = { ...settings.defaultModels };
-  for (const [engine, model] of Object.entries(defaultModels)) {
-    const clean = strip(engine, model) as string;
-    if (clean !== model) { defaultModels[engine] = clean; changed = true; }
-  }
-  if (changed) await invokeHost("update_app_settings", { settings: { ...settings, defaultModels } });
-}
-
-/** Mounted tabs may still hold the old selector after storage has been repaired. */
-export function repairLegacyHostModel(anchor?: HTMLElement | null): void {
-  const host = getHostCliMenuProps(anchor);
-  if (!host?.onModelChange || host.streaming) return;
-  const session = host.session !== undefined ? host.session : getHostSession();
-  const engine = session?.engine || host.value;
-  if (!engine || engine === "claude" || (host.value && host.value !== engine)) return;
-  const model = session?.model || host.lastUsedModel || host.models?.[engine];
-  if (model && /\[1m\]$/i.test(model)) {
-    host.onModelChange(engine, model.replace(/\[1m\]$/i, ""));
-  }
-}
 
 /**
  * 同步更新本地存储中 activeSession 与 openTabs 的会话渠道。

@@ -203,7 +203,6 @@ export function ModelListSection({
 
       <EffortSection
         key={activeEngine}
-        engine={activeEngine}
         effort={effort}
         onChange={onEffortChange}
         disabled={fetchingModels}
