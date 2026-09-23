@@ -107,15 +107,13 @@ export function ModelListSection({
   }, [updateDropdownPosition, onSearchFocus]);
 
   const handleSelectFromDropdown = React.useCallback((modelId: string) => {
-    console.log('[ModelListSection] handleSelectFromDropdown called with:', modelId);
     onSearchChange(modelId);
-    console.log('[ModelListSection] onSearchChange called');
+    onSelectModel(modelId);
     closeDropdown();
-    // 确保输入框失去焦点，触发后续逻辑
     setTimeout(() => {
       inputRef.current?.blur();
     }, 0);
-  }, [onSearchChange, closeDropdown]);
+  }, [onSearchChange, onSelectModel, closeDropdown]);
 
   // 过滤搜索结果
   const filteredCatalog = React.useMemo(() => {

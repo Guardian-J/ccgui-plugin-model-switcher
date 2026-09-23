@@ -806,13 +806,15 @@ export function CliModelFlyoutMenu({
     setState(nextState);
     try {
       await applyChannelSelectionToHost({ engine: activeEngine, providerId: channel.id });
-      await applyModelSelectionToHost({
-          engine: activeEngine,
-          model: hostModel,
-          effort: state.effort,
-          enable1M: state.enable1MContext,
-          ctx,
-      });
+      if (hostModel) {
+        await applyModelSelectionToHost({
+            engine: activeEngine,
+            model: hostModel,
+            effort: state.effort,
+            enable1M: state.enable1MContext,
+            ctx,
+        });
+      }
       const stableKey = sessionDisplay?.stableKey;
       const sessionChannels = stableKey ? {
         ...nextState.sessionChannels,
@@ -865,7 +867,9 @@ export function CliModelFlyoutMenu({
     try {
       await applyCustomPluginChannelToEngine(ctx, activeEngine, channel);
       await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(channel.id) });
-      await applyModelSelectionToHost({ engine: activeEngine, model: hostModel, effort: state.effort, enable1M: state.enable1MContext, ctx });
+      if (hostModel) {
+        await applyModelSelectionToHost({ engine: activeEngine, model: hostModel, effort: state.effort, enable1M: state.enable1MContext, ctx });
+      }
       const stableKey = sessionDisplay?.stableKey;
       const sessionChannels = stableKey ? {
         ...nextState.sessionChannels,
@@ -901,7 +905,12 @@ export function CliModelFlyoutMenu({
     const error = sessionSelectionError(activeEngine) || (formModel ? modelSelectionError(activeEngine, formModel) : null);
     if (error) { setStatusMsg(error); return; }
     if (!channelForm.name.trim()) { setStatusMsg("请输入渠道名称"); return; }
-    if (!channelForm.baseUrl.trim()) { setStatusMsg("请输入 Base URL"); return; }
+    const trimmedBaseUrl = channelForm.baseUrl.trim();
+    if (!trimmedBaseUrl) { setStatusMsg("请输入 Base URL"); return; }
+    if (!trimmedBaseUrl.match(/^https?:\/\//i)) {
+      setStatusMsg("Base URL 必须以 http:// 或 https:// 开头");
+      return;
+    }
     if (!channelForm.apiKey.trim()) { setStatusMsg("请输入 API Key"); return; }
     const needsProtocol = activeEngine === "omp" || activeEngine === "pi";
     if (needsProtocol && !isPiFamilyApiProtocol(channelForm.api)) {
@@ -1199,7 +1208,6 @@ export function CliModelFlyoutMenu({
                 } else {
                   themeManager.dispose();
                 }
-                window.location.reload();
               }}
             />
           </div>

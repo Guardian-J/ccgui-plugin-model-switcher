@@ -665,10 +665,17 @@ export function patchHostSessionEffort(
       const key = sessionStoreKey(engine, active.sessionId, active.workspacePath);
       const storeSession = (state.bySession as Record<string, unknown>)?.[key] as HostSessionState | undefined;
       if (storeSession && storeSession === live) {
-        const msg = `同引用：直接改 activeEffort = ${effort}`;
+        const msg = `同引用：更新 activeEffort = ${effort}`;
         console.warn(`[model-switcher] ${msg}`);
         lastDiagnostic = msg;
         live.activeEffort = effort;
+        store.setState((s) => {
+          const bySession = { ...((s.bySession as Record<string, Record<string, unknown>>) ?? {}) };
+          const current = { ...(bySession[key] ?? {}) };
+          current.activeEffort = effort;
+          bySession[key] = current;
+          return { bySession };
+        });
         return true;
       }
       const msg = `引用不同：setState 改 bySession[${key}].activeEffort = ${effort}`;

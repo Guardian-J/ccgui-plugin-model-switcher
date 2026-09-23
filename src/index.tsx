@@ -94,6 +94,7 @@ export default function activate(ctx: PluginContext): Disposer {
     // 对话级渠道隔离：切换到新会话时，恢复该会话上次的渠道和模型选择
     const prevStableKey = useRef<string | null>(null);
     useEffect(() => {
+      let cancelled = false;
       const stableKey = sessionDisplay?.stableKey;
       if (!stableKey || stableKey === prevStableKey.current) return;
       prevStableKey.current = stableKey;
@@ -102,6 +103,7 @@ export default function activate(ctx: PluginContext): Disposer {
       if (!sessionDisplay?.sessionId) return;
       const record = savedState.sessionChannels?.[stableKey];
       if (!record) return;
+
       // 后台静默恢复，不阻塞 UI；失败仅记录警告
       const engine = record.selectedCli;
       const providerId = record.selectedProviderId;
@@ -110,12 +112,14 @@ export default function activate(ctx: PluginContext): Disposer {
         try {
           if (providerId) {
             await applyChannelSelectionToHost({ engine, providerId });
+            if (cancelled || prevStableKey.current !== stableKey) return;
           }
           if (model) {
             // 找到该渠道对象用于 qualify（插件渠道需要加前缀）
             const pluginCh = savedState.pluginChannels?.[engine]?.find(c => c.id === record.activePluginChannelId);
             const channelRef = pluginCh ? { id: pluginCh.id, isPlugin: true } : (providerId ? { id: providerId } : null);
             const hostModel = qualifyEngineModel(engine, channelRef, model);
+            if (cancelled || prevStableKey.current !== stableKey) return;
             await applyModelSelectionToHost({
               engine,
               model: hostModel,
@@ -125,6 +129,7 @@ export default function activate(ctx: PluginContext): Disposer {
             });
           }
         } catch (err) {
+          if (cancelled) return;
           // 静默处理渠道不存在等错误，避免干扰用户
           const errMsg = err instanceof Error ? err.message : String(err);
           if (errMsg.includes("not found")) {
@@ -134,7 +139,11 @@ export default function activate(ctx: PluginContext): Disposer {
           }
         }
       })();
-    }, [sessionDisplay?.stableKey]);
+
+      return () => {
+        cancelled = true;
+      };
+    }, [sessionDisplay?.stableKey, sessionDisplay?.sessionId, savedState, ctx]);
 
     const engineName = CLI_DISPLAY_NAMES[state.selectedCli] || state.selectedCli;
     const bareModel = state.selectedModel ? compactPluginModelLabel(state.selectedModel.replace(/\[1m\]$/i, "")) : "未选择模型";
