@@ -122,7 +122,7 @@ export function CliModelFlyoutMenu({
   const [loadingChannels, setLoadingChannels] = useState(true);
   const [switching, setSwitching] = useState(false);
   const selectionPending = useRef(false);
-  const committedSelection = useRef<{ sessionKey: string; effort: EffortLevel } | null>(null);
+  const committedSelection = useRef<{ sessionKey: string; effort: EffortLevel; model?: string } | null>(null);
   const modelRequest = useRef(0);
   const legacyEngine = useRef(initialState.selectedCli);
   const [fetchingModels, setFetchingModels] = useState(false);
@@ -158,9 +158,13 @@ export function CliModelFlyoutMenu({
     setState(prev => {
       const next = withSessionDisplay(prev, sessionDisplay);
       const pinned = committedSelection.current;
-      // 宿主 displayEfforts 刷新滞后时，不要把刚写入的 effort 盖回旧值
+      // 宿主 displayEfforts/models 刷新滞后时，不要把刚写入的 effort/model 盖回旧值
       if (pinned && pinned.sessionKey === sessionDisplay.sessionKey) {
-        return { ...next, effort: pinned.effort };
+        return {
+          ...next,
+          effort: pinned.effort,
+          ...(pinned.model !== undefined ? { selectedModel: pinned.model } : {}),
+        };
       }
       return next;
     });
@@ -569,15 +573,20 @@ export function CliModelFlyoutMenu({
   const selectionError = (model: string) => sessionSelectionError(activeEngine) ||
     (engines.find((engine) => engine.id === activeEngine)?.disabled ? "当前 CLI 不可用" : null) ||
     modelSelectionError(activeEngine, model, compatibilityFor(model));
-  const commitSelection = async (nextState: PluginState) => {
+  const commitSelection = async (nextState: PluginState, options?: { silent?: boolean }) => {
     if (busy || fetchingModels || selectionPending.current) return false;
-    const targetModel = (nextState.selectedModel || activeChannel?.model || "").trim();
+    const targetModel = (nextState.selectedModel || "").trim();
     const hostModel = qualifyEngineModel(activeEngine, activeChannel, targetModel);
     const error = (activeChannel && !nativeActive ? independentChannelError(activeEngine) : null) ||
       selectionError(targetModel) || (hostModel ? selectionError(hostModel) : null);
     if (error) { setStatusMsg(error); return false; }
+    const prevState = state;
+    const isSilent = options?.silent ?? false;
     selectionPending.current = true;
-    setSwitching(true);
+    if (!isSilent) setSwitching(true);
+    const cleanModel = displayEngineModel(activeEngine, activeChannel, hostModel);
+    const optimisticState = { ...nextState, selectedCli: activeEngine, selectedModel: cleanModel };
+    setState(optimisticState);
     try {
       if (activeChannel && targetModel) {
         await ensurePiFamilyModelConfigured(activeEngine, activeChannel, targetModel);
@@ -593,14 +602,13 @@ export function CliModelFlyoutMenu({
       const diagnostic = getLastDiagnostic();
       const sessionError = sessionSelectionError(activeEngine);
       if (sessionError) throw new Error(sessionError);
-      const cleanModel = displayEngineModel(activeEngine, activeChannel, hostModel);
       const saved = { ...nextState, selectedCli: activeEngine, selectedModel: cleanModel };
       committedSelection.current = sessionDisplay
-        ? { sessionKey: sessionDisplay.sessionKey, effort: saved.effort }
+        ? { sessionKey: sessionDisplay.sessionKey, effort: saved.effort, model: cleanModel }
         : null;
       // 对话级渠道隔离：将本次选择记录到 stableKey 下，供切换会话后恢复
       const stableKey = sessionDisplay?.stableKey;
-      const sessionChannels = stableKey ? {
+      const sessionChannels = (stableKey && sessionDisplay?.sessionId) ? {
         ...saved.sessionChannels,
         [stableKey]: {
           selectedCli: activeEngine,
@@ -622,25 +630,29 @@ export function CliModelFlyoutMenu({
       }
       return true;
     } catch (e) {
+      setState(prevState);
       const diagnostic = getLastDiagnostic();
       setStatusMsg(`${e instanceof Error ? e.message : "模型切换失败"}${diagnostic ? ` [${diagnostic}]` : ""}`);
       return false;
     } finally {
       selectionPending.current = false;
-      setSwitching(false);
+      if (!isSilent) setSwitching(false);
     }
   };
 
   const handleSelectModel = async (modelId: string) => {
-    await commitSelection({ ...state, selectedCli: activeEngine, selectedModel: modelId });
+    await commitSelection({ ...state, selectedCli: activeEngine, selectedModel: modelId }, { silent: true });
   };
 
   const handleEffortChange = async (effort: EffortLevel) => {
-    return commitSelection({ ...state, effort });
+    committedSelection.current = sessionDisplay
+      ? { sessionKey: sessionDisplay.sessionKey, effort }
+      : null;
+    return commitSelection({ ...state, effort }, { silent: true });
   };
 
   const handleToggle1M = async (enabled: boolean) => {
-    await commitSelection({ ...state, enable1MContext: enabled });
+    await commitSelection({ ...state, enable1MContext: enabled }, { silent: true });
   };
 
   const handleFetchModels = async () => {
@@ -778,16 +790,20 @@ export function CliModelFlyoutMenu({
     const hostModel = qualifyEngineModel(activeEngine, channel, channel.model || "");
     const error = sessionSelectionError(activeEngine) || (hostModel ? modelSelectionError(activeEngine, hostModel) : null);
     if (error) { setStatusMsg(error); return; }
+    const prevState = state;
+    const prevChannelId = currentChannelId;
     selectionPending.current = true;
     setSwitching(true);
     const nextState: PluginState = {
       ...state,
       selectedProviderId: channel.id,
-      selectedModel: displayEngineModel(activeEngine, channel, hostModel),
+      selectedModel: state.selectedModel ? displayEngineModel(activeEngine, channel, hostModel) : "",
       activeChannelType: "system",
       activePluginChannelId: undefined,
       activeChannelName: channel.name,
     };
+    setCurrentChannelId(channel.id);
+    setState(nextState);
     try {
       await applyChannelSelectionToHost({ engine: activeEngine, providerId: channel.id });
       await applyModelSelectionToHost({
@@ -813,11 +829,12 @@ export function CliModelFlyoutMenu({
       } : nextState.sessionChannels;
       const savedWithSessions = { ...nextState, sessionChannels };
       await onSave(savedWithSessions);
-      setCurrentChannelId(channel.id);
       setState(savedWithSessions);
       setStatusMsg(hostModel ? `已生效: ${channel.name}` : "渠道已切换，请选择模型");
       setTimeout(() => setStatusMsg(null), 2000);
     } catch (e) {
+      setCurrentChannelId(prevChannelId);
+      setState(prevState);
       setStatusMsg(e instanceof Error ? e.message : "切换失败");
     } finally {
       selectionPending.current = false;
@@ -831,6 +848,8 @@ export function CliModelFlyoutMenu({
     const hostModel = qualifyEngineModel(activeEngine, pluginChannel, channel.model || "");
     const error = sessionSelectionError(activeEngine) || (hostModel ? modelSelectionError(activeEngine, hostModel) : null);
     if (error) { setStatusMsg(error); return; }
+    const prevState = state;
+    const prevChannelId = currentChannelId;
     selectionPending.current = true;
     setSwitching(true);
     const nextState: PluginState = {
@@ -838,9 +857,11 @@ export function CliModelFlyoutMenu({
       activeChannelType: "plugin",
       activePluginChannelId: channel.id,
       selectedProviderId: channel.id,
-      selectedModel: displayEngineModel(activeEngine, pluginChannel, hostModel),
+      selectedModel: state.selectedModel ? displayEngineModel(activeEngine, pluginChannel, hostModel) : "",
       activeChannelName: channel.name,
     };
+    setCurrentChannelId(channel.id);
+    setState(nextState);
     try {
       await applyCustomPluginChannelToEngine(ctx, activeEngine, channel);
       await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(channel.id) });
@@ -865,6 +886,8 @@ export function CliModelFlyoutMenu({
       setStatusMsg(hostModel ? `已生效: ${channel.name}` : "渠道已切换，请选择模型");
       setTimeout(() => setStatusMsg(null), 2000);
     } catch (e) {
+      setCurrentChannelId(prevChannelId);
+      setState(prevState);
       setStatusMsg(`应用失败: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       selectionPending.current = false;
@@ -1128,7 +1151,7 @@ export function CliModelFlyoutMenu({
       onClick={(e) => e.stopPropagation()}
     >
       <style>{flyoutStyles}</style>
-      <div className="ms-content" {...(busy ? { inert: "" } : {})}>
+      <div className="ms-content">
         <header className="ms-header">
           <div className="ms-header-title">
             <ProjectEngineIcon engine={activeEngine} size={22} />

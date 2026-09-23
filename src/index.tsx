@@ -98,9 +98,10 @@ export default function activate(ctx: PluginContext): Disposer {
       if (!stableKey || stableKey === prevStableKey.current) return;
       prevStableKey.current = stableKey;
 
+      // 新开会话首次对话（sessionId 为空）不自动恢复之前会话遗留的模型
+      if (!sessionDisplay?.sessionId) return;
       const record = savedState.sessionChannels?.[stableKey];
       if (!record) return;
-
       // 后台静默恢复，不阻塞 UI；失败仅记录警告
       const engine = record.selectedCli;
       const providerId = record.selectedProviderId;
@@ -136,7 +137,7 @@ export default function activate(ctx: PluginContext): Disposer {
     }, [sessionDisplay?.stableKey]);
 
     const engineName = CLI_DISPLAY_NAMES[state.selectedCli] || state.selectedCli;
-    const bareModel = state.selectedModel ? compactPluginModelLabel(state.selectedModel.replace(/\[1m\]$/i, "")) : "未获取模型";
+    const bareModel = state.selectedModel ? compactPluginModelLabel(state.selectedModel.replace(/\[1m\]$/i, "")) : "未选择模型";
     const displayModel = state.enable1MContext ? `${bareModel} [1m]` : bareModel;
     const effortText = state.effort || "high";
     const modelIconEngine =

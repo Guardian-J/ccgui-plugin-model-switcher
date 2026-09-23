@@ -35,8 +35,10 @@ export const flyoutStyles = `
 .ms-flyout svg { flex-shrink: 0; }
 .ms-flyout::backdrop { background: #00000020; }
 .ms-content { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.ms-loading-overlay { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: var(--ms-bg); color: var(--ms-muted); cursor: wait; }
-.ms-loading-overlay svg, .ms-loading-caption svg { color: var(--ms-accent); }
+.ms-loading-overlay { position: absolute; top: 0; left: 0; right: 0; height: 3px; z-index: 10; overflow: hidden; background: color-mix(in srgb, var(--ms-accent) 20%, transparent); pointer-events: none; }
+.ms-loading-overlay::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--ms-accent), transparent); background-size: 200% 100%; animation: ms-progress 1.2s infinite linear; }
+.ms-loading-overlay svg, .ms-loading-overlay span { display: none; }
+@keyframes ms-progress { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 .ms-model-loading { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow: hidden; }
 .ms-loading-caption { display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--ms-muted); font-size: 12px; }
 .ms-skeleton-row { display: flex; align-items: center; gap: 12px; height: 52px; flex-shrink: 0; padding: 10px; animation: ms-pulse 1.4s ease-in-out infinite; }
@@ -128,8 +130,8 @@ export const flyoutStyles = `
 .ms-effort { padding-top: 12px; border-top: 1px solid var(--ms-border); flex-shrink: 0; }
 .ms-effort-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-left: 8px; }
 .ms-effort-label { display: flex; align-items: center; gap: 4px; font-size: 14px; font-weight: 500; color: var(--ms-muted); }
-.ms-effort-label output { color: var(--ms-text); font: inherit; animation: ms-effort-value 350ms ease-out; }
-@keyframes ms-effort-value { from { opacity: 0; filter: blur(4px); } to { opacity: 1; filter: blur(0); } }
+.ms-effort-label output { color: var(--ms-text); font: inherit; animation: ms-effort-value 180ms ease-out; }
+@keyframes ms-effort-value { from { opacity: 0.4; } to { opacity: 1; } }
 .ms-switch-button { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border: 0; border-radius: 4px; background: transparent; font-size: 11px !important; cursor: pointer; color: var(--ms-text); user-select: none; }
 .ms-switch-button:hover { background: var(--ms-hover); }
 .ms-switch { display: inline-flex; align-items: center; width: 30px; height: 18px; flex-shrink: 0; border-radius: 10px; background: color-mix(in srgb, var(--ms-muted) 45%, var(--ms-bg)); transition: background 150ms; pointer-events: none; }

@@ -119,7 +119,7 @@ export function EffortSlider({
           max={EFFORT_LEVELS.length - 1}
           step={0.01}
           value={position}
-          disabled={disabled || pending}
+          disabled={disabled}
           aria-label="推理强度"
           aria-valuetext={EFFORT_LEVELS[index]}
           onPointerDown={handlePointerDown}

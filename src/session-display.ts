@@ -9,6 +9,7 @@ export interface SessionDisplay {
   sessionKey: string;
   /** 不含 streaming，仅 engine+sessionId+workspacePath，用于对话级渠道记录的存储键 */
   stableKey: string;
+  sessionId: string | null;
   selectedCli: CliEngineId;
   selectedModel: string;
   effort: EffortLevel;
@@ -23,13 +24,16 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
   if (!engine) return null;
   // The host has already resolved tab override -> runtime/history -> engine default.
   const matchingHost = host?.value === engine ? host : null;
-  // Prefer the mounted tab and the host's resolved selection; raw history is a fallback.
-  const model = session?.model || matchingHost?.models?.[engine] || host?.lastUsedModel || "";
+  // 新开会话首次对话（sessionId 为空）时不默认选中模型，除非会话自身明确记录了 model
+  const isNewSession = !session?.sessionId && !host?.lastUsedModel;
+  const model = isNewSession
+    ? (session?.model || "")
+    : (session?.model || host?.lastUsedModel || matchingHost?.models?.[engine] || "");
   // 会话级渠道与档位：
   // 1. bySession[sessionKey]（已创建会话的真实 activeProvider 和 activeEffort）
   let selectedProviderId = "";
   let sessionActiveEffort: EffortLevel | undefined;
-
+  let sessionContextWindow: number | undefined;
   // 已创建的会话：从 bySession 读取真实状态
   if (session?.sessionId) {
     try {
@@ -42,13 +46,22 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
           const state = store.getState();
           const bySessionState = state.bySession?.[sessionKey];
           if (bySessionState && typeof bySessionState === "object") {
-            const rawProvider = "activeProvider" in bySessionState ? bySessionState.activeProvider : undefined;
+            const sessionRecord = bySessionState as Record<string, unknown>;
+            const rawProvider = sessionRecord.activeProvider;
             if (typeof rawProvider === "string") {
               selectedProviderId = rawProvider;
             }
-            const rawEffort = "activeEffort" in bySessionState ? bySessionState.activeEffort : undefined;
-            if (rawEffort) {
+            const rawEffort = sessionRecord.activeEffort;
+            if (typeof rawEffort === "string") {
               sessionActiveEffort = normalizeEffort(rawEffort);
+            }
+            const usage = sessionRecord.usage;
+            if (usage && typeof usage === "object") {
+              const u = usage as Record<string, unknown>;
+              const cw = u.model_context_window ?? u.context_window ?? u.contextWindow;
+              if (typeof cw === "number" && cw > 0) {
+                sessionContextWindow = cw;
+              }
             }
           }
         }
@@ -82,16 +95,30 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
   return {
     // Selection updates must not remount a flyout whose host/storage writes are still in flight.
     sessionKey: JSON.stringify([engine, session?.sessionId ?? null, session?.workspacePath ?? "", host?.streaming ?? false]),
-    // stableKey excludes streaming so it stays constant while a session is open — used as the storage key for per-session channel records.
     stableKey: JSON.stringify([engine, session?.sessionId ?? null, session?.workspacePath ?? ""]),
+    sessionId: session?.sessionId ?? null,
     selectedCli: engine as CliEngineId,
     selectedModel: isConcreteModel(model) ? model.replace(/\[1m\]$/i, "").trim() : "",
     effort: effort as EffortLevel,
-    enable1MContext: /\[1m\]$/i.test(model),
+    enable1MContext: (() => {
+      if (sessionContextWindow !== undefined) {
+        return sessionContextWindow >= 1_000_000;
+      }
+      if (typeof localStorage !== "undefined" && model) {
+        const clean = model.replace(/\[1m\]$/i, "");
+        const cached = localStorage.getItem(`ccgui.context-window.${engine}.${model}`) ||
+          localStorage.getItem(`ccgui.context-window.${engine}.${clean}[1m]`) ||
+          localStorage.getItem(`ccgui.context-window.${engine}.${clean}`);
+        const n = Number(cached);
+        if (Number.isFinite(n) && n > 0) {
+          return n >= 1_000_000;
+        }
+      }
+      return /\[1m\]$/i.test(model);
+    })(),
     selectedProviderId,
   };
 }
-
 export function withSessionDisplay(state: PluginState, display: SessionDisplay | null): PluginState {
   if (!display) return state;
   const { sessionKey: _key, selectedProviderId, ...selection } = display;

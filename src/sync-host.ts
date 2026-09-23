@@ -826,6 +826,16 @@ export async function applyModelSelectionToHost(params: {
   if (finalModel) {
     finalModel = finalModel.replace(/\[1m\]$/i, "");
     if (enable1M) finalModel = `${finalModel}[1m]`;
+    if (typeof localStorage !== "undefined") {
+      try {
+        const windowSize = enable1M ? "1000000" : "200000";
+        const bare = finalModel.replace(/\[1m\]$/i, "");
+        localStorage.setItem(`ccgui.context-window.${engine}.${finalModel}`, windowSize);
+        if (bare) {
+          localStorage.setItem(`ccgui.context-window.${engine}.${bare}`, windowSize);
+        }
+      } catch { /* ignore storage errors */ }
+    }
   }
 
   // 在任何宿主改动之前取快照：模型切换允许把待建会话改派到 engine，但不允许换页签

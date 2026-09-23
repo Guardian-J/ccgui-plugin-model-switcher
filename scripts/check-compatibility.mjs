@@ -699,7 +699,7 @@ assert.equal(display.readSessionDisplay().selectedProviderId, 'stale-session-pro
 delete newMenu.memoizedProps.onChannelChange;
 conversation.memoizedProps.active = null;
 active = null;
-assert.equal(display.readSessionDisplay().selectedModel, "history-c", "New chats use the host's engine default");
+assert.equal(display.readSessionDisplay().selectedModel, "", "New chats do not default to selecting a model");
 
 // Test session message history & activeModel/activeEffort resolution
 const historySessionFiber = {
