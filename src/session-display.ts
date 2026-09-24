@@ -1,6 +1,6 @@
 import { useEffect, useState } from "./react-context";
 import { getHostSession, isConcreteModel } from "./selection-policy";
-import { findBuiltinTriggerButton, getHostCliMenuProps, findHostChatStoreFromFiber, committedFiber, normalizeEffort } from "./sync-host";
+import { findBuiltinTriggerButton, getHostCliMenuProps, findHostChatStoreFromFiber, committedFiber, normalizeEffort, repairLegacyHostModel } from "./sync-host";
 import type { CliEngineId, EffortLevel, PluginState } from "./types";
 import { isPluginProviderId, pluginProviderId } from "./system-bridge";
 
@@ -207,6 +207,7 @@ export function useSessionDisplay(anchor?: { current: HTMLElement | null }): Ses
     const observer = new MutationObserver(() => refresh());
 
     const refresh = () => {
+      repairLegacyHostModel(anchor?.current);
       // 缓存触发按钮引用 1s，避免每次 MutationObserver 回调都重走 Fiber 树扫描
       const now = Date.now();
       if (now > cacheExpiry) {

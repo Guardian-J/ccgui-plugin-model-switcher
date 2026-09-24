@@ -7,7 +7,7 @@ import { ProjectEngineIcon, inferModelEngine } from "./icons";
 import { CLI_DISPLAY_NAMES, prefetchSystemSnapshot, qualifyEngineModel } from "./system-bridge";
 import { DEFAULT_STATE } from "./constants";
 import { useSessionDisplay, withSessionDisplay } from "./session-display";
-import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost } from "./sync-host";
+import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost, repairLegacyContextSelections } from "./sync-host";
 import { compactPluginModelLabel, installCompactModelLabels } from "./model-display";
 import { disposeHostTransport } from "./host-transport";
 import { withRemoteStorage } from "./remote-storage";
@@ -18,6 +18,7 @@ import { withRemoteStorage } from "./remote-storage";
 export default function activate(ctx: PluginContext): Disposer {
   ctx = withRemoteStorage(ctx);
   initReact(ctx.react);
+  void repairLegacyContextSelections().catch(() => {});
   // 尽早启动 list_engines PATH 探测，避免用户点开弹窗才开始扫盘。
   prefetchSystemSnapshot();
 

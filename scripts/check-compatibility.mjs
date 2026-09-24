@@ -824,7 +824,7 @@ for (const engine of ['omp', 'pi', 'codex', 'grok', 'kimi', 'dsh', 'agy', 'claud
       return {};
     };
     await sync.applyModelSelectionToHost({ engine, model: `${model}[1m]`, enable1M: enabled });
-    const expected = enabled ? `${model}[1m]` : model;
+    const expected = engine === 'claude' && enabled ? `${model}[1m]` : model;
     assert.equal(hostCalls.find(call => call[0] === 'model')[2], expected, `${engine} must use its own model selector syntax`);
     assert.equal(JSON.parse(storage.get(activeKey)).model, expected);
     assert.equal(writtenSettings.defaultModels[engine], expected);
@@ -832,6 +832,37 @@ for (const engine of ['omp', 'pi', 'codex', 'grok', 'kimi', 'dsh', 'agy', 'claud
 }
 footer.memoizedProps.active = history;
 await assert.rejects(() => sync.applyModelSelectionToHost({ engine: "claude", model: "claude-test" }), /当前会话/);
+const legacyOmp = { ...history, engine: 'omp', model: 'provider/grok-4.6[1m]', effort: 'low', provider: 'relay' };
+const claude1M = { ...history, engine: 'claude', model: 'sonnet[1m]' };
+storage.set(activeKey, JSON.stringify(legacyOmp));
+storage.set(tabsKey, JSON.stringify([legacyOmp, claude1M, history]));
+let settings = { defaultModels: { omp: legacyOmp.model, claude: claude1M.model }, theme: 'keep' };
+let writes = 0;
+window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+  assert(['get_app_settings', 'update_app_settings'].includes(command));
+  if (command === 'update_app_settings') { settings = args.settings; writes++; }
+  return settings;
+};
+await sync.repairLegacyContextSelections();
+assert.deepEqual(JSON.parse(storage.get(activeKey)), { ...legacyOmp, model: 'provider/grok-4.6' });
+assert.deepEqual(JSON.parse(storage.get(tabsKey)), [{ ...legacyOmp, model: 'provider/grok-4.6' }, claude1M, history]);
+assert.deepEqual(settings, { defaultModels: { omp: 'provider/grok-4.6', claude: 'sonnet[1m]' }, theme: 'keep' });
+await sync.repairLegacyContextSelections();
+assert.equal(writes, 1, 'Migration is idempotent');
+menu.memoizedProps.value = 'omp';
+footer.memoizedProps.active = legacyOmp;
+footer.memoizedProps.streaming = true;
+hostCalls.length = 0;
+sync.repairLegacyHostModel();
+assert.equal(hostCalls.length, 0, 'Never retarget a streaming request');
+footer.memoizedProps.streaming = false;
+sync.repairLegacyHostModel();
+assert.deepEqual(hostCalls, [['model', 'omp', 'provider/grok-4.6']], 'Repair only the mounted model, preserving engine, effort and channel');
+footer.memoizedProps.active = claude1M;
+menu.memoizedProps.value = 'claude';
+hostCalls.length = 0;
+sync.repairLegacyHostModel();
+assert.equal(hostCalls.length, 0, 'Claude keeps its supported suffix');
 console.log('Engine-specific context selectors, persisted recovery and streaming-safe mounted recovery passed.');
 const React = await import('react');
 const { renderToStaticMarkup } = await import('react-dom/server');
