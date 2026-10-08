@@ -24,26 +24,26 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
   if (!engine) return null;
   // The host has already resolved tab override -> runtime/history -> engine default.
   const matchingHost = host?.value === engine ? host : null;
-  // 新开会话首次对话（sessionId 为空）时不默认选中模型，除非会话自身明确记录了 model
-  const isNewSession = !session?.sessionId && !host?.lastUsedModel;
-  const model = isNewSession
-    ? (session?.model || "")
-    : (session?.model || host?.lastUsedModel || matchingHost?.models?.[engine] || "");
-  // 会话级渠道与档位：
-  // 1. bySession[sessionKey]（已创建会话的真实 activeProvider 和 activeEffort）
+  // 会话级渠道、档位与模型：
+  // 1. bySession[sessionKey]（已创建会话的真实 activeModel, activeProvider 和 activeEffort）
   let selectedProviderId = "";
   let sessionActiveEffort: EffortLevel | undefined;
+  let sessionActiveModel: string | undefined;
+  let tabActiveModel: string | undefined;
   let sessionContextWindow: number | undefined;
-  // 已创建的会话：从 bySession 读取真实状态
-  if (session?.sessionId) {
-    try {
-      const sessionKey = `${engine}/${session.sessionId}`;
-      const btn = findBuiltinTriggerButton(anchor);
-      if (btn) {
-        const fiber = committedFiber(btn);
-        const store = findHostChatStoreFromFiber(fiber);
-        if (store) {
-          const state = store.getState();
+  // 从 store / bySession 读取真实状态
+  try {
+    const btn = findBuiltinTriggerButton(anchor);
+    if (btn) {
+      const fiber = committedFiber(btn);
+      const store = findHostChatStoreFromFiber(fiber);
+      if (store) {
+        const state = store.getState();
+        if (state.active && state.active.engine === engine && state.active.model) {
+          tabActiveModel = state.active.model.trim();
+        }
+        if (session?.sessionId) {
+          const sessionKey = `${engine}/${session.sessionId}`;
           const bySessionState = state.bySession?.[sessionKey];
           if (bySessionState && typeof bySessionState === "object") {
             const sessionRecord = bySessionState as Record<string, unknown>;
@@ -54,6 +54,10 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
             const rawEffort = sessionRecord.activeEffort;
             if (typeof rawEffort === "string") {
               sessionActiveEffort = normalizeEffort(rawEffort);
+            }
+            const rawModel = sessionRecord.activeModel;
+            if (typeof rawModel === "string" && rawModel.trim()) {
+              sessionActiveModel = rawModel.trim();
             }
             const usage = sessionRecord.usage;
             if (usage && typeof usage === "object") {
@@ -66,10 +70,21 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
           }
         }
       }
-    } catch {
-      // 读取失败时降级到 localStorage
     }
+  } catch {
+    // 读取失败时降级
   }
+
+  // 模型解析优先级（与宿主 1.1.2 的 useTabModelDisplay / resolveSessionModel 完全对齐）：
+  // 1. 显式选择（session?.model 或 tabActiveModel）
+  // 2. 宿主计算的当前页签权威模型（matchingHost?.models?.[engine]）
+  // 3. 会话真实 activeModel（bySession[sessionKey].activeModel）
+  // 4. 消息历史兜底（host?.lastUsedModel）
+  const explicitModel = session?.model || tabActiveModel;
+  const isNewSession = !session?.sessionId && !host?.lastUsedModel && !sessionActiveModel;
+  const model = isNewSession
+    ? (explicitModel || "")
+    : (explicitModel || sessionActiveModel || host?.lastUsedModel || matchingHost?.models?.[engine] || "");
   // 档位由细到粗：会话真实 activeEffort -> 会话显式 effort -> 消息历史兜底 -> 引擎默认 -> 默认
   const effort = (
     sessionActiveEffort ||
@@ -121,7 +136,7 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
 }
 export function withSessionDisplay(state: PluginState, display: SessionDisplay | null): PluginState {
   if (!display) return state;
-  const { sessionKey: _key, selectedProviderId, ...selection } = display;
+  const { sessionKey: _key, selectedProviderId, effort: displayEffort, ...selection } = display;
 
   // 查找插件渠道：尝试完整 providerId 或去掉前缀后的原始 ID
   const channel = state.pluginChannels?.[display.selectedCli]?.find(item => {
@@ -192,6 +207,7 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
   return {
     ...state,
     ...selection,
+    effort: displayEffort || state.effort || "high",
     selectedProviderId: finalProviderId,
     activeChannelType,
     activePluginChannelId,

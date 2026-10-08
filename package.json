@@ -1,10 +1,11 @@
 {
   "name": "ccgui-plugin-model-switcher",
-  "version": "1.0.34",
+  "version": "1.0.35",
   "description": "针对 cc-gui（https://github.com/zhukunpenglinyutong/desktop-cc-gui）的扩展插件：模型与 CLI 选择、独立渠道管理、全局主题",
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "build": "vite build",
     "dev": "vite build --watch",
     "preview:ui": "vite --host 127.0.0.1",

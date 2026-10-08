@@ -870,10 +870,16 @@ window.React = React;
 const { EffortSection } = await loadModule('../src/components/EffortSection.tsx');
 for (const engine of ['omp', 'pi', 'codex', 'claude']) {
   const html = renderToStaticMarkup(React.createElement(EffortSection, {
-    effort: 'high', enable1M: true, onChange() {}, onToggle1M() {},
+    engine, effort: 'high', enable1M: true, onChange() {}, onToggle1M() {},
   }));
   assert.equal(html.includes('disabled=""'), false, `${engine} 1M switch must stay enabled`);
   assert.equal(html.includes('aria-checked="true"'), true, `${engine} 1M switch must stay on`);
+}
+for (const engine of ['kimi', 'grok']) {
+  const html = renderToStaticMarkup(React.createElement(EffortSection, {
+    engine, effort: 'high', enable1M: true, onChange() {}, onToggle1M() {},
+  }));
+  assert.equal(html.includes('disabled=""'), true, `${engine} 1M switch must be locked`);
 }
 delete window.React;
 window.__TAURI_INTERNALS__.invoke = invokeBeforeSwitch;

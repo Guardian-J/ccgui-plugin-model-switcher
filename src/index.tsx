@@ -4,7 +4,7 @@ import type { PluginState } from "./types";
 import { CliModelFlyoutMenu } from "./components/CliModelFlyoutMenu";
 import { GuiThemeManager } from "./theme-manager";
 import { ProjectEngineIcon, inferModelEngine } from "./icons";
-import { CLI_DISPLAY_NAMES, prefetchSystemSnapshot, qualifyEngineModel } from "./system-bridge";
+import { CLI_DISPLAY_NAMES, prefetchSystemSnapshot, qualifyEngineModel, updatePiFamilyModelEffort } from "./system-bridge";
 import { DEFAULT_STATE } from "./constants";
 import { useSessionDisplay, withSessionDisplay } from "./session-display";
 import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost, repairLegacyContextSelections } from "./sync-host";
@@ -103,30 +103,36 @@ export default function activate(ctx: PluginContext): Disposer {
       // 新开会话首次对话（sessionId 为空）不自动恢复之前会话遗留的模型
       if (!sessionDisplay?.sessionId) return;
       const record = savedState.sessionChannels?.[stableKey];
-      if (!record) return;
+      const targetEffort = record?.effort || savedState.effort;
+      const engine = record?.selectedCli || sessionDisplay.selectedCli;
+      const providerId = record?.selectedProviderId;
+      const model = record?.selectedModel;
+
+      if (!model && !providerId && !targetEffort) return;
 
       // 后台静默恢复，不阻塞 UI；失败仅记录警告
-      const engine = record.selectedCli;
-      const providerId = record.selectedProviderId;
-      const model = record.selectedModel;
       void (async () => {
         try {
           if (providerId) {
             await applyChannelSelectionToHost({ engine, providerId });
             if (cancelled || prevStableKey.current !== stableKey) return;
           }
-          if (model) {
+          if (model || targetEffort) {
             // 找到该渠道对象用于 qualify（插件渠道需要加前缀）
-            const pluginCh = savedState.pluginChannels?.[engine]?.find(c => c.id === record.activePluginChannelId);
+            const pluginCh = savedState.pluginChannels?.[engine]?.find(c => c.id === record?.activePluginChannelId);
             const channelRef = pluginCh ? { id: pluginCh.id, isPlugin: true } : (providerId ? { id: providerId } : null);
-            const hostModel = qualifyEngineModel(engine, channelRef, model);
+            const hostModel = model ? qualifyEngineModel(engine, channelRef, model) : "";
             if (cancelled || prevStableKey.current !== stableKey) return;
+            if (targetEffort && (engine === "omp" || engine === "pi") && hostModel) {
+              await updatePiFamilyModelEffort(engine, channelRef, hostModel, targetEffort, record?.enable1MContext).catch(() => {});
+            }
             await applyModelSelectionToHost({
               engine,
               model: hostModel,
-              effort: record.effort,
-              enable1M: record.enable1MContext,
+              effort: targetEffort,
+              enable1M: (engine === "claude" || engine === "codex" || engine === "omp" || engine === "pi") ? Boolean(record?.enable1MContext) : false,
               ctx,
+              anchor: containerRef.current,
             });
           }
         } catch (err) {
@@ -148,7 +154,8 @@ export default function activate(ctx: PluginContext): Disposer {
 
     const engineName = CLI_DISPLAY_NAMES[state.selectedCli] || state.selectedCli;
     const bareModel = state.selectedModel ? compactPluginModelLabel(state.selectedModel.replace(/\[1m\]$/i, "")) : "未选择模型";
-    const displayModel = state.enable1MContext ? `${bareModel} [1m]` : bareModel;
+    const is1M = (state.selectedCli === "claude" || state.selectedCli === "omp" || state.selectedCli === "pi") && state.enable1MContext;
+    const displayModel = is1M ? `${bareModel} [1m]` : bareModel;
     const effortText = state.effort || "high";
     const modelIconEngine =
       inferModelEngine(state.selectedModel) || state.selectedCli;

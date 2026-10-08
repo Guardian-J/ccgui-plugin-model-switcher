@@ -1,4 +1,4 @@
-import type { CliEngineId, CustomPluginChannel, SystemProviderChannel, PiFamilyApiProtocol } from "./types";
+import type { CliEngineId, CustomPluginChannel, SystemProviderChannel, PiFamilyApiProtocol, EffortLevel } from "./types";
 import { DEFAULT_PI_FAMILY_API, isPiFamilyApiProtocol } from "./types";
 import type { PluginContext } from "./ccgui-plugin";
 import { invokeHost as invokeTauri, isRemoteHost } from "./host-transport";
@@ -6,6 +6,8 @@ import {
   parsePiFamilyProviders,
   removePiFamilyProviderText,
   upsertPiFamilyProviderText,
+  type PiFamilyModelItem,
+  type PiFamilyProviderPatch,
 } from "./pi-family-parser";
 
 export interface EngineItemRule {
@@ -749,6 +751,7 @@ export async function setSystemCurrentProvider(
 
 /** 独立渠道在宿主供应商列表中的 ID，避免与系统渠道冲突。 */
 export function pluginProviderId(channelId: string): string {
+  if (channelId.startsWith(PLUGIN_PROVIDER_PREFIX)) return channelId;
   return `${PLUGIN_PROVIDER_PREFIX}${channelId}`;
 }
 
@@ -1066,6 +1069,88 @@ export async function ensurePiFamilyModelConfigured(
     throw new Error(`写入 ${engine.toUpperCase()} 模型配置失败: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
+/**
+ * 将用户在插件界面选择的推理强度写入 OMP/PI 的配置文件（models.yml / models.json）。
+ * 这样 CLI 即使完全走本地配置文件，也能读到用户配置的模型推理强度（reasoning / thinking.defaultLevel）。
+ */
+export async function updatePiFamilyModelEffort(
+  engine: "pi" | "omp",
+  channel: { id: string; isPlugin?: boolean; baseUrl?: string; apiKey?: string; name?: string; api?: string } | null,
+  modelId: string,
+  effort: EffortLevel,
+  enable1M?: boolean,
+): Promise<void> {
+  if (!channel || !channel.id || !modelId) return;
+  const bareModel = displayEngineModel(engine, channel, modelId).trim();
+  if (!bareModel) return;
+
+  const id = channel.isPlugin ? pluginProviderId(channel.id) : channel.id;
+  try {
+    const { text, format } = await readPiFamilyModelsConfig(engine);
+    const providers = parsePiFamilyProviders(text, format);
+    const existing = providers[id];
+    if (!existing) return;
+    const api = existing.api || channel.api || "";
+    const mode = api === "anthropic-messages"
+      ? "anthropic-adaptive"
+      : api === "google-generative-ai"
+        ? "google-level"
+        : "effort";
+    const target1MContext = (bareModel.toLowerCase().includes("gemini") || bareModel.toLowerCase().includes("kimi")) ? 1048576 : 1000000;
+    const patchModel = (m: PiFamilyModelItem): PiFamilyModelItem => {
+      const updated: PiFamilyModelItem = {
+        ...m,
+        reasoning: true,
+        thinking: {
+          mode,
+          defaultLevel: effort,
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+        },
+      };
+      if (enable1M !== undefined) {
+        if (enable1M) {
+          updated.contextWindow = target1MContext;
+          if (!updated.maxTokens) updated.maxTokens = 65536;
+        } else {
+          updated.contextWindow = 200000;
+        }
+      }
+      return updated;
+    };
+
+    let modelMatched = false;
+    const updatedModels = existing.models.map((m) => {
+      if (m.id === bareModel) {
+        modelMatched = true;
+        return patchModel(m);
+      }
+      return m;
+    });
+
+    if (!modelMatched) {
+      updatedModels.push(patchModel({ id: bareModel }));
+    }
+
+    const patch: PiFamilyProviderPatch = {
+      name: existing.name || channel.name || channel.id,
+      baseUrl: existing.baseUrl || channel.baseUrl || "",
+      apiKey: existing.apiKey || channel.apiKey || "",
+      api: isPiFamilyApiProtocol(existing.api || channel.api || "")
+        ? ((existing.api || channel.api) as PiFamilyApiProtocol)
+        : DEFAULT_PI_FAMILY_API,
+      models: updatedModels,
+    };
+
+    const next = upsertPiFamilyProviderText(text, format, id, patch);
+    if (next !== text) {
+      await invokeTauri("pi_family_models_config_write", { engine, text: next });
+      invalidateNativeCatalogCache(engine);
+    }
+  } catch (err) {
+    console.warn(`[model-switcher] 更新 ${engine.toUpperCase()} 配置文件推理强度失败:`, err);
+  }
+}
+
 
 async function deletePiFamilyYamlProvider(
   engine: "pi" | "omp",

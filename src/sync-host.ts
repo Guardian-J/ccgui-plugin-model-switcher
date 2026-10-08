@@ -24,8 +24,10 @@ export interface HostStoreActions {
 export interface HostChatStore {
   getState: () => {
     active?: HostSession | null;
-    bySession?: Record<string, { activeEffort?: string | null; activeModel?: string | null; activeProvider?: string | null }>;
+    bySession?: Record<string, { activeEffort?: string | null; activeModel?: string | null; activeProvider?: string | null; [key: string]: unknown }>;
     efforts?: Record<string, string>;
+    models?: Record<string, string>;
+    openTabs?: Array<HostSession>;
     setEffort?: (engine: string, effort: string) => unknown;
     setModel?: (engine: string, model: string) => unknown;
     setActiveEngine?: (engine: string) => unknown;
@@ -204,17 +206,21 @@ export function findBuiltinTriggerButton(anchor?: HTMLElement | null): HTMLEleme
     }
     return false;
   };
-  const toolbar = anchor?.closest("div.select-none");
-  if (toolbar) {
+  const pluginRoot = (typeof document !== "undefined" && typeof document.querySelector === "function")
+    ? (document.querySelector('[data-ccgui-plugin-model-switcher="true"]') as HTMLElement | null)
+    : null;
+  const toolbar = (anchor && typeof anchor.closest === "function" ? anchor.closest("div.select-none") : null) ||
+    (pluginRoot && typeof pluginRoot.closest === "function" ? pluginRoot.closest("div.select-none") : null);
+  if (toolbar && typeof toolbar.querySelectorAll === "function") {
     for (const button of toolbar.querySelectorAll<HTMLElement>('button:not([data-ccgui-plugin-btn])')) {
       if (isCliTrigger(button)) return button;
     }
-    return null;
   }
 
   // 1. 通过选择器直接查找紧随在插件按钮前面的同级原生按钮
   const selectorCandidates = [
     'div.select-none > button.group:not([data-ccgui-plugin-btn])[aria-label*=" · "]',
+    'div.select-none > button.group:not([data-ccgui-plugin-btn])[aria-label*=" / "]',
     'div.select-none > button[aria-haspopup="dialog"]:not([data-ccgui-plugin-btn])',
     'button.group:not([data-ccgui-plugin-btn])[aria-label*="Claude Code"]',
     'button.group:not([data-ccgui-plugin-btn])[aria-label*="Codex CLI"]',
@@ -223,20 +229,37 @@ export function findBuiltinTriggerButton(anchor?: HTMLElement | null): HTMLEleme
     'button.group:not([data-ccgui-plugin-btn])[aria-label*="PI CLI"]',
     'button.group:not([data-ccgui-plugin-btn])[aria-label*="OMP CLI"]',
     'button.group:not([data-ccgui-plugin-btn])[aria-label*="DeepSeek"]',
+    'button.group:not([data-ccgui-plugin-btn])[aria-label*="MiniMax"]',
+    'button.group:not([data-ccgui-plugin-btn])[aria-label*="OpenCode"]',
+    'button.group:not([data-ccgui-plugin-btn])[aria-label*="AGY"]',
+    'button.group:not([data-ccgui-plugin-btn])[aria-label*="mcode"]',
   ];
 
-  for (const sel of selectorCandidates) {
-    const el = document.querySelector<HTMLElement>(sel);
-    if (isCliTrigger(el)) return el;
+  if (typeof document !== "undefined") {
+    if (typeof document.querySelectorAll === "function") {
+      for (const sel of selectorCandidates) {
+        const elements = document.querySelectorAll<HTMLElement>(sel);
+        for (const el of elements) {
+          if (isCliTrigger(el)) return el;
+        }
+      }
+    } else if (typeof document.querySelector === "function") {
+      for (const sel of selectorCandidates) {
+        const el = document.querySelector<HTMLElement>(sel);
+        if (isCliTrigger(el)) return el;
+      }
+    }
   }
 
   // Wrapped/mobile toolbars do not keep the native button as a direct sibling.
-  const pluginRoot = document.querySelector('[data-ccgui-plugin-model-switcher="true"]');
-  const scope = pluginRoot?.closest("div.select-none");
-  for (const button of scope?.querySelectorAll<HTMLElement>('button:not([data-ccgui-plugin-btn])') || []) {
-    if (isCliTrigger(button)) return button;
+  const scope = (pluginRoot && typeof pluginRoot.closest === "function" ? pluginRoot.closest("div.select-none") : null) ||
+    (typeof document !== "undefined" && typeof document.querySelector === "function" ? document.querySelector("main") : null) ||
+    (typeof document !== "undefined" ? document.body : null);
+  if (scope && typeof scope.querySelectorAll === "function") {
+    for (const button of scope.querySelectorAll<HTMLElement>('button:not([data-ccgui-plugin-btn])')) {
+      if (isCliTrigger(button)) return button;
+    }
   }
-
   return null;
 }
 
@@ -586,144 +609,220 @@ async function patchSessionEffort(
 
   if (ctx?.sessions?.setEffort && session?.sessionId) {
     try {
-      // 先确保会话已选中并加载到 bySession（触发 selectSession 的加载逻辑）
-      if (ctx.sessions.selectSession) {
-        try {
-          await ctx.sessions.selectSession(engine, session.sessionId, session.workspacePath);
-          console.warn(`[model-switcher] 已确保会话加载: ${engine}/${session.sessionId}`);
-        } catch (err) {
-          console.warn(`[model-switcher] selectSession 调用失败（可能已选中）:`, err);
-        }
+      const ws = session.workspacePath || "";
+      console.warn(`[model-switcher] 调用 ctx.sessions.setEffort(${engine}, ${session.sessionId}, ${ws}, ${effort})`);
+      try {
+        await (ctx.sessions.setEffort as any)(engine, session.sessionId, ws, effort);
+      } catch (e1) {
+        await (ctx.sessions.setEffort as any)({
+          engine,
+          sessionId: session.sessionId,
+          workspacePath: ws,
+          effort,
+        });
       }
-
-      console.warn(`[model-switcher] 调用 ctx.sessions.setEffort(${engine}, ${session.sessionId}, ${effort})`);
-      await ctx.sessions.setEffort(engine, session.sessionId, session.workspacePath, effort);
       const msg = `ctx.sessions.setEffort(${engine}, ${session.sessionId}, ${effort})`;
       console.warn(`[model-switcher] ✓ ${msg} 成功`);
       lastDiagnostic = msg;
-
-      // 等待一帧，让 React 完成状态更新
-      await new Promise(resolve => setTimeout(resolve, 50));
-
-      // 尝试从全局变量验证 (开发模式下宿主会暴露 __chatStore)
-      const globalStore = (window as any).__chatStore;
-      if (globalStore) {
-        const globalState = globalStore.getState();
-        const key = `${engine}/${session.sessionId}`;
-        const sessionState = globalState.bySession?.[key];
-        console.warn(`[model-switcher] 验证(全局store): bySession[${key}]存在=${!!sessionState}, activeEffort=${sessionState?.activeEffort}`);
-      }
-
-      // 验证是否写入成功
-      if (live) {
-        console.warn(`[model-switcher] 验证(live旧引用): liveSession.activeEffort = ${live.activeEffort}`);
-      }
-      if (store) {
-        const state = store.getState();
-        const key = `${engine}/${session.sessionId}`;
-        const sessionState = (state.bySession as any)?.[key];
-        const bySessionEffort = sessionState?.activeEffort;
-        console.warn(`[model-switcher] 验证(store最新): bySession[${key}]存在=${!!sessionState}, activeEffort=${bySessionEffort}`);
-      }
-      console.warn(`[model-switcher] ===== patchSessionEffort 完成 (成功) =====`);
-      return true;
     } catch (err) {
-      console.warn(`[model-switcher] ctx.sessions.setEffort 失败，fallback 到 Fiber 猜测:`, err);
-      // 继续走下面的 fallback，不 return——旧会话仍需要某种方式落地。
+      console.warn(`[model-switcher] ctx.sessions.setEffort 失败，fallback 到底层 patch:`, err);
     }
   }
-  const result = patchHostSessionEffort(store, engine, effort, session, live);
-  console.warn(`[model-switcher] ===== patchSessionEffort 完成 (fallback结果=${result}) =====`);
+  const result = await patchHostSessionEffort(store, engine, effort, session, live);
+  console.warn(`[model-switcher] ===== patchSessionEffort 完成 (结果=${result}) =====`);
   return result;
 }
 
 /**
- * Fiber 猜测 fallback：已有会话发请求读 bySession[key].activeEffort，
- * 直接改这个字段（或改宿主 zustand store 的 setState）；store 自带
- * setEffort action 时优先调用它而非硬改内部字段，让宿主自己的持久化/
- * 副作用逻辑生效。
- *
- * 仅在 applyModelSelectionToHost 判定 ctx.sessions.setEffort（官方 API，
- * SDK 0.3.10 起）不可用时才会被调用——旧宿主没有这个方法，或调用失败。
- * 依赖 Fiber 遍历翻到宿主运行时私有引用，宿主任何一次重渲染/依赖升级
- * 都可能让这条路径失效，仅作为兜底，不是首选路径。
+ * 针对宿主 1.1.x 的会话级推理强度同步与持久化：
+ * 1. 若为已有会话（sessionId 存在），调用宿主 IPC remember_session_effort 持久化到 SQLite session_efforts 表；
+ * 2. 同步 liveSession.activeEffort 内存引用；
+ * 3. 同步更新宿主 store 状态（active.effort, openTabs[].effort, bySession[key].activeEffort, efforts[engine]）；
+ * 4. 优先调用 store.getState().setEffort 触发宿主自身的内部派发与监听。
  */
-export function patchHostSessionEffort(
+export async function patchHostSessionEffort(
   store: HostChatStore | null,
   engine: string,
   effort: string,
   session: HostSession | null,
   live?: HostSessionState | null,
-): boolean {
-  console.warn(`[model-switcher] patchHostSessionEffort 入参: store=${store ? "✓" : "✗"}, live=${live ? "✓" : "✗"}, sessionId=${session?.sessionId ?? "null"}`);
+): Promise<boolean> {
+  const sessionId = session?.sessionId ?? null;
+  console.warn(`[model-switcher] patchHostSessionEffort 入参: store=${store ? "✓" : "✗"}, live=${live ? "✓" : "✗"}, sessionId=${sessionId ?? "null"}`);
 
-  // Fallback：原有逻辑
-  if (live && store) {
-    const state = store.getState();
-    const active = session ?? state.active ?? null;
-    if (active?.sessionId) {
-      const key = sessionStoreKey(engine, active.sessionId, active.workspacePath);
-      const storeSession = (state.bySession as Record<string, unknown>)?.[key] as HostSessionState | undefined;
-      if (storeSession && storeSession === live) {
-        const msg = `同引用：更新 activeEffort = ${effort}`;
-        console.warn(`[model-switcher] ${msg}`);
-        lastDiagnostic = msg;
-        live.activeEffort = effort;
-        store.setState((s) => {
-          const bySession = { ...((s.bySession as Record<string, Record<string, unknown>>) ?? {}) };
-          const current = { ...(bySession[key] ?? {}) };
-          current.activeEffort = effort;
-          bySession[key] = current;
-          return { bySession };
-        });
-        return true;
-      }
-      const msg = `引用不同：setState 改 bySession[${key}].activeEffort = ${effort}`;
-      console.warn(`[model-switcher] ${msg}`);
-      lastDiagnostic = msg;
-      store.setState((s) => {
-        const bySession = { ...((s.bySession as Record<string, Record<string, unknown>>) ?? {}) };
-        const current = { ...(bySession[key] ?? {}) };
-        current.activeEffort = effort;
-        bySession[key] = current;
-        return { bySession };
+  // 1. 若为已有会话，调用宿主 IPC remember_session_effort 持久化到 SQLite
+  if (sessionId) {
+    try {
+      await invokeHost("remember_session_effort", {
+        engine,
+        sessionId,
+        effort,
       });
-      return true;
+      console.warn(`[model-switcher] 已调用 remember_session_effort(${engine}, ${sessionId}, ${effort})`);
+    } catch (err) {
+      console.warn(`[model-switcher] 调用 remember_session_effort 失败:`, err);
     }
   }
-  if (!store) {
-    const msg = "找不到 store，无法 patch";
-    console.warn(`[model-switcher] ${msg}`);
-    lastDiagnostic = msg;
-    return false;
+
+  // 2. 同步 liveSession 内存引用
+  if (live) {
+    live.activeEffort = effort;
   }
-  const state = store.getState();
-  const active = session ?? state.active ?? null;
-  if (!active || active.engine !== engine || !active.sessionId) {
-    const msg = "active 不匹配或无 sessionId，跳过 patch";
-    console.warn(`[model-switcher] ${msg}`);
-    lastDiagnostic = msg;
-    return false;
+
+  // 3. 更新宿主 zustand store
+  if (store) {
+    try {
+      const state = store.getState();
+      const currentActive = session ?? state.active ?? null;
+
+      if (typeof state.setEffort === "function") {
+        try {
+          await Promise.resolve(state.setEffort(engine, effort));
+        } catch (err) {
+          console.warn(`[model-switcher] 调用 store.setEffort 失败:`, err);
+        }
+      }
+
+      store.setState((prev) => {
+        const s = prev as Record<string, unknown>;
+        const patch: Record<string, unknown> = {};
+        if (currentActive && currentActive.engine === engine) {
+          patch.active = { ...currentActive, effort };
+        }
+        if (Array.isArray(s.openTabs)) {
+          patch.openTabs = (s.openTabs as HostSession[]).map((tab) => {
+            if (
+              tab &&
+              typeof tab === "object" &&
+              tab.engine === engine &&
+              (sessionId ? tab.sessionId === sessionId : tab.sessionId === null)
+            ) {
+              return { ...tab, effort };
+            }
+            return tab;
+          });
+        }
+        if (s.efforts && typeof s.efforts === "object") {
+          const rawEfforts = s.efforts as Record<string, string>;
+          const nextEfforts: Record<string, string> = { ...rawEfforts, [engine]: effort };
+          patch.efforts = nextEfforts;
+        }
+        const key = sessionStoreKey(engine, sessionId, currentActive?.workspacePath || "");
+        const rawBySession = s.bySession as Record<string, Record<string, unknown>> | undefined;
+        const bySession: Record<string, Record<string, unknown>> = { ...(rawBySession || {}) };
+        const cur = bySession[key] ? { ...bySession[key] } : {};
+        cur.activeEffort = effort;
+        bySession[key] = cur;
+        patch.bySession = bySession;
+        return patch;
+      });
+      return true;
+    } catch (err) {
+      console.warn(`[model-switcher] store.setState patch effort 失败:`, err);
+    }
   }
-  if (typeof state.setEffort === "function") {
-    const msg = `调用 store.setEffort(${engine}, ${effort})`;
-    console.warn(`[model-switcher] ${msg}`);
-    lastDiagnostic = msg;
-    state.setEffort(engine, effort);
-    return true;
+  return false;
+}
+
+/**
+ * 针对宿主 1.1.x 的会话级模型同步与持久化：
+ * 1. 若为已有会话（sessionId 存在），调用宿主 remember_session_model 持久化到 SQLite session_models 表，
+ *    防止 refreshSessions / 扫描时用旧 SQLite 记录覆盖；
+ * 2. 同步 liveSession.activeModel 内存引用；
+ * 3. 同步更新宿主 store 状态（active.model, openTabs[].model, bySession[key].activeModel, models[engine]）；
+ * 4. 优先调用 store.getState().setModel 触发宿主自身的内部派发与监听。
+ */
+export async function patchHostSessionModel(
+  store: HostChatStore | null,
+  engine: string,
+  model: string,
+  session: HostSession | null,
+  live?: HostSessionState | null,
+  enable1M?: boolean,
+): Promise<boolean> {
+  const sessionId = session?.sessionId ?? null;
+
+  // 1. 若为已有会话，调用宿主 IPC remember_session_model 持久化到 SQLite
+  if (sessionId) {
+    try {
+      await invokeHost("remember_session_model", {
+        engine,
+        sessionId,
+        model,
+      });
+      console.warn(`[model-switcher] 已调用 remember_session_model(${engine}, ${sessionId}, ${model})`);
+    } catch (err) {
+      console.warn(`[model-switcher] 调用 remember_session_model 失败:`, err);
+    }
   }
-  const key = sessionStoreKey(engine, active.sessionId, active.workspacePath);
-  const msg = `setState 改 bySession[${key}].activeEffort = ${effort}`;
-  console.warn(`[model-switcher] ${msg}`);
-  lastDiagnostic = msg;
-  store.setState((s) => {
-    const bySession = { ...((s.bySession as Record<string, Record<string, unknown>>) ?? {}) };
-    const current = { ...(bySession[key] ?? {}) };
-    current.activeEffort = effort;
-    bySession[key] = current;
-    return { bySession };
-  });
-  return true;
+
+  // 2. 同步 liveSession 内存引用
+  if (live) {
+    live.activeModel = model || null;
+  }
+
+  // 3. 更新宿主 zustand store
+  if (store) {
+    try {
+      const state = store.getState();
+      const currentActive = session ?? state.active ?? null;
+
+      if (typeof state.setModel === "function") {
+        try {
+          await Promise.resolve(state.setModel(engine, model));
+        } catch (err) {
+          console.warn(`[model-switcher] 调用 store.setModel 失败:`, err);
+        }
+      }
+
+      store.setState((prev) => {
+        const s = prev as Record<string, unknown>;
+        const patch: Record<string, unknown> = {};
+        if (currentActive && currentActive.engine === engine) {
+          patch.active = { ...currentActive, model: model || undefined };
+        }
+        if (Array.isArray(s.openTabs)) {
+          patch.openTabs = (s.openTabs as HostSession[]).map((tab) => {
+            if (
+              tab &&
+              typeof tab === "object" &&
+              tab.engine === engine &&
+              (sessionId ? tab.sessionId === sessionId : tab.sessionId === null)
+            ) {
+              return { ...tab, model: model || undefined };
+            }
+            return tab;
+          });
+        }
+        if (s.models && typeof s.models === "object") {
+          const rawModels = s.models as Record<string, string>;
+          const nextModels: Record<string, string> = { ...rawModels };
+          if (model) nextModels[engine] = model;
+          else delete nextModels[engine];
+          patch.models = nextModels;
+        }
+        if (sessionId) {
+          const key = sessionStoreKey(engine, sessionId, currentActive?.workspacePath || "");
+          const rawBySession = s.bySession as Record<string, Record<string, unknown>> | undefined;
+          const bySession: Record<string, Record<string, unknown>> = { ...(rawBySession || {}) };
+          const cur = bySession[key] ? { ...bySession[key] } : {};
+          cur.activeModel = model || null;
+          if (enable1M !== undefined) {
+            const rawUsage = cur.usage && typeof cur.usage === "object" ? (cur.usage as Record<string, unknown>) : {};
+            const windowSize = enable1M ? 1_000_000 : 200_000;
+            cur.usage = { ...rawUsage, model_context_window: windowSize };
+          }
+          bySession[key] = cur;
+          patch.bySession = bySession;
+        }
+        return patch;
+      });
+      return true;
+    } catch (err) {
+      console.warn(`[model-switcher] store.setState patch model 失败:`, err);
+    }
+  }
+  return false;
 }
 
 /**
@@ -821,6 +920,7 @@ export async function applyModelSelectionToHost(params: {
    *  0.3.10 起）patch 已有会话的推理强度，失败/不可用才 fallback 到
    *  Fiber 猜测。省略时直接走 fallback（兼容未传 ctx 的旧调用点）。 */
   ctx?: PluginContext;
+  anchor?: HTMLElement | null;
 }): Promise<void> {
   const error = hostSessionSelectionError(params.engine) ||
     (params.model ? modelSelectionError(params.engine, params.model, params.compatibility) : null);
@@ -832,10 +932,11 @@ export async function applyModelSelectionToHost(params: {
   }
   if (finalModel) {
     finalModel = finalModel.replace(/\[1m\]$/i, "");
-    if (enable1M && engine === "claude") finalModel = `${finalModel}[1m]`;
+    const effective1M = (engine === "claude" || engine === "codex" || engine === "omp" || engine === "pi") && enable1M;
+    if (effective1M && engine === "claude") finalModel = `${finalModel}[1m]`;
     if (typeof localStorage !== "undefined") {
       try {
-        const windowSize = enable1M ? "1000000" : "200000";
+        const windowSize = effective1M ? "1000000" : "200000";
         const bare = finalModel.replace(/\[1m\]$/i, "");
         localStorage.setItem(`ccgui.context-window.${engine}.${finalModel}`, windowSize);
         if (bare) {
@@ -847,11 +948,11 @@ export async function applyModelSelectionToHost(params: {
 
   // 在任何宿主改动之前取快照：模型切换允许把待建会话改派到 engine，但不允许换页签
   const guardHostSession = captureHostSessionGuard(engine, true);
-  const callbacks = getHostCliMenuProps();
-  const store = findHostChatStore();
-  const actions = store ? undefined : findHostStoreActions();
+  const callbacks = getHostCliMenuProps(params.anchor);
+  const store = findHostChatStore(params.anchor);
+  const actions = findHostStoreActions(params.anchor);
   const active = callbacks?.session !== undefined ? callbacks.session : (store?.getState().active ?? getHostSession());
-  const liveSession = effort && active?.sessionId ? findHostSessionState() : null;
+  const liveSession = active?.sessionId ? findHostSessionState(params.anchor) : null;
 
   // 详细日志：当前状态
   const storeState = store?.getState();
@@ -867,12 +968,17 @@ export async function applyModelSelectionToHost(params: {
   console.warn(`[model-switcher] 组件: store=${store ? "✓" : "✗"}, liveSession=${liveSession ? "✓" : "✗"}, ctx.sessions=${params.ctx?.sessions ? "✓" : "✗"}`);
 
   lastDiagnostic = `sessionId=${active?.sessionId ?? "null"} liveSession=${liveSession ? "✓" : "✗"} store=${store ? "✓" : "✗"}`;
-  // 只有已有会话（有 sessionId）才尝试 patch；新会话走下面的 setEffort/onEffortChange
-  const patched = effort && active?.sessionId ? await patchSessionEffort(params.ctx, store, engine, effort, active, liveSession) : false;
-  console.warn(`[model-switcher] patch 结果: ${patched ? "成功" : "失败/跳过"}`);
-
+  let patched = false;
   // 已有会话直接改 SessionState（避免 setEffort 触发 refreshSessions 覆盖）；新会话改引擎默认
   try {
+    const storeSetActiveEngine = store?.getState().setActiveEngine;
+    if (typeof storeSetActiveEngine === "function") {
+      try {
+        storeSetActiveEngine(engine);
+      } catch (e) {
+        console.warn("[model-switcher] store.setActiveEngine 失败:", e);
+      }
+    }
     if (actions?.setActiveEngine) {
       actions.setActiveEngine(engine);
     } else if (callbacks?.onChange) {
@@ -888,34 +994,38 @@ export async function applyModelSelectionToHost(params: {
     // 放在切换之前会让跨 CLI 切换的 model/effort 被整段跳过。
     if (effort) syncLocalStorage(engine, finalModel, effort);
     else syncLocalStorage(engine, finalModel, active?.effort || "");
+    // 模型切换：调用 setModel 并打补丁同步到 store / SQLite
+    const storeSetModel = store?.getState().setModel;
+    if (typeof storeSetModel === "function") {
+      try {
+        await Promise.resolve(storeSetModel(engine, finalModel));
+      } catch (e) {
+        console.warn("[model-switcher] store.setModel 失败:", e);
+      }
+    }
     if (actions?.setModel) {
       await Promise.resolve(actions.setModel(engine, finalModel));
     } else if (callbacks?.onModelChange) {
       callbacks.onModelChange(engine, finalModel);
     }
-    // 档位处理分两个维度：
-    // 1. 已有会话：通过 patchSessionEffort 更新 bySession[key].activeEffort（已完成）
-    // 2. 引擎默认：通过 setEffort/onEffortChange 更新 efforts[engine]（确保新会话用对档位）
+    await patchHostSessionModel(store, engine, finalModel, active, liveSession, enable1M);
+    // 档位处理：新会话与已有会话全链路对齐与持久化
     if (effort) {
-      if (!patched && !active?.sessionId) {
-        // 新会话：只需要设置引擎默认档位
-        console.warn(`[model-switcher] 新会话走 setEffort/onEffortChange`);
-        if (actions?.setEffort) {
-          await Promise.resolve(actions.setEffort(engine, effort));
-        } else if (callbacks?.onEffortChange) {
-          callbacks.onEffortChange(engine, effort);
+      console.warn(`[model-switcher] 同步生效推理强度: ${engine} -> ${effort}`);
+      const storeSetEffort = store?.getState().setEffort;
+      if (typeof storeSetEffort === "function") {
+        try {
+          await Promise.resolve(storeSetEffort(engine, effort));
+        } catch (e) {
+          console.warn("[model-switcher] store.setEffort 失败:", e);
         }
-      } else if (active?.sessionId) {
-        // 已有会话：bySession 已通过 patchSessionEffort 更新，但还要同步更新引擎默认档位
-        console.warn(`[model-switcher] 已有会话：同步更新引擎默认档位 efforts[${engine}] = ${effort}`);
-        if (actions?.setEffort) {
-          await Promise.resolve(actions.setEffort(engine, effort));
-        } else if (callbacks?.onEffortChange) {
-          callbacks.onEffortChange(engine, effort);
-        }
-      } else if (!patched) {
-        console.warn(`[model-switcher] ⚠️ 已有会话但 patch 失败，effort 未写入`);
       }
+      if (actions?.setEffort) {
+        await Promise.resolve(actions.setEffort(engine, effort));
+      } else if (callbacks?.onEffortChange) {
+        callbacks.onEffortChange(engine, effort);
+      }
+      patched = await patchSessionEffort(params.ctx, store, engine, effort, active, liveSession);
     }
   } catch (err) {
     console.warn("[model-switcher] 触发宿主切换失败:", err);
@@ -955,7 +1065,6 @@ export async function applyModelSelectionToHost(params: {
       console.warn("[model-switcher] 同步 store.efforts 失败:", err);
     }
   }
-
   console.warn(`[model-switcher] ========== 档位切换完成 ==========`);
 
   // 5. 派发通知事件
@@ -987,15 +1096,21 @@ export async function repairLegacyContextSelections(): Promise<void> {
     }
   }
   try {
-    const settings = (await invokeHost("get_app_settings")) as { defaultModels?: Record<string, string> } | null;
-    if (!settings?.defaultModels) return;
+    const settings = (await invokeHost("get_app_settings")) as {
+      defaultModels?: Record<string, string>;
+      defaultEfforts?: Record<string, string>;
+    } | null;
+    if (!settings) return;
     let changed = false;
-    const defaultModels = { ...settings.defaultModels };
+    const defaultModels = { ...(settings.defaultModels || {}) };
     for (const [engine, model] of Object.entries(defaultModels)) {
       const clean = strip(engine, model) as string;
       if (clean !== model) { defaultModels[engine] = clean; changed = true; }
     }
-    if (changed) await invokeHost("update_app_settings", { settings: { ...settings, defaultModels } });
+    if (changed) {
+      const nextSettings: Record<string, unknown> = { ...settings, defaultModels };
+      await invokeHost("update_app_settings", { settings: nextSettings });
+    }
   } catch { /* ignore host errors */ }
 }
 
@@ -1089,6 +1204,16 @@ export async function applyChannelSelectionToHost(params: {
   const callbacks = getHostCliMenuProps();
   if (!callbacks) {
     throw new Error("无法连接宿主渠道切换入口，请重载插件后重试");
+  }
+  // omp / pi 的原生渠道来自 models.yml / agent.db，宿主 config.json 默认未登记；
+  // set_current_provider 会严格校验 providers 列表并报错 "provider {id} not found"。
+  // 切换前先确保该渠道在宿主完成轻量占位登记，避免报 provider不存在。
+  if ((engine === "omp" || engine === "pi") && providerId && providerId !== NATIVE_PROVIDER_ID && providerId !== "__local_config_toml__") {
+    await invokeHost("upsert_provider", {
+      engine,
+      id: providerId,
+      json: { name: providerId },
+    }).catch(() => {});
   }
   if (callbacks.onChannelChange) {
     // 渠道切换不改派引擎，任何会话字段变化都要中止轮询

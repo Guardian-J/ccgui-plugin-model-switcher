@@ -38,13 +38,19 @@ function stripJsoncComments(input: string): string {
   return out;
 }
 
+export interface PiFamilyModelItem {
+  id: string;
+  name?: string;
+  [key: string]: unknown;
+}
+
 export function parsePiFamilyProviders(text: string, format: string): Record<string, {
   id: string;
   name: string;
   baseUrl: string;
   apiKey: string;
   api?: string;
-  models: Array<{ id: string; name?: string }>;
+  models: Array<PiFamilyModelItem>;
 }> {
   if (!text || !text.trim()) return {};
   if (format === "json" || text.trim().startsWith("{")) {
@@ -56,8 +62,15 @@ export function parsePiFamilyProviders(text: string, format: string): Record<str
       if (providersMap && typeof providersMap === "object") {
         for (const [id, raw] of Object.entries(providersMap)) {
           if (raw && typeof raw === "object") {
-            const models = Array.isArray((raw as any).models)
-              ? (raw as any).models.map((m: any) => typeof m === "string" ? { id: m } : { id: m.id, name: m.name })
+            const models: PiFamilyModelItem[] = Array.isArray((raw as Record<string, unknown>).models)
+              ? ((raw as Record<string, unknown>).models as unknown[]).map((m: unknown) => {
+                  if (typeof m === "string") return { id: m };
+                  if (m && typeof m === "object") {
+                    const mObj = m as Record<string, unknown>;
+                    return { ...mObj, id: String(mObj.id || "") };
+                  }
+                  return { id: "" };
+                }).filter((m: PiFamilyModelItem) => !!m.id)
               : [];
             res[id] = {
               id,
@@ -131,12 +144,20 @@ export function parsePiFamilyProviders(text: string, format: string): Record<str
         const rest = trimmed.slice(1).trim();
         const kv = rest.match(/^([a-zA-Z0-9_-]+)\s*:\s*(.*)$/);
         if (kv) {
-          curModel[kv[1]] = kv[2].trim().replace(/^['"]|['"]$/g, "");
+          const val = kv[2].trim().replace(/^['"]|['"]$/g, "");
+          if (val === "true") curModel[kv[1]] = true;
+          else if (val === "false") curModel[kv[1]] = false;
+          else if (/^\d+$/.test(val)) curModel[kv[1]] = Number(val);
+          else curModel[kv[1]] = val;
         }
       } else if (curModel) {
         const kv = trimmed.match(/^([a-zA-Z0-9_-]+)\s*:\s*(.*)$/);
         if (kv) {
-          curModel[kv[1]] = kv[2].trim().replace(/^['"]|['"]$/g, "");
+          const val = kv[2].trim().replace(/^['"]|['"]$/g, "");
+          if (val === "true") curModel[kv[1]] = true;
+          else if (val === "false") curModel[kv[1]] = false;
+          else if (/^\d+$/.test(val)) curModel[kv[1]] = Number(val);
+          else curModel[kv[1]] = val;
         }
       }
     }
@@ -151,23 +172,26 @@ export interface PiFamilyProviderPatch {
   apiKey: string;
   api: PiFamilyApiProtocol;
   model?: string;
-  models?: Array<{ id: string; name?: string } | string>;
+  models?: Array<PiFamilyModelItem | string>;
 }
 
 function mergePiFamilyModels(
-  existing: Array<{ id: string; name?: string }>,
+  existing: Array<PiFamilyModelItem>,
   patch: PiFamilyProviderPatch,
-): Array<{ id: string; name?: string }> {
-  const result: Array<{ id: string; name?: string }> = [];
+): Array<PiFamilyModelItem> {
+  const result: Array<PiFamilyModelItem> = [];
   const seen = new Set<string>();
 
-  const add = (item?: { id?: string; name?: string } | string) => {
+  const add = (item?: PiFamilyModelItem | string) => {
     if (!item) return;
     const id = typeof item === "string" ? item.trim() : item.id?.trim();
     if (!id || seen.has(id)) return;
     seen.add(id);
-    const name = typeof item === "object" && item.name?.trim() ? item.name.trim() : undefined;
-    result.push(name ? { id, name } : { id });
+    if (typeof item === "string") {
+      result.push({ id });
+    } else {
+      result.push({ ...item, id });
+    }
   };
 
   if (patch.model?.trim()) {
@@ -268,7 +292,7 @@ function extractExtraYamlLines(
 function renderYamlProviderLines(
   id: string,
   patch: PiFamilyProviderPatch,
-  models: Array<{ id: string; name?: string }>,
+  models: Array<PiFamilyModelItem>,
   extraLines: string[] = [],
 ): string[] {
   // omp: anthropic-messages 且未写 auth 时会强制 isOAuth，请求被塑成 Claude Code
@@ -286,10 +310,16 @@ function renderYamlProviderLines(
   if (models.length > 0) {
     lines.push("    models:");
     for (const m of models) {
-      if (m.name && m.name !== m.id) {
-        lines.push(`      - id: ${JSON.stringify(m.id)}`, `        name: ${JSON.stringify(m.name)}`);
-      } else {
-        lines.push(`      - id: ${JSON.stringify(m.id)}`);
+      lines.push(`      - id: ${JSON.stringify(m.id)}`);
+      for (const [key, val] of Object.entries(m)) {
+        if (key === "id") continue;
+        if (typeof val === "boolean" || typeof val === "number") {
+          lines.push(`        ${key}: ${val}`);
+        } else if (typeof val === "string") {
+          lines.push(`        ${key}: ${JSON.stringify(val)}`);
+        } else if (Array.isArray(val) || (val && typeof val === "object")) {
+          lines.push(`        ${key}: ${JSON.stringify(val)}`);
+        }
       }
     }
   } else {
@@ -297,6 +327,7 @@ function renderYamlProviderLines(
   }
   return lines;
 }
+
 
 /**
  * 仅改写指定 provider，保留 models.yml 中其他供应商原文与行内注释。

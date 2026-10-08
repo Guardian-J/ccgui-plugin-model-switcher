@@ -253,4 +253,33 @@ describe('pi-family-parser', () => {
       expect(JSON.parse(result)).toEqual(JSON.parse(initial));
     });
   });
+  describe('preserve reasoning and thinking attributes on models', () => {
+    it('YAML upsert 应该保留模型上原有的 reasoning 与 contextWindow 属性', () => {
+      const initialYaml = `providers:
+  my-relay:
+    name: My Relay
+    baseUrl: https://api.relay.com/v1
+    api: openai-completions
+    auth: apiKey
+    apiKey: secret
+    models:
+      - id: grok-4.6
+        name: Grok 4.6
+        reasoning: true
+        contextWindow: 500000
+`;
+      const updated = upsertPiFamilyProviderText(initialYaml, 'yaml', 'my-relay', {
+        name: 'My Relay',
+        baseUrl: 'https://api.relay.com/v1',
+        apiKey: 'secret',
+        api: 'openai-completions',
+        model: 'new-model',
+      });
+
+      expect(updated).toContain('id: "grok-4.6"');
+      expect(updated).toContain('reasoning: true');
+      expect(updated).toContain('contextWindow: 500000');
+      expect(updated).toContain('id: "new-model"');
+    });
+  });
 });

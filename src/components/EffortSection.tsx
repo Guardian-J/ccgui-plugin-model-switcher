@@ -12,6 +12,7 @@ export const EFFORT_LEVELS: readonly EffortLevel[] = [
 ];
 
 interface Props {
+  engine?: string;
   effort: EffortLevel;
   onChange: (level: EffortLevel) => boolean | void | Promise<boolean | void>;
   disabled?: boolean;
@@ -75,6 +76,7 @@ function useMediaQueries() {
 }
 
 export function EffortSection({
+  engine,
   effort,
   onChange,
   disabled = false,
@@ -130,27 +132,48 @@ export function EffortSection({
     }
   };
 
+  const is1MSupported = engine === "claude" || engine === "codex" || engine === "omp" || engine === "pi";
+  const effective1M = is1MSupported && enable1M;
+
   return (
     <div className="ms-effort" data-dragging={dragging || state.keyboard.current || undefined}>
       <div className="ms-effort-heading">
         <span className="ms-effort-label">
           推理强度 <output key={EFFORT_LEVELS[index]}>{EFFORT_LEVELS[index]}</output>
         </span>
-        <button
-          type="button"
-          role="switch"
-          aria-label="1M 上下文"
-          aria-checked={enable1M}
-          disabled={disabled || state.pending}
-          title="1M 上下文（需要模型支持）"
-          onClick={() => onToggle1M(!enable1M)}
-          className="ms-switch-button"
-        >
-          <span>1M 上下文</span>
-          <span aria-hidden className="ms-switch">
-            <span />
-          </span>
-        </button>
+        {is1MSupported ? (
+          <button
+            type="button"
+            role="switch"
+            aria-label="1M 上下文"
+            aria-checked={effective1M}
+            disabled={disabled || state.pending}
+            title="1M 上下文（需要模型支持）"
+            onClick={() => onToggle1M(!effective1M)}
+            className="ms-switch-button"
+          >
+            <span>1M 上下文</span>
+            <span aria-hidden className="ms-switch">
+              <span />
+            </span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            role="switch"
+            aria-label="1M 上下文"
+            aria-checked={false}
+            disabled={true}
+            title="仅 Claude / Codex 支持 1M 上下文扩展（已锁定）"
+            className="ms-switch-button"
+            style={{ opacity: 0.5, cursor: "not-allowed" }}
+          >
+            <span>1M 上下文</span>
+            <span aria-hidden className="ms-switch">
+              <span />
+            </span>
+          </button>
+        )}
       </div>
       <div className="ms-range-labels">
         <span>更快</span>

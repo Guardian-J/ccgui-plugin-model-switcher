@@ -201,10 +201,11 @@ export function ModelListSection({
 
       <EffortSection
         key={activeEngine}
+        engine={activeEngine}
         effort={effort}
         onChange={onEffortChange}
         disabled={fetchingModels}
-        enable1M={enable1M}
+        enable1M={(activeEngine === "claude" || activeEngine === "codex" || activeEngine === "omp" || activeEngine === "pi") ? enable1M : false}
         onToggle1M={onToggle1M}
       />
     </div>

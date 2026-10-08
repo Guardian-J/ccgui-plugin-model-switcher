@@ -6,7 +6,7 @@
 
 插件使用宿主发现的 CLI 和供应商配置，不内置个人供应商 ID、API Key 或本机路径。面向 Windows、macOS、Linux，使用同一份构建产物，安装时无需修改宿主源代码。
 
-> **供应商切换：** 插件切换渠道时，新版宿主使用 `set_current_provider` 命令，旧版宿主使用 `onChannelChange` 回调；等待宿主确认后再应用模型。创建、编辑和删除独立渠道会同步宿主供应商列表。独立渠道支持 Claude / Codex / Kimi / Grok / OMP / PI。DSH、AGY、OpenCode、Qoder 等使用自身账号或服务配置，插件会明确提示暂不支持独立渠道。系统渠道详情只读。OMP / PI 的独立渠道还会写入 `models.yml` / `models.json`，并需指定 `api` 协议。Claude CLI 的所有渠道（系统渠道、原生配置、独立渠道）会自动注入 `attribution` 元数据和 `ENABLE_TOOL_SEARCH` 环境变量，确保工具搜索功能和提交归属信息的一致性。
+> **供应商切换：** 插件切换渠道时，新版宿主使用 `set_current_provider` 命令，旧版宿主使用 `onChannelChange` 回调；等待宿主确认后再应用模型。创建、编辑和删除独立渠道会同步宿主供应商列表。独立渠道支持全部 11 种 CLI 引擎（包括 Claude / Codex / Kimi / Grok / OMP / PI / DSH / AGY / OpenCode / Qoder / Qoder-CN 等）。系统渠道详情只读。OMP / PI 的独立渠道还会写入 `models.yml` / `models.json`，并需指定 `api` 协议。Claude CLI 的所有渠道（系统渠道、原生配置、独立渠道）会自动注入 `attribution` 元数据和 `ENABLE_TOOL_SEARCH` 环境变量，确保工具搜索功能和提交归属信息的一致性。
 
 ## 目录
 
@@ -35,7 +35,7 @@
 - 插件激活和输入框挂载时预热 CLI 探测与供应商配置；打开弹窗先展示 CLI 列表（命中缓存则立刻可用，后台自动 SWR 静默探活以感知外部 CLI 升级或新安装）；切换渠道、选择模型与调节推理强度全面接入 0ms 即时乐观更新，去除全屏阻断性遮罩与失焦顿挫，改用顶部非阻塞流光微动效。
 - 弹窗内置”刷新”按钮，一键强制穿透缓存，同时重新探测所有 CLI 安装可用状态与拉取最新原生/供应商模型。
 - 渠道切换等待宿主确认后再应用模型和保存；宿主未确认时提示失败。切换过程中保留弹窗，避免模型列表保存覆盖渠道状态。
-- 支持推理强度；Claude CLI 通过 `[1m]` 选择语法开启 1M 扩展；OMP、PI、Codex 等其他引擎保留原始模型 ID（避免报 Model not found 错误），通过会话上下文实际用量与缓存双向联动，保持开关与用量面板状态严格同步。
+- 支持推理强度；Claude CLI 通过 `[1m]` 选择语法开启 1M 扩展；OMP / PI 开启 1M 时自动向 `models.yml` / `models.json` 写入 `contextWindow`（1,000,000 或 1,048,576）与 `maxTokens`（65,536）；Codex、OMP、PI 保留原始模型 ID（避免报 Model not found 错误），通过会话上下文实际用量与缓存双向联动，保持开关与用量面板状态严格同步。
 - 按宿主权威目录和模型协议元数据校验兼容性。模型名称、品牌或普通 `/models` 列表不能证明协议；缺少证据时允许自定义别名，实际调用是否成功由 CLI 和服务端决定。
 
 模型选择会同步宿主会话状态和应用默认模型设置。已有其他会话的显式模型覆盖保持独立，没有显式覆盖的会话可能跟随应用默认值。
@@ -50,7 +50,7 @@
 | 切换渠道 | 同步宿主当前会话渠道；新版宿主在发送时将 Claude / Codex / Kimi / Grok 的渠道配置应用到本次 CLI 进程；OMP / PI 支持已授权凭证通道、系统供应商与独立渠道，使用完整的供应商/模型 ID |
 | 删除独立渠道 | 删除插件记录，并从宿主供应商列表移除；OMP / PI 同时从模型配置移除该供应商；若删的是当前项，切回可用的系统渠道或下一个可用渠道 |
 
-CLI 配置如何应用取决于宿主版本：早期宿主可能改写原生文件，新版宿主在发送时注入渠道配置。Claude 的原生 settings 覆盖问题、Kimi 的环境变量及原生模型别名覆盖问题，需要宿主包含对应修复；仅更新插件无法修正旧宿主启动的 CLI 请求。OMP / PI 独立渠道仍会改写模型配置文件。暂不支持独立渠道的 CLI 可选择原生配置，并删除旧版保存的独立渠道。用户主动执行的提示词清洗另见下文。
+CLI 配置如何应用取决于宿主版本：早期宿主可能改写原生文件，新版宿主在发送时注入渠道配置。Claude 的原生 settings 覆盖问题、Kimi 的环境变量及原生模型别名覆盖问题，需要宿主包含对应修复；仅更新插件无法修正旧宿主启动的 CLI 请求。OMP / PI 独立渠道仍会改写模型配置文件。用户主动执行的提示词清洗另见下文。
 
 ### 全局主题与自由选色
 
@@ -59,7 +59,7 @@ CLI 配置如何应用取决于宿主版本：早期宿主可能改写原生文�
 - 内置 12 个主题选项：原生极简、深空雅致、赛博霓虹、北欧极夜、落樱浅绛、翡翠森林、石墨、潮汐、钴蓝、梅影、青柠终端、朱砂。
 - 调色盘仅保留一个原生自由选色器，自动生成浅色、深色配色。为保证白色按钮文字可读，过亮的选色会在实际强调色中适当压暗。
 - 主题跟随宿主浅色/深色模式，覆盖侧栏、聊天、表单、菜单和弹窗。
-- 支持全局聚焦光晕、细滚动条和字体平滑开关。
+- 支持全局聚焦光晕、细滚动条、字体平滑、会话页签精修（macOS/Linear 风格浮起卡片）及自定义 CSS。
 - 旧版多色配置沿用已保存的浅色强调色，旧网格和斜纹背景按纯色处理。
 
 ### 应用背景
@@ -132,11 +132,11 @@ Git 仓库保留源码、兼容性验证脚本和依赖锁文件；`.gitignore` 
 | 权限 | 用途 |
 | --- | --- |
 | `storage` | 保存独立渠道、模型记录、主题设置和背景媒体 |
-| `ui:composer`、`ui:status-bar` | 模型弹窗入口与状态显示 |
+| `host:session` | 对已有会话动态生效模型与推理强度（setEffort） |
+| `ui:composer-status`、`ui:status-bar` | 模型弹窗入口（cliMenu 插槽）与状态栏显示 |
 | `theme` | 注入主题和时间线样式 |
 | `exec:node` | 执行内嵌提示词清洗脚本 |
 | `network:<host>` | 插件 HTTP 模型查询的域名与端口授权 |
-
 清单还声明了 `ui:settings-section`、`ui:command`、`i18n` 和 `events`；这不代表当前版本一定提供对应的独立界面或命令。
 
 插件数据由宿主插件存储管理：`state` 保存渠道和模型记录，`theme_config` 保存主题选项，`theme_background` 单独保存背景图片。独立渠道 API Key 随插件记录保存，插件未额外提供加密层，分享配置或诊断信息前应移除密钥。
@@ -225,11 +225,11 @@ Get-Content -Encoding utf8 -Raw preview/check-provider-protection.js | agent-bro
 | 命令 | 用途 |
 | --- | --- |
 | `pnpm typecheck` | 检查 `src` 中的 TypeScript 类型 |
+| `pnpm test` | 运行单元测试（基于 Vitest） |
 | `pnpm check:compatibility` | 验证渠道切换、模型协议、会话隔离、主题迁移和清洗逻辑 |
 | `pnpm build` | 生成完整插件安装目录 |
 | `pnpm dev` | 监听源码变化并重新构建，不启动 UI 预览服务器 |
 | `pnpm preview:ui` | 启动 UI 预览服务器，页面需本地 `preview/` 文件 |
-
 [兼容性 CI](.github/workflows/compatibility.yml) 在 Windows、macOS、Ubuntu 上配置依赖安装、类型检查、兼容性测试和构建。模拟测试使用临时数据，不读取或修改真实 CLI 配置；CI 矩阵不等同于三平台真实 GUI 与 CLI 集成验证。
 
 已安装支持 `--system-prompt-snapshot` 的独立 Claude Code 可执行文件时，可额外运行：
@@ -244,10 +244,16 @@ node scripts/probe-scrub-request.cjs "CLI可执行文件路径"
 
 ```text
 manifest.json                             插件清单与权限
+src/types.ts                              CLI 引擎、渠道、协议等核心类型
 src/index.tsx                             插件激活、界面注册与卸载
+src/api.ts                                模型列表拉取与协议解析
+src/pi-family-parser.ts                   OMP / PI 配置文件（models.yml/json）读写
+src/host-transport.ts                     宿主 IPC 与 Web 远程 WebSocket 传输桥
 src/components/CliModelFlyoutMenu.tsx      模型与渠道弹窗
 src/components/ThemeSettingsPanel.tsx     主题设置
 src/components/ThemeCustomizationPanel.tsx 自由选色与背景导入
+src/components/ChannelSection.tsx         渠道管理与切换
+src/components/EffortSection.tsx          推理强度与 1M 上下文开关
 src/system-bridge.ts                      宿主渠道读取与切换
 src/selection-policy.ts                   会话与模型兼容性校验
 src/session-display.ts                    当前会话显示适配

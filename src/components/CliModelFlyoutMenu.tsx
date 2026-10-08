@@ -30,6 +30,7 @@ import {
   displayEngineModel,
   withoutCustomModel,
   ensurePiFamilyModelConfigured,
+  updatePiFamilyModelEffort,
   peekNativeCatalog,
   invalidateNativeCatalogCache,
   type EngineItemRule,
@@ -41,6 +42,7 @@ import {
   readEnableEffortLevel,
 } from "../system-bridge";
 import { fetchModelsFromProvider, loadNativeChannelModels } from "../api";
+import { invokeHost } from "../host-transport";
 import {
   ProjectEngineIcon,
   RefreshIcon,
@@ -166,7 +168,10 @@ export function CliModelFlyoutMenu({
           ...(pinned.model !== undefined ? { selectedModel: pinned.model } : {}),
         };
       }
-      return next;
+      return {
+        ...next,
+        effort: prev.effort || next.effort,
+      };
     });
   }, [sessionDisplay]);
 
@@ -592,14 +597,19 @@ export function CliModelFlyoutMenu({
     try {
       if (activeChannel && targetModel) {
         await ensurePiFamilyModelConfigured(activeEngine, activeChannel, targetModel);
+        if (activeEngine === "omp" || activeEngine === "pi") {
+          await updatePiFamilyModelEffort(activeEngine, activeChannel, targetModel, nextState.effort, nextState.enable1MContext);
+        }
       }
+      const enable1M = (activeEngine === "claude" || activeEngine === "codex" || activeEngine === "omp" || activeEngine === "pi") ? Boolean(nextState.enable1MContext) : false;
       await applyModelSelectionToHost({
         engine: activeEngine,
         model: hostModel,
         effort: nextState.effort,
-        enable1M: nextState.enable1MContext,
+        enable1M,
         compatibility: compatibilityFor(targetModel) || compatibilityFor(hostModel),
         ctx,
+        anchor: triggerRef?.current,
       });
       const diagnostic = getLastDiagnostic();
       const sessionError = sessionSelectionError(activeEngine);
@@ -654,6 +664,7 @@ export function CliModelFlyoutMenu({
   };
 
   const handleToggle1M = async (enabled: boolean) => {
+    if (activeEngine !== "claude" && activeEngine !== "codex" && activeEngine !== "omp" && activeEngine !== "pi") return;
     await commitSelection({ ...state, enable1MContext: enabled }, { silent: true });
   };
 
@@ -807,14 +818,27 @@ export function CliModelFlyoutMenu({
     setCurrentChannelId(channel.id);
     setState(nextState);
     try {
+      if ((activeEngine === "omp" || activeEngine === "pi") && channel.id !== NATIVE_PROVIDER_ID) {
+        await invokeHost("upsert_provider", {
+          engine: activeEngine,
+          id: channel.id,
+          json: {
+            name: channel.name,
+            baseUrl: (channel as any).baseUrl || "",
+            apiKey: (channel as any).apiKey || "",
+            model: channel.model || "",
+          },
+        }).catch(() => {});
+      }
       await applyChannelSelectionToHost({ engine: activeEngine, providerId: channel.id });
       if (hostModel) {
         await applyModelSelectionToHost({
-            engine: activeEngine,
-            model: hostModel,
-            effort: state.effort,
-            enable1M: state.enable1MContext,
-            ctx,
+          engine: activeEngine,
+          model: hostModel,
+          effort: state.effort,
+          enable1M: state.enable1MContext,
+          ctx,
+          anchor: triggerRef?.current,
         });
       }
       const stableKey = sessionDisplay?.stableKey;
@@ -870,7 +894,14 @@ export function CliModelFlyoutMenu({
       await applyCustomPluginChannelToEngine(ctx, activeEngine, channel);
       await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(channel.id) });
       if (hostModel) {
-        await applyModelSelectionToHost({ engine: activeEngine, model: hostModel, effort: state.effort, enable1M: state.enable1MContext, ctx });
+        await applyModelSelectionToHost({
+          engine: activeEngine,
+          model: hostModel,
+          effort: state.effort,
+          enable1M: state.enable1MContext,
+          ctx,
+          anchor: triggerRef?.current,
+        });
       }
       const stableKey = sessionDisplay?.stableKey;
       const sessionChannels = stableKey ? {
@@ -1008,10 +1039,8 @@ export function CliModelFlyoutMenu({
     selectionPending.current = true;
     setSwitching(true);
     try {
-      const fallbackId = (activeEngine === "omp" || activeEngine === "pi")
-        ? (allSystemChannels[0]?.id || nextChannels[0]?.id || "")
-        : (!independentChannelError(activeEngine) && currentChannelId && !isPluginProviderId(currentChannelId)
-          ? currentChannelId : NATIVE_PROVIDER_ID);
+      const fallbackId = !independentChannelError(activeEngine) && currentChannelId && !isPluginProviderId(currentChannelId)
+        ? currentChannelId : NATIVE_PROVIDER_ID;
       const nextState: PluginState = {
         ...state,
         activeChannelType: isDeletingCurrent ? "system" : state.activeChannelType,
@@ -1082,9 +1111,7 @@ export function CliModelFlyoutMenu({
     setSwitching(true);
     try {
       const remainingHostChannels = allSystemChannels.filter((c) => c.id !== channelId);
-      const fallbackId = (activeEngine === "omp" || activeEngine === "pi")
-        ? (remainingHostChannels[0]?.id || pluginCustomChannels[0]?.id || "")
-        : NATIVE_PROVIDER_ID;
+      const fallbackId = NATIVE_PROVIDER_ID;
       const nextState: PluginState = {
         ...state,
         selectedProviderId: isDeletingCurrent ? fallbackId : state.selectedProviderId,
