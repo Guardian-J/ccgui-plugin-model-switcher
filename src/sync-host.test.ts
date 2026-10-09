@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { findHostChatStoreFromFiber, findHostStoreActionsFromFiber, normalizeEffort, patchHostSessionEffort, patchHostSessionModel, type HostChatStore } from "./sync-host";
+import { applyModelSelectionToHost, findHostChatStoreFromFiber, findHostStoreActionsFromFiber, normalizeEffort, patchHostSessionEffort, patchHostSessionModel, type HostChatStore } from "./sync-host";
 import { invokeHost } from "./host-transport";
 
 vi.mock("./host-transport", () => ({
@@ -220,5 +220,88 @@ describe("patchHostSessionModel", () => {
     const s2 = bySession["omp/s2"];
     expect(s2.activeModel).toBe("gemini-3.8-flash");
     expect(s2.usage).toEqual({ input_tokens: 100, model_context_window: 1_000_000 });
+  });
+});
+
+describe("applyModelSelectionToHost Ultra 模式适配", () => {
+  it("当 engine 为 omp 且 effort 为 ultra 时，下发给宿主 store 与 IPC 的 effort 应适配为 max", async () => {
+    const calls: Array<[string, string]> = [];
+    let patchedState: Record<string, unknown> = {
+      active: { engine: "omp", sessionId: "s-omp", workspacePath: "/ws" },
+      openTabs: [{ engine: "omp", sessionId: "s-omp", workspacePath: "/ws" }],
+      models: {},
+      efforts: { omp: "medium" },
+      bySession: { "omp/s-omp": { activeModel: "gemini-3.8-flash", activeEffort: "medium" } },
+      setEffort: (engine: string, effort: string) => { calls.push([engine, effort]); },
+      setModel: () => {},
+    };
+    const store = {
+      getState: () => patchedState,
+      setState: (fn: any) => {
+        const update = typeof fn === "function" ? fn(patchedState) : fn;
+        patchedState = { ...patchedState, ...update };
+      },
+    } as any;
+
+    // 创建虚拟 DOM 元素用于锚点查找
+    const container = document.createElement("div");
+    (container as any).__reactFiber$test = {
+      memoizedState: {
+        memoizedState: { current: store },
+        next: null,
+      },
+    };
+
+    await applyModelSelectionToHost({
+      engine: "omp",
+      model: "gemini-3.8-flash",
+      effort: "ultra",
+      anchor: container,
+    });
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every(([eng, eff]) => eng === "omp" && eff === "max")).toBe(true);
+    expect((patchedState.efforts as Record<string, string>).omp).toBe("max");
+    const bySession = patchedState.bySession as Record<string, Record<string, unknown>>;
+    expect(bySession["omp/s-omp"].activeEffort).toBe("max");
+  });
+
+  it("当 engine 为 claude 且 effort 为 ultra 时，保持 ultra 原样下发给宿主", async () => {
+    const calls: Array<[string, string]> = [];
+    let patchedState: Record<string, unknown> = {
+      active: { engine: "claude", sessionId: "s-claude", workspacePath: "/ws" },
+      openTabs: [{ engine: "claude", sessionId: "s-claude", workspacePath: "/ws" }],
+      models: {},
+      efforts: { claude: "medium" },
+      bySession: { "claude/s-claude": { activeModel: "claude-sonnet-4-6", activeEffort: "medium" } },
+      setEffort: (engine: string, effort: string) => { calls.push([engine, effort]); },
+      setModel: () => {},
+    };
+    const store = {
+      getState: () => patchedState,
+      setState: (fn: any) => {
+        const update = typeof fn === "function" ? fn(patchedState) : fn;
+        patchedState = { ...patchedState, ...update };
+      },
+    } as any;
+
+    const container = document.createElement("div");
+    (container as any).__reactFiber$test = {
+      memoizedState: {
+        memoizedState: { current: store },
+        next: null,
+      },
+    };
+
+    await applyModelSelectionToHost({
+      engine: "claude",
+      model: "claude-sonnet-4-6",
+      effort: "ultra",
+      anchor: container,
+    });
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every(([eng, eff]) => eng === "claude" && eff === "ultra")).toBe(true);
+    expect((patchedState.efforts as Record<string, string>).claude).toBe("ultra");
   });
 });

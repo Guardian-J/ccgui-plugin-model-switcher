@@ -945,6 +945,12 @@ export async function applyModelSelectionToHost(params: {
       } catch { /* ignore storage errors */ }
     }
   }
+  // 针对 OMP / PI 引擎进行 Ultra 模式适配：
+  // 宿主 1.1.2 移除了 ultra->max 截断直接向 CLI 下发 --thinking ultra，导致 OMP 报错退出（Invalid --thinking value: "ultra"）。
+  // 当为 OMP 或 PI 引擎且选择 ultra 时，下发给宿主运行时的推理强度适配为 "max"（最高强度）。
+  const effectiveHostEffort = (effort === "ultra" && (engine === "omp" || engine === "pi"))
+    ? "max"
+    : effort;
 
   // 在任何宿主改动之前取快照：模型切换允许把待建会话改派到 engine，但不允许换页签
   const guardHostSession = captureHostSessionGuard(engine, true);
@@ -992,7 +998,7 @@ export async function applyModelSelectionToHost(params: {
     }
     // 引擎切换后才写 localStorage：syncLocalStorage 只认 engine 已对齐的会话，
     // 放在切换之前会让跨 CLI 切换的 model/effort 被整段跳过。
-    if (effort) syncLocalStorage(engine, finalModel, effort);
+    if (effectiveHostEffort) syncLocalStorage(engine, finalModel, effectiveHostEffort);
     else syncLocalStorage(engine, finalModel, active?.effort || "");
     // 模型切换：调用 setModel 并打补丁同步到 store / SQLite
     const storeSetModel = store?.getState().setModel;
@@ -1010,22 +1016,22 @@ export async function applyModelSelectionToHost(params: {
     }
     await patchHostSessionModel(store, engine, finalModel, active, liveSession, enable1M);
     // 档位处理：新会话与已有会话全链路对齐与持久化
-    if (effort) {
-      console.warn(`[model-switcher] 同步生效推理强度: ${engine} -> ${effort}`);
+    if (effectiveHostEffort) {
+      console.warn(`[model-switcher] 同步生效推理强度: ${engine} -> ${effectiveHostEffort}${effort !== effectiveHostEffort ? ` (原始请求: ${effort})` : ""}`);
       const storeSetEffort = store?.getState().setEffort;
       if (typeof storeSetEffort === "function") {
         try {
-          await Promise.resolve(storeSetEffort(engine, effort));
+          await Promise.resolve(storeSetEffort(engine, effectiveHostEffort));
         } catch (e) {
           console.warn("[model-switcher] store.setEffort 失败:", e);
         }
       }
       if (actions?.setEffort) {
-        await Promise.resolve(actions.setEffort(engine, effort));
+        await Promise.resolve(actions.setEffort(engine, effectiveHostEffort));
       } else if (callbacks?.onEffortChange) {
-        callbacks.onEffortChange(engine, effort);
+        callbacks.onEffortChange(engine, effectiveHostEffort);
       }
-      patched = await patchSessionEffort(params.ctx, store, engine, effort, active, liveSession);
+      patched = await patchSessionEffort(params.ctx, store, engine, effectiveHostEffort, active, liveSession);
     }
   } catch (err) {
     console.warn("[model-switcher] 触发宿主切换失败:", err);
@@ -1043,16 +1049,16 @@ export async function applyModelSelectionToHost(params: {
   // 3. 同步写入系统后端 AppSettings（确保新会话与默认配置生效）
   //    IPC 期间用户可能切走页签，写入前确认还是发起时那个会话（引擎已合法改派到 engine 除外）
   guardHostSession();
-  await syncAppSettings(engine, finalModel, effort ?? "");
-  console.warn(`[model-switcher] 已写入 AppSettings: defaultEfforts[${engine}]=${effort ?? ""}`);
+  await syncAppSettings(engine, finalModel, effectiveHostEffort ?? "");
+  console.warn(`[model-switcher] 已写入 AppSettings: defaultEfforts[${engine}]=${effectiveHostEffort ?? ""}`);
 
   // 4. 已有会话切换档位后，同步更新宿主 store 的内存状态 efforts[engine]
   //    确保后续新会话能读取到正确的默认档位
-  if (effort && active?.sessionId && store) {
+  if (effectiveHostEffort && active?.sessionId && store) {
     try {
       const state = store.getState();
       const oldEffort = state.efforts?.[engine];
-      store.setState({ efforts: { ...state.efforts, [engine]: effort } });
+      store.setState({ efforts: { ...state.efforts, [engine]: effectiveHostEffort } });
       const newState = store.getState();
       const updatedEffort = newState.efforts?.[engine];
       console.warn(`[model-switcher] 已同步更新 store.efforts[${engine}]: ${oldEffort} → ${updatedEffort}`);

@@ -12,7 +12,14 @@ import {
   mergePluginChannelsById,
   withoutPluginTwinChannels,
   pluginProviderId,
+  updatePiFamilyModelEffort,
 } from './system-bridge';
+import { invokeHost } from './host-transport';
+
+vi.mock('./host-transport', () => ({
+  invokeHost: vi.fn(async () => ({})),
+  isRemoteHost: vi.fn(() => false),
+}));
 import type { SystemProviderChannel } from './types';
 
 function ch(partial: Partial<SystemProviderChannel> & Pick<SystemProviderChannel, 'id' | 'name'>): SystemProviderChannel {
@@ -267,4 +274,57 @@ describe('system-bridge', () => {
     });
   });
 });
+
+  describe('updatePiFamilyModelEffort Ultra 模式适配', () => {
+    it('当 effort 为 ultra 时，写入 YAML 的 defaultLevel 应适配为 max', async () => {
+      const initialYaml = `providers:\n  test-provider:\n    name: "test"\n    baseUrl: "https://api.test.com"\n    api: anthropic-messages\n    models:\n      - id: "gemini-3.8-flash"\n`;
+      let writtenText = '';
+      vi.mocked(invokeHost).mockImplementation(async (cmd, args: any) => {
+        if (cmd === 'pi_family_models_config_read') {
+          return { text: initialYaml, file: { format: 'yaml' } };
+        }
+        if (cmd === 'pi_family_models_config_write') {
+          writtenText = args?.text || '';
+          return {};
+        }
+        return {};
+      });
+
+      await updatePiFamilyModelEffort(
+        'omp',
+        { id: 'test-provider', name: 'test', baseUrl: 'https://api.test.com' },
+        'gemini-3.8-flash',
+        'ultra',
+        true,
+      );
+
+      expect(writtenText).toContain('"defaultLevel":"max"');
+      expect(writtenText).not.toContain('"defaultLevel":"ultra"');
+      expect(writtenText).toContain('contextWindow: 1048576');
+    });
+
+    it('当 effort 为 medium 时，写入 YAML 的 defaultLevel 为 medium', async () => {
+      const initialYaml = `providers:\n  test-provider:\n    name: "test"\n    baseUrl: "https://api.test.com"\n    api: anthropic-messages\n    models:\n      - id: "gemini-3.8-flash"\n`;
+      let writtenText = '';
+      vi.mocked(invokeHost).mockImplementation(async (cmd, args: any) => {
+        if (cmd === 'pi_family_models_config_read') {
+          return { text: initialYaml, file: { format: 'yaml' } };
+        }
+        if (cmd === 'pi_family_models_config_write') {
+          writtenText = args?.text || '';
+          return {};
+        }
+        return {};
+      });
+
+      await updatePiFamilyModelEffort(
+        'omp',
+        { id: 'test-provider', name: 'test', baseUrl: 'https://api.test.com' },
+        'gemini-3.8-flash',
+        'medium',
+      );
+
+      expect(writtenText).toContain('"defaultLevel":"medium"');
+    });
+  });
 

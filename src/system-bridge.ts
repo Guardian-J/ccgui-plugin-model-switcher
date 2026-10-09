@@ -1097,13 +1097,16 @@ export async function updatePiFamilyModelEffort(
         ? "google-level"
         : "effort";
     const target1MContext = (bareModel.toLowerCase().includes("gemini") || bareModel.toLowerCase().includes("kimi")) ? 1048576 : 1000000;
+    // OMP / PI 原生最高思考级别为 "max"（仅接受 minimal/low/medium/high/xhigh/max）。
+    // ultra 模式适配：将 ultra 映射为 CLI 原生支持的最高级别 "max"，防止 CLI 丢弃 defaultLevel 或无法解析。
+    const targetEffortLevel = (effort === "ultra" && (engine === "omp" || engine === "pi")) ? "max" : effort;
     const patchModel = (m: PiFamilyModelItem): PiFamilyModelItem => {
       const updated: PiFamilyModelItem = {
         ...m,
         reasoning: true,
         thinking: {
           mode,
-          defaultLevel: effort,
+          defaultLevel: targetEffortLevel,
           efforts: ["low", "medium", "high", "xhigh", "max"],
         },
       };
