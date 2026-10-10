@@ -281,5 +281,72 @@ describe('pi-family-parser', () => {
       expect(updated).toContain('contextWindow: 500000');
       expect(updated).toContain('id: "new-model"');
     });
+    it('YAML upsert 应该自动修复被反斜杠转义的 thinking 属性并稳定保持为对象格式', () => {
+      const initialYaml = `providers:
+  my-provider:
+    name: "claude"
+    baseUrl: "https://api.example.com"
+    api: anthropic-messages
+    auth: apiKey
+    apiKey: "sk-test"
+    models:
+      - id: "claude-sonnet-5-5"
+        reasoning: true
+        thinking: {"mode":"anthropic-adaptive","defaultLevel":"max","efforts":["low","medium","high","xhigh","max"]}
+        contextWindow: 200000
+      - id: "claude-opus-5-5"
+        reasoning: true
+        thinking: "{\\\\\\\\\\\\\\\"mode\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"anthropic-adaptive\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"defaultLevel\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"max\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"efforts\\\\\\\\\\\\\\\":[\\\\\\\\\\\\\\\"low\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"medium\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"high\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"xhigh\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"max\\\\\\\\\\\\\\\"]}"
+        contextWindow: 200000
+`;
+      // 第一次 upsert：添加新模型或更新配置
+      const updated1 = upsertPiFamilyProviderText(initialYaml, 'yaml', 'my-provider', {
+        name: 'claude',
+        baseUrl: 'https://api.example.com',
+        apiKey: 'sk-test',
+        api: 'anthropic-messages',
+        model: 'claude-3-haiku',
+      });
+
+      // 不应包含任何反斜杠转义
+      expect(updated1).not.toContain('\\\\\\');
+      expect(updated1).toContain('thinking: {"mode":"anthropic-adaptive","defaultLevel":"max","efforts":["low","medium","high","xhigh","max"]}');
+
+      // 第二次 upsert：模拟多次切换操作，确保幂等且不会产生反斜杠累加
+      const updated2 = upsertPiFamilyProviderText(updated1, 'yaml', 'my-provider', {
+        name: 'claude',
+        baseUrl: 'https://api.example.com',
+        apiKey: 'sk-test',
+        api: 'anthropic-messages',
+        model: 'claude-3-haiku',
+      });
+
+      expect(updated2).not.toContain('\\\\\\');
+      expect(updated2).toBe(updated1);
+    });
+
+    it('YAML 解析应支持多行 thinking 块并正确还原', () => {
+      const yamlWithMultiline = `providers:
+  my-provider:
+    name: "claude"
+    baseUrl: "https://api.example.com"
+    api: anthropic-messages
+    auth: apiKey
+    apiKey: "sk-test"
+    models:
+      - id: "claude-sonnet-5-5"
+        reasoning: true
+        thinking:
+          mode: anthropic-adaptive
+          defaultLevel: max
+        contextWindow: 200000
+`;
+      const parsed = parsePiFamilyProviders(yamlWithMultiline, 'yaml');
+      const model = parsed['my-provider']?.models[0];
+      expect(model).toBeDefined();
+      expect(typeof model?.thinking).toBe('object');
+      expect((model?.thinking as any).mode).toBe('anthropic-adaptive');
+      expect((model?.thinking as any).defaultLevel).toBe('max');
+    });
   });
 });

@@ -38,5 +38,6 @@ Desktop.ini
 .claude/
 !.claude/agents.md
 
+.ccgui/
 # Agent 工作文档（仅本地）
 AGENTS.md

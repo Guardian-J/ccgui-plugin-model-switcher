@@ -6,6 +6,7 @@ import {
   parsePiFamilyProviders,
   removePiFamilyProviderText,
   upsertPiFamilyProviderText,
+  normalizeThinking,
   type PiFamilyModelItem,
   type PiFamilyProviderPatch,
 } from "./pi-family-parser";
@@ -1126,6 +1127,9 @@ export async function updatePiFamilyModelEffort(
       if (m.id === bareModel) {
         modelMatched = true;
         return patchModel(m);
+      }
+      if ("thinking" in m && m.thinking !== undefined) {
+        return { ...m, thinking: normalizeThinking(m.thinking) };
       }
       return m;
     });

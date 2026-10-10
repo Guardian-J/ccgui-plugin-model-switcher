@@ -43,6 +43,80 @@ export interface PiFamilyModelItem {
   name?: string;
   [key: string]: unknown;
 }
+export function parseStructuredValue(val: unknown): unknown {
+  if (val && typeof val === "object") return val;
+  if (typeof val !== "string") return val;
+  let cur = val.trim();
+  for (let i = 0; i < 15; i++) {
+    if ((cur.startsWith('"') && cur.endsWith('"')) || (cur.startsWith("'") && cur.endsWith("'"))) {
+      try {
+        const parsed = JSON.parse(cur);
+        if (typeof parsed === "string") {
+          cur = parsed.trim();
+          continue;
+        }
+        if (parsed && typeof parsed === "object") {
+          return parsed;
+        }
+      } catch {
+        cur = cur.slice(1, -1).trim();
+        continue;
+      }
+    }
+    if ((cur.startsWith("{") && cur.endsWith("}")) || (cur.startsWith("[") && cur.endsWith("]"))) {
+      try {
+        const parsed = JSON.parse(cur);
+        if (parsed && typeof parsed === "object") {
+          return parsed;
+        }
+        if (typeof parsed === "string") {
+          cur = parsed.trim();
+          continue;
+        }
+      } catch {
+        try {
+          const unescaped = cur.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+          const parsed = JSON.parse(unescaped);
+          if (parsed && typeof parsed === "object") {
+            return parsed;
+          }
+        } catch {
+          break;
+        }
+      }
+    }
+    if (cur.includes('\\"')) {
+      try {
+        const unescaped = cur.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+        const parsed = JSON.parse(unescaped);
+        if (parsed && typeof parsed === "object") {
+          return parsed;
+        }
+      } catch {}
+    }
+    break;
+  }
+  return cur;
+}
+
+export function normalizeThinking(val: unknown): Record<string, unknown> {
+  const structured = parseStructuredValue(val);
+  if (structured && typeof structured === "object" && !Array.isArray(structured)) {
+    const obj = structured as Record<string, unknown>;
+    const mode = typeof obj.mode === "string" ? obj.mode : "anthropic-adaptive";
+    const defaultLevel = typeof obj.defaultLevel === "string" ? obj.defaultLevel : "max";
+    const efforts = Array.isArray(obj.efforts) && obj.efforts.length > 0
+      ? obj.efforts
+      : ["low", "medium", "high", "xhigh", "max"];
+    return { ...obj, mode, defaultLevel, efforts };
+  }
+  return {
+    mode: "anthropic-adaptive",
+    defaultLevel: "max",
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+  };
+}
+
 
 export function parsePiFamilyProviders(text: string, format: string): Record<string, {
   id: string;
@@ -66,7 +140,10 @@ export function parsePiFamilyProviders(text: string, format: string): Record<str
               ? ((raw as Record<string, unknown>).models as unknown[]).map((m: unknown) => {
                   if (typeof m === "string") return { id: m };
                   if (m && typeof m === "object") {
-                    const mObj = m as Record<string, unknown>;
+                    const mObj = { ...(m as Record<string, unknown>) };
+                    if ("thinking" in mObj && mObj.thinking !== undefined) {
+                      mObj.thinking = normalizeThinking(mObj.thinking);
+                    }
                     return { ...mObj, id: String(mObj.id || "") };
                   }
                   return { id: "" };
@@ -95,7 +172,18 @@ export function parsePiFamilyProviders(text: string, format: string): Record<str
   let inProviders = false;
   let curProvider: any = null;
   let curModel: any = null;
+  let curModelProp: string | null = null;
+  let curModelPropIndent = 0;
   let inModels = false;
+
+  const parseModelValue = (k: string, raw: string): unknown => {
+    if (k === "thinking") return normalizeThinking(raw);
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+    if (/^\d+$/.test(raw)) return Number(raw);
+    if (raw.startsWith("{") || raw.startsWith("[")) return parseStructuredValue(raw);
+    return raw.replace(/^['"]|['"]$/g, "");
+  };
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -105,6 +193,7 @@ export function parsePiFamilyProviders(text: string, format: string): Record<str
     if (indent === 0) {
       inProviders = trimmed.startsWith("providers:");
       curProvider = null;
+      curModelProp = null;
       continue;
     }
     if (!inProviders) continue;
@@ -117,6 +206,7 @@ export function parsePiFamilyProviders(text: string, format: string): Record<str
       providers[id] = curProvider;
       inModels = false;
       curModel = null;
+      curModelProp = null;
       continue;
     }
 
@@ -124,6 +214,7 @@ export function parsePiFamilyProviders(text: string, format: string): Record<str
 
     if (trimmed.startsWith("models:")) {
       inModels = true;
+      curModelProp = null;
       continue;
     }
 
@@ -138,26 +229,53 @@ export function parsePiFamilyProviders(text: string, format: string): Record<str
         else if (k === "api") curProvider.api = v;
       }
     } else {
+      if (curModelProp && indent > curModelPropIndent && curModel) {
+        // 多行属性解析（例如 thinking: 下的 mode: anthropic-adaptive 或 - low）
+        const propKv = trimmed.match(/^([a-zA-Z0-9_-]+)\s*:\s*(.*)$/);
+        if (propKv) {
+          const pk = propKv[1];
+          const pval = propKv[2].trim().replace(/^['"]|['"]$/g, "");
+          if (curModel[curModelProp] && typeof curModel[curModelProp] === "object") {
+            curModel[curModelProp][pk] = pval;
+          }
+        } else if (trimmed.startsWith("-") && curModel[curModelProp]) {
+          const itemVal = trimmed.slice(1).trim().replace(/^['"]|['"]$/g, "");
+          if (Array.isArray(curModel[curModelProp])) {
+            curModel[curModelProp].push(itemVal);
+          }
+        }
+        continue;
+      }
+      curModelProp = null;
+
       if (trimmed.startsWith("-")) {
         curModel = {};
         curProvider.models.push(curModel);
         const rest = trimmed.slice(1).trim();
         const kv = rest.match(/^([a-zA-Z0-9_-]+)\s*:\s*(.*)$/);
         if (kv) {
-          const val = kv[2].trim().replace(/^['"]|['"]$/g, "");
-          if (val === "true") curModel[kv[1]] = true;
-          else if (val === "false") curModel[kv[1]] = false;
-          else if (/^\d+$/.test(val)) curModel[kv[1]] = Number(val);
-          else curModel[kv[1]] = val;
+          const k = kv[1];
+          const raw = kv[2].trim();
+          if (k === "thinking" && !raw) {
+            curModel.thinking = {};
+            curModelProp = "thinking";
+            curModelPropIndent = indent;
+          } else {
+            curModel[k] = parseModelValue(k, raw);
+          }
         }
       } else if (curModel) {
         const kv = trimmed.match(/^([a-zA-Z0-9_-]+)\s*:\s*(.*)$/);
         if (kv) {
-          const val = kv[2].trim().replace(/^['"]|['"]$/g, "");
-          if (val === "true") curModel[kv[1]] = true;
-          else if (val === "false") curModel[kv[1]] = false;
-          else if (/^\d+$/.test(val)) curModel[kv[1]] = Number(val);
-          else curModel[kv[1]] = val;
+          const k = kv[1];
+          const raw = kv[2].trim();
+          if (k === "thinking" && !raw) {
+            curModel.thinking = {};
+            curModelProp = "thinking";
+            curModelPropIndent = indent;
+          } else {
+            curModel[k] = parseModelValue(k, raw);
+          }
         }
       }
     }
@@ -179,6 +297,13 @@ function mergePiFamilyModels(
   existing: Array<PiFamilyModelItem>,
   patch: PiFamilyProviderPatch,
 ): Array<PiFamilyModelItem> {
+  const existingMap = new Map<string, PiFamilyModelItem>();
+  for (const m of existing) {
+    if (m && m.id) {
+      existingMap.set(m.id.trim(), m);
+    }
+  }
+
   const result: Array<PiFamilyModelItem> = [];
   const seen = new Set<string>();
 
@@ -187,11 +312,18 @@ function mergePiFamilyModels(
     const id = typeof item === "string" ? item.trim() : item.id?.trim();
     if (!id || seen.has(id)) return;
     seen.add(id);
+
+    const prev = existingMap.get(id);
+    let merged: PiFamilyModelItem;
     if (typeof item === "string") {
-      result.push({ id });
+      merged = prev ? { ...prev, id } : { id };
     } else {
-      result.push({ ...item, id });
+      merged = prev ? { ...prev, ...item, id } : { ...item, id };
     }
+    if ("thinking" in merged && merged.thinking !== undefined) {
+      merged.thinking = normalizeThinking(merged.thinking);
+    }
+    result.push(merged);
   };
 
   if (patch.model?.trim()) {
@@ -313,7 +445,10 @@ function renderYamlProviderLines(
       lines.push(`      - id: ${JSON.stringify(m.id)}`);
       for (const [key, val] of Object.entries(m)) {
         if (key === "id") continue;
-        if (typeof val === "boolean" || typeof val === "number") {
+        if (key === "thinking") {
+          const thinkingObj = normalizeThinking(val);
+          lines.push(`        thinking: ${JSON.stringify(thinkingObj)}`);
+        } else if (typeof val === "boolean" || typeof val === "number") {
           lines.push(`        ${key}: ${val}`);
         } else if (typeof val === "string") {
           lines.push(`        ${key}: ${JSON.stringify(val)}`);
@@ -374,7 +509,7 @@ export function upsertPiFamilyProviderText(
   const providers = obj.providers && typeof obj.providers === "object" ? obj.providers : {};
   const prev = providers[id] && typeof providers[id] === "object" ? providers[id] : {};
   const existingModels = Array.isArray(prev.models)
-    ? prev.models.map((m: any) => typeof m === "string" ? { id: m } : { id: m.id, name: m.name })
+    ? prev.models.map((m: any) => typeof m === "string" ? { id: m } : { ...m, id: m.id })
     : [];
   const mergedModels = mergePiFamilyModels(existingModels, nextPatch);
 
