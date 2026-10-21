@@ -4,7 +4,7 @@ import type { PluginState } from "./types";
 import { CliModelFlyoutMenu } from "./components/CliModelFlyoutMenu";
 import { GuiThemeManager } from "./theme-manager";
 import { ProjectEngineIcon, inferModelEngine } from "./icons";
-import { CLI_DISPLAY_NAMES, prefetchSystemSnapshot, qualifyEngineModel, updatePiFamilyModelEffort } from "./system-bridge";
+import { CLI_DISPLAY_NAMES, isPluginProviderId, pluginProviderId, prefetchSystemSnapshot, qualifyEngineModel, updatePiFamilyModelEffort } from "./system-bridge";
 import { DEFAULT_STATE } from "./constants";
 import { useSessionDisplay, withSessionDisplay } from "./session-display";
 import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost, repairLegacyContextSelections } from "./sync-host";
@@ -105,7 +105,16 @@ export default function activate(ctx: PluginContext): Disposer {
       const record = savedState.sessionChannels?.[stableKey];
       const targetEffort = record?.effort || savedState.effort;
       const engine = record?.selectedCli || sessionDisplay.selectedCli;
-      const providerId = record?.selectedProviderId;
+      const pluginCh = savedState.pluginChannels?.[engine]?.find(c =>
+        c.id === record?.activePluginChannelId
+        || c.id === record?.selectedProviderId
+        || pluginProviderId(c.id) === record?.selectedProviderId
+      );
+      const isPluginRec = Boolean(pluginCh || record?.activeChannelType === "plugin" || (record?.selectedProviderId && isPluginProviderId(record.selectedProviderId)));
+      const rawProviderId = record?.selectedProviderId;
+      const providerId = isPluginRec
+        ? (pluginCh ? pluginProviderId(pluginCh.id) : (rawProviderId ? pluginProviderId(rawProviderId) : undefined))
+        : rawProviderId;
       const model = record?.selectedModel;
 
       if (!model && !providerId && !targetEffort) return;
@@ -119,11 +128,10 @@ export default function activate(ctx: PluginContext): Disposer {
           }
           if (model || targetEffort) {
             // 找到该渠道对象用于 qualify（插件渠道需要加前缀）
-            const pluginCh = savedState.pluginChannels?.[engine]?.find(c => c.id === record?.activePluginChannelId);
-            const channelRef = pluginCh ? { id: pluginCh.id, isPlugin: true } : (providerId ? { id: providerId } : null);
+            const channelRef = pluginCh ? { id: pluginCh.id, isPlugin: true } : (providerId ? { id: providerId, isPlugin: isPluginRec } : null);
             const hostModel = model ? qualifyEngineModel(engine, channelRef, model) : "";
             if (cancelled || prevStableKey.current !== stableKey) return;
-            if (targetEffort && (engine === "omp" || engine === "pi") && hostModel) {
+            if ((engine === "omp" || engine === "pi") && hostModel && targetEffort) {
               await updatePiFamilyModelEffort(engine, channelRef, hostModel, targetEffort, record?.enable1MContext).catch(() => {});
             }
             await applyModelSelectionToHost({

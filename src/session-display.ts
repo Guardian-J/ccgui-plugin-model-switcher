@@ -182,9 +182,21 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
     // 否则 flyout 的首次记录写入会把这个错误值固化成本会话的渠道
     const hasSessionRecords = !!state.sessionChannels && Object.keys(state.sessionChannels).length > 0;
     if (sessionRecord) {
-      finalProviderId = sessionRecord.selectedProviderId || "";
-      activeChannelType = sessionRecord.activeChannelType || "system";
-      activePluginChannelId = sessionRecord.activePluginChannelId;
+      const recordPluginCh = state.pluginChannels?.[display.selectedCli]?.find(item => {
+        const withPrefix = pluginProviderId(item.id);
+        return item.id === sessionRecord.activePluginChannelId
+          || withPrefix === sessionRecord.selectedProviderId
+          || item.id === sessionRecord.selectedProviderId;
+      });
+      if (recordPluginCh) {
+        activeChannelType = "plugin";
+        activePluginChannelId = recordPluginCh.id;
+        finalProviderId = pluginProviderId(recordPluginCh.id);
+      } else {
+        finalProviderId = sessionRecord.selectedProviderId || "";
+        activeChannelType = sessionRecord.activeChannelType || (finalProviderId && isPluginProviderId(finalProviderId) ? "plugin" : "system");
+        activePluginChannelId = sessionRecord.activePluginChannelId;
+      }
     } else if (hasSessionRecords) {
       // 清空后交由宿主重新确定（useSessionDisplay 每秒回读）
       finalProviderId = "";
@@ -192,14 +204,25 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
       activePluginChannelId = undefined;
     } else {
       // 无对话级记录，保留当前状态（loadChannels 可能已回填或用户已选择）
-      finalProviderId = state.selectedProviderId || "";
-      // 根据 selectedProviderId 类型确定 activeChannelType，保持状态一致
-      if (finalProviderId && isPluginProviderId(finalProviderId)) {
+      const fallbackPluginCh = state.pluginChannels?.[display.selectedCli]?.find(item => {
+        const withPrefix = pluginProviderId(item.id);
+        return item.id === state.activePluginChannelId
+          || withPrefix === state.selectedProviderId
+          || item.id === state.selectedProviderId;
+      });
+      if (fallbackPluginCh && (state.activeChannelType === "plugin" || isPluginProviderId(state.selectedProviderId || ""))) {
         activeChannelType = "plugin";
-        activePluginChannelId = state.activePluginChannelId;
+        activePluginChannelId = fallbackPluginCh.id;
+        finalProviderId = pluginProviderId(fallbackPluginCh.id);
       } else {
-        activeChannelType = "system";
-        activePluginChannelId = undefined;
+        finalProviderId = state.selectedProviderId || "";
+        if (finalProviderId && isPluginProviderId(finalProviderId)) {
+          activeChannelType = "plugin";
+          activePluginChannelId = state.activePluginChannelId;
+        } else {
+          activeChannelType = "system";
+          activePluginChannelId = undefined;
+        }
       }
     }
   }

@@ -543,12 +543,32 @@ export async function getSystemProviderChannels(
       section?.providers || {},
     )
       .filter(
-        ([id]) =>
-          ![
-            NATIVE_PROVIDER_ID,
-            LEGACY_NATIVE_PROVIDER_ID,
-            "__disabled__",
-          ].includes(id) && !isPluginProviderId(id),
+        ([id, raw]) => {
+          if (
+            [
+              NATIVE_PROVIDER_ID,
+              LEGACY_NATIVE_PROVIDER_ID,
+              "__disabled__",
+            ].includes(id) ||
+            isPluginProviderId(id)
+          ) {
+            return false;
+          }
+          // omp / pi 旧版占位逻辑可能在 config.json 中留下仅含 { name: id } 的空壳条目
+          // 或未带前缀的 custom_<timestamp> 孤儿条目，不应作为真实系统渠道渲染
+          if (engine === "omp" || engine === "pi") {
+            const name = ((raw?.name as string) || "").trim();
+            const baseUrl = ((raw?.baseUrl as string) || "").trim();
+            const apiKey = ((raw?.apiKey as string) || "").trim();
+            const model = ((raw?.model as string) || "").trim();
+            const hasSettings = raw?.settingsConfig && Object.keys(raw.settingsConfig as object).length > 0;
+            const isPlaceholderShell = !baseUrl && !apiKey && !model && !hasSettings && (!name || name === id);
+            if (isPlaceholderShell || /^custom_\d+$/.test(id)) {
+              return false;
+            }
+          }
+          return true;
+        },
       )
       .map(([id, raw]) => {
         const name = (raw?.name as string) || id;
@@ -556,7 +576,6 @@ export async function getSystemProviderChannels(
         const apiKey = (raw?.apiKey as string) || "";
         const model = (raw?.model as string) || "";
         const remark = (raw?.remark as string) || "";
-
         let settingsConfig = raw?.settingsConfig as Record<string, unknown>;
         // Claude CLI 所有系统渠道默认注入 attribution 和 ENABLE_TOOL_SEARCH
         if (engine === "claude") {
@@ -706,8 +725,9 @@ export async function getSystemProviderChannels(
       channels.unshift(nativeChannel);
     }
 
+    const nonPluginChannels = channels.filter(c => !isPluginProviderId(c.id));
     const effectiveCurrentId = (engine === "omp" || engine === "pi") && currentId === NATIVE_PROVIDER_ID
-      ? (channels.find(c => c.isCurrent)?.id || channels[0]?.id || null)
+      ? (nonPluginChannels.find(c => c.isCurrent)?.id || nonPluginChannels[0]?.id || null)
       : currentId;
 
     return { current: effectiveCurrentId, channels };
@@ -855,7 +875,8 @@ export function withoutPluginTwinChannels(
     for (const alias of pluginIdAliases(ch.id)) twins.add(alias);
   }
   if (twins.size === 0) return independentChannels;
-  return independentChannels.filter(ch => ch.id === keepId || !twins.has(ch.id));
+  const keep = keepId && !twins.has(keepId) ? keepId : null;
+  return independentChannels.filter(ch => ch.id === keep || !twins.has(ch.id));
 }
 
 /**

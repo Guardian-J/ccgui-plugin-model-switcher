@@ -13,6 +13,7 @@ import {
   withoutPluginTwinChannels,
   pluginProviderId,
   updatePiFamilyModelEffort,
+  getSystemProviderChannels,
 } from './system-bridge';
 import { invokeHost } from './host-transport';
 
@@ -235,10 +236,12 @@ describe('system-bridge', () => {
       expect(withoutPluginTwinChannels([twinAddr], [pluginGrok])).toEqual([twinAddr]);
     });
 
-    it('宿主当前选中的条目即使重复也保留，避免 activeChannel 查不到', () => {
-      expect(withoutPluginTwinChannels([grokYaml], [pluginGrok], 'custom_1')).toEqual([grokYaml]);
+    it('插件孪生条目即使等于 keepId 也必须剔除，仅非孪生条目可受 keepId 保护', () => {
+      expect(withoutPluginTwinChannels([grokYaml], [pluginGrok], 'custom_1')).toEqual([]);
+      expect(withoutPluginTwinChannels([grokYaml], [pluginGrok], pluginProviderId('custom_1'))).toEqual([]);
+      const realHost = ch({ id: 'google', name: 'Google' });
+      expect(withoutPluginTwinChannels([realHost, grokYaml], [pluginGrok], 'google')).toEqual([realHost]);
     });
-
     it('插件渠道缺 id 时不判定为重复', () => {
       expect(withoutPluginTwinChannels([grokYaml], [{ id: '' }])).toEqual([grokYaml]);
     });
@@ -271,6 +274,57 @@ describe('system-bridge', () => {
         '0b08bc2f-19ba-40b2-ba03-727dcac41fb2',
         'other-plugin',
       ]);
+    });
+  });
+
+  describe('getSystemProviderChannels OMP/PI 空壳与孤儿过滤', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    it('过滤掉 OMP config.json 中的 { name: id } 空壳占位条目与裸 custom_<timestamp> 孤儿条目', async () => {
+      vi.mocked(invokeHost).mockImplementation(async (cmd) => {
+        if (cmd === 'get_cli_config') {
+          return {
+            omp: {
+              providers: {
+                custom_1792114533998: { name: 'custom_1792114533998' },
+                custom_1792387731129: { name: 'custom_1792387731129' },
+                'plugin_model-switcher_custom_1792114533998': {
+                  name: 'sup',
+                  baseUrl: 'https://api.example.com',
+                  apiKey: 'sk-sup',
+                },
+                'real-host-provider': {
+                  name: 'Real Host',
+                  baseUrl: 'https://host.example.com',
+                  apiKey: 'sk-host',
+                },
+              },
+              current: 'plugin_model-switcher_custom_1792114533998',
+            },
+          };
+        }
+        if (cmd === 'pi_family_models_config_read') {
+          return {
+            text: `providers:\n  plugin_model-switcher_custom_1792114533998:\n    name: "sup"\n    baseUrl: "https://api.example.com"\n    api: openai-completions\n    models:\n      - id: "gpt-4o"\n`,
+            file: { format: 'yaml' },
+          };
+        }
+        if (cmd === 'pi_family_auth_list') {
+          return { providers: [{ id: 'google', state: 'configured', keySource: 'stored', maskedKey: 'AIza***' }] };
+        }
+        return {};
+      });
+
+      const res = await getSystemProviderChannels('omp');
+      expect(res.current).toBe('plugin_model-switcher_custom_1792114533998');
+      const ids = res.channels.map((c) => c.id);
+      expect(ids).not.toContain('custom_1792114533998');
+      expect(ids).not.toContain('custom_1792387731129');
+      expect(ids).toContain('real-host-provider');
+      expect(ids).toContain('google');
+      expect(ids).toContain('plugin_model-switcher_custom_1792114533998');
     });
   });
 });

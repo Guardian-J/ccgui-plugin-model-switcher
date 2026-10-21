@@ -1215,11 +1215,14 @@ export async function applyChannelSelectionToHost(params: {
   // set_current_provider 会严格校验 providers 列表并报错 "provider {id} not found"。
   // 切换前先确保该渠道在宿主完成轻量占位登记，避免报 provider不存在。
   if ((engine === "omp" || engine === "pi") && providerId && providerId !== NATIVE_PROVIDER_ID && providerId !== "__local_config_toml__") {
-    await invokeHost("upsert_provider", {
-      engine,
-      id: providerId,
-      json: { name: providerId },
-    }).catch(() => {});
+    const cliConfig = await invokeHost("get_cli_config").catch(() => null) as Record<string, { providers?: Record<string, unknown> }> | null;
+    if (!cliConfig?.[engine]?.providers?.[providerId]) {
+      await invokeHost("upsert_provider", {
+        engine,
+        id: providerId,
+        json: { name: providerId },
+      }).catch(() => {});
+    }
   }
   if (callbacks.onChannelChange) {
     // 渠道切换不改派引擎，任何会话字段变化都要中止轮询

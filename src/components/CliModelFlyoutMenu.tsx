@@ -276,8 +276,21 @@ export function CliModelFlyoutMenu({
       // 仅在完全无渠道选择时，用 res.current 作为兜底（让用户有个起点）
       setState((prev) => {
         if (prev.selectedProviderId || prev.activeChannelType === "plugin") return prev;
-        const hostId = res.current && !isPluginProviderId(res.current) ? res.current : null;
-        return hostId ? { ...prev, selectedProviderId: hostId, activeChannelType: "system" } : prev;
+        if (!res.current) return prev;
+        if (isPluginProviderId(res.current)) {
+          const pluginList = prev.pluginChannels?.[engine] || [];
+          const matched = pluginList.find(
+            (ch) => pluginProviderId(ch.id) === res.current || ch.id === res.current,
+          );
+          return {
+            ...prev,
+            selectedProviderId: res.current,
+            activeChannelType: "plugin",
+            activePluginChannelId: matched?.id ?? res.current.replace(/^plugin_model-switcher_/, ""),
+            activeChannelName: matched?.name ?? prev.activeChannelName,
+          };
+        }
+        return { ...prev, selectedProviderId: res.current, activeChannelType: "system" };
       });
     } catch (e) {
       console.warn("加载系统供应商失败:", e);
@@ -360,7 +373,16 @@ export function CliModelFlyoutMenu({
     [state.pluginChannels, activeEngine, pluginYamlChannels],
   );
 
-  // 去掉与插件行同 id 的重复 YAML 行（同一渠道在 YAML 里有裸 key + plugin_ 两份）；同名不同 id 保留
+  // 去掉与插件行同 id 的重复行（同一渠道在宿主/YAML 里有裸 key + plugin_ 两份）；同名不同 id 保留
+  const cleanSystemChannels = useMemo(
+    () => withoutPluginTwinChannels(
+      systemChannels,
+      pluginCustomChannels,
+      state.selectedProviderId || currentChannelId,
+    ),
+    [systemChannels, pluginCustomChannels, state.selectedProviderId, currentChannelId],
+  );
+
   const yamlSystemChannels = useMemo(
     () => withoutPluginTwinChannels(
       yamlHostChannels,
@@ -372,8 +394,8 @@ export function CliModelFlyoutMenu({
 
   // 系统 tab 的完整列表：宿主/原生渠道 + CLI 自己 YAML 里的供应商
   const allSystemChannels = useMemo(
-    () => [...systemChannels, ...yamlSystemChannels],
-    [systemChannels, yamlSystemChannels],
+    () => [...cleanSystemChannels, ...yamlSystemChannels],
+    [cleanSystemChannels, yamlSystemChannels],
   );
 
   const [channelTab, setChannelTab] = useState<"system" | "plugin">(() => {
@@ -880,15 +902,16 @@ export function CliModelFlyoutMenu({
     const prevChannelId = currentChannelId;
     selectionPending.current = true;
     setSwitching(true);
+    const hostProviderId = pluginProviderId(channel.id);
     const nextState: PluginState = {
       ...state,
       activeChannelType: "plugin",
       activePluginChannelId: channel.id,
-      selectedProviderId: channel.id,
+      selectedProviderId: hostProviderId,
       selectedModel: state.selectedModel ? displayEngineModel(activeEngine, pluginChannel, hostModel) : "",
       activeChannelName: channel.name,
     };
-    setCurrentChannelId(channel.id);
+    setCurrentChannelId(hostProviderId);
     setState(nextState);
     try {
       await applyCustomPluginChannelToEngine(ctx, activeEngine, channel);
