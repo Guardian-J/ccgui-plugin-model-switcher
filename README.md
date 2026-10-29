@@ -6,7 +6,7 @@
 
 插件使用宿主发现的 CLI 和供应商配置，不内置个人供应商 ID、API Key 或本机路径。面向 Windows、macOS、Linux，使用同一份构建产物，安装时无需修改宿主源代码。
 
-> **供应商切换：** 插件切换渠道时，新版宿主使用 `set_current_provider` 命令，旧版宿主使用 `onChannelChange` 回调；等待宿主确认后再应用模型。创建、编辑和删除独立渠道会同步宿主供应商列表。独立渠道支持全部 11 种 CLI 引擎（包括 Claude / Codex / Kimi / Grok / OMP / PI / DSH / AGY / OpenCode / Qoder / Qoder-CN 等）。系统渠道详情只读。OMP / PI 的独立渠道还会写入 `models.yml` / `models.json`，并需指定 `api` 协议。Claude CLI 的所有渠道（系统渠道、原生配置、独立渠道）会自动注入 `attribution` 元数据和 `ENABLE_TOOL_SEARCH` 环境变量，确保工具搜索功能和提交归属信息的一致性。
+> **供应商切换：** 插件切换渠道时，新版宿主使用 `set_current_provider` 命令，旧版宿主使用 `onChannelChange` 回调；等待宿主确认后再应用模型。创建、编辑和删除独立渠道会同步宿主供应商列表。独立渠道支持全部 13 种 CLI 引擎（包括 Claude / Codex / Kimi / Grok / OMP / PI / DSH / AGY / OpenCode / Qoder / Qoder-CN / MiniMax Code / CodeBuddy 等）。系统渠道详情只读。OMP / PI 的独立渠道还会写入 `models.yml` / `models.json`，并需指定 `api` 协议。Claude CLI 的所有渠道（系统渠道、原生配置、独立渠道）会自动注入 `attribution` 元数据和 `ENABLE_TOOL_SEARCH` 环境变量，确保工具搜索功能和提交归属信息的一致性。
 
 ## 目录
 
@@ -25,7 +25,7 @@
 
 从聊天输入框的模型按钮打开”模型与渠道”弹窗。
 
-- 识别宿主提供的 11 种 CLI，弹窗底部仅展示本机已安装且已启用的 CLI 引擎，界面更加紧凑清爽；实际可用项取决于宿主及本机安装状态。
+- 识别宿主提供的 13 种 CLI，弹窗底部仅展示本机已安装且已启用的 CLI 引擎，界面更加紧凑清爽；实际可用项取决于宿主及本机安装状态。
 - CLI 引擎列表支持鼠标滚轮水平滚动，方便快速浏览和切换已安装的 CLI。
 - 根据当前会话展示 CLI、模型、推理强度和 1M 上下文标记，状态栏同步显示当前会话信息。新开会话首次对话（sessionId 为空）默认不预选任何模型，保持未选择状态，由用户自主决定。
 - 尚未发送消息的新会话可以选择其他已安装的 CLI，选择模型后应用到该会话；已有会话或首条消息发送中禁止切换 CLI 类型，未安装的 CLI 不可选。
@@ -38,16 +38,16 @@
 - 支持推理强度；Claude CLI 通过 `[1m]` 选择语法开启 1M 扩展；OMP / PI 开启 1M 时自动向 `models.yml` / `models.json` 写入 `contextWindow`（1,000,000 或 1,048,576）与 `maxTokens`（65,536）；Codex、OMP、PI 保留原始模型 ID（避免报 Model not found 错误），通过会话上下文实际用量与缓存双向联动，保持开关与用量面板状态严格同步。
 - 按宿主权威目录和模型协议元数据校验兼容性。模型名称、品牌或普通 `/models` 列表不能证明协议；缺少证据时允许自定义别名，实际调用是否成功由 CLI 和服务端决定。
 
-模型选择会同步宿主会话状态和应用默认模型设置。已有其他会话的显式模型覆盖保持独立，没有显式覆盖的会话可能跟随应用默认值。
+模型选择会同步宿主会话状态和应用默认模型设置。已有其他会话的显式模型覆盖保持独立，没有显式覆盖的会话可能跟随应用默认值。当前回合仍在生成时切换，模型与档位只记到下一轮：进行中的回合与其历史消息元信息（「模型 / 推理档位」）保持实际运行的那一套，不会被改写成刚选的值。
 
 ### 供应商与独立渠道
 
 | 渠道来源或操作 | 当前行为 |
 | --- | --- |
 | 系统渠道 | 显示并可选中宿主已配置的供应商；OMP / PI 自动呈现 models.yml / models.json 中配置的供应商及来自 agent.db / auth.json 的已授权凭证通道；详情只读，API Key 默认掩码，可点眼睛查看明文；选中后同步宿主当前供应商 |
-| CLI 原生配置 | 显示 Claude、Codex、Kimi、Grok 原生配置入口（DSH 为宿主服务配置）；OMP / PI 不设单点空白原生项，由系统凭证与供应商直接承载。详情只读，从宿主提供的 CLI 原生文件读取 Base URL、API Key 和模型，Key 默认掩码，可点眼睛查看 |
+| CLI 原生配置 | 显示 Claude、Codex、Kimi、Grok、CodeBuddy 原生配置入口（DSH 为宿主服务配置）；OMP / PI 不设单点空白原生项，由系统凭证与供应商直接承载。详情只读，从宿主提供的 CLI 原生文件读取 Base URL、API Key 和模型，Key 默认掩码，可点眼睛查看 |
 | 独立渠道 | 在插件中创建、编辑、保存名称、Base URL、API Key 和可选默认模型；同步到宿主供应商列表（ID 前缀 `plugin_model-switcher_`）；Key 同样默认掩码、可点眼睛查看。omp / pi 还需选择协议类型，并写入 `models.yml` / `models.json` |
-| 切换渠道 | 同步宿主当前会话渠道；新版宿主在发送时将 Claude / Codex / Kimi / Grok 的渠道配置应用到本次 CLI 进程；OMP / PI 支持已授权凭证通道、系统供应商与独立渠道，使用完整的供应商/模型 ID |
+| 切换渠道 | 同步宿主当前会话渠道；新版宿主在发送时将 Claude / Codex / Kimi / Grok / CodeBuddy 的渠道配置应用到本次 CLI 进程；OMP / PI 支持已授权凭证通道、系统供应商与独立渠道，使用完整的供应商/模型 ID |
 | 删除独立渠道 | 删除插件记录，并从宿主供应商列表移除；OMP / PI 同时从模型配置移除该供应商；若删的是当前项，切回可用的系统渠道或下一个可用渠道 |
 
 CLI 配置如何应用取决于宿主版本：早期宿主可能改写原生文件，新版宿主在发送时注入渠道配置。Claude 的原生 settings 覆盖问题、Kimi 的环境变量及原生模型别名覆盖问题，需要宿主包含对应修复；仅更新插件无法修正旧宿主启动的 CLI 请求。OMP / PI 独立渠道仍会改写模型配置文件。用户主动执行的提示词清洗另见下文。
@@ -201,7 +201,7 @@ pnpm preview:ui
 
 仓库中的 `/scripts/check-remote-host.html` 可直接在 Vite 预览服务器中运行，覆盖无 Tauri 接口的远程读取、文本及二进制消息、断线重连、会话定位、浏览器保存回退和窄屏弹窗；使用模拟通道和假凭据，不连接真实宿主。
 
-`/scripts/check-channel-switch.html` 验证渠道确认、重复点击、失败重试和保存顺序；加上 `?engine=dsh`（或 `agy`、`opencode`、`qoder`、`qoder-cn`）验证不支持的渠道被禁用、原生入口可选及最后一个旧渠道可删除。
+`/scripts/check-channel-switch.html` 验证渠道确认、重复点击、失败重试和保存顺序；加上 `?engine=dsh`（或 `agy`、`opencode`、`qoder`、`qoder-cn`、`minimax`、`codebuddy`）验证不支持的渠道被禁用、原生入口可选及最后一个旧渠道可删除。
 
 安装 `agent-browser` 并准备浏览器后，可执行：
 

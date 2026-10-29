@@ -15,6 +15,8 @@ import cohereIcon from "./assets/model-icons/cohere.svg";
 import perplexityIcon from "./assets/model-icons/perplexity.svg";
 import opencodeIcon from "./assets/model-icons/opencode.svg";
 import qoderIcon from "./assets/model-icons/qoder.svg";
+import codebuddyIcon from "./assets/model-icons/codebuddy.svg";
+import minimaxCodeIcon from "./assets/model-icons/minimax-code.png";
 
 /**
  * CLI Engine Icons
@@ -392,6 +394,9 @@ export function inferModelEngine(name: string): string | null {
   ) {
     return "agy";
   }
+  if (/\b(codebuddy|cbc)\b/.test(lower)) {
+    return "codebuddy";
+  }
   return null;
 }
 
@@ -643,6 +648,9 @@ const RASTER_ICONS: Record<string, { src: string; alt: string }> = {
   agy: { src: geminiIcon, alt: "Antigravity CLI" },
   opencode: { src: opencodeIcon, alt: "OpenCode" },
   qoder: { src: qoderIcon, alt: "Qoder CLI" },
+  codebuddy: { src: codebuddyIcon, alt: "CodeBuddy CLI" },
+  // MiniMax Code CLI 用应用自身徽标；扁平 minimax 标记保留给模型品牌
+  "minimax-code": { src: minimaxCodeIcon, alt: "MiniMax Code" },
 };
 
 function FallbackEngineIcon({ size }: { size: number }) {
@@ -667,6 +675,14 @@ function FallbackEngineIcon({ size }: { size: number }) {
 
 function resolveEngineIcon(norm: string, size: number) {
   // Check RASTER_ICONS first (brand icons loaded as <img>)
+  if (norm === "minimax") {
+    const raster = RASTER_ICONS["minimax-code"];
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
+  if (norm.includes("codebuddy")) {
+    const raster = RASTER_ICONS.codebuddy;
+    return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;
+  }
   if (norm.includes("claude")) {
     const raster = RASTER_ICONS.claude;
     return <img src={raster.src} alt={raster.alt} width={size} height={size} className="shrink-0" />;

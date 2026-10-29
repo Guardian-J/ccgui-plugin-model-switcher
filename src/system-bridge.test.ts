@@ -14,13 +14,18 @@ import {
   pluginProviderId,
   updatePiFamilyModelEffort,
   getSystemProviderChannels,
+  parseNativeOfficialFields,
 } from './system-bridge';
 import { invokeHost } from './host-transport';
 
-vi.mock('./host-transport', () => ({
-  invokeHost: vi.fn(async () => ({})),
-  isRemoteHost: vi.fn(() => false),
-}));
+vi.mock('./host-transport', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    invokeHost: vi.fn(async () => ({})),
+    isRemoteHost: vi.fn(() => false),
+  };
+});
 import type { SystemProviderChannel } from './types';
 
 function ch(partial: Partial<SystemProviderChannel> & Pick<SystemProviderChannel, 'id' | 'name'>): SystemProviderChannel {
@@ -41,6 +46,22 @@ describe('system-bridge', () => {
       expect(CLI_DISPLAY_NAMES.opencode).toBe('OpenCode');
       expect(CLI_DISPLAY_NAMES.qoder).toBe('Qoder CLI');
       expect(CLI_DISPLAY_NAMES['qoder-cn']).toBe('Qoder CLI CN');
+    });
+  });
+
+  describe('parseNativeOfficialFields codebuddy', () => {
+    const file = (content: unknown) => [{ path: 'C:\\u\\.codebuddy\\settings.json', format: 'json', exists: true, content: JSON.stringify(content) }];
+
+    it('读取 env 中的 URL / Key，顶层 model 优先于 CODEBUDDY_MODEL', () => {
+      expect(parseNativeOfficialFields('codebuddy', file({
+        model: 'glm-5',
+        env: { CODEBUDDY_BASE_URL: 'https://copilot.tencent.com/v1', CODEBUDDY_API_KEY: 'sk-cb', CODEBUDDY_MODEL: 'deepseek-v4' },
+      }) as never)).toEqual({ baseUrl: 'https://copilot.tencent.com/v1', apiKey: 'sk-cb', model: 'glm-5' });
+    });
+
+    it('无顶层 model 时回退 env.CODEBUDDY_MODEL', () => {
+      expect(parseNativeOfficialFields('codebuddy', file({ model: '  ', env: { CODEBUDDY_MODEL: 'deepseek-v4' } }) as never).model)
+        .toBe('deepseek-v4');
     });
   });
 
@@ -380,5 +401,41 @@ describe('system-bridge', () => {
 
       expect(writtenText).toContain('"defaultLevel":"medium"');
     });
-  });
 
+    it('并发调用 updatePiFamilyModelEffort 时按序读取-修改-写入，后一次不会用过期 YAML 覆盖前一次修改', async () => {
+      let currentYaml = `providers:\n  test-provider:\n    name: "test"\n    baseUrl: "https://api.test.com"\n    api: anthropic-messages\n    models:\n      - id: "m1"\n      - id: "m2"\n`;
+      let releaseFirstRead!: () => void;
+      const firstReadGate = new Promise<void>((resolve) => {
+        releaseFirstRead = resolve;
+      });
+      let readCount = 0;
+
+      vi.mocked(invokeHost).mockImplementation(async (cmd, args?: Record<string, unknown>) => {
+        if (cmd === 'pi_family_models_config_read') {
+          readCount += 1;
+          const snapshot = currentYaml;
+          if (readCount === 1) {
+            await firstReadGate;
+          }
+          return { text: snapshot, file: { format: 'yaml' } };
+        }
+        if (cmd === 'pi_family_models_config_write') {
+          currentYaml = String(args?.text ?? '');
+          return {};
+        }
+        return {};
+      });
+
+      const channel = { id: 'test-provider', name: 'test', baseUrl: 'https://api.test.com' };
+      const p1 = updatePiFamilyModelEffort('omp', channel, 'm1', 'low');
+      const p2 = updatePiFamilyModelEffort('omp', channel, 'm2', 'ultra');
+
+      await Promise.resolve();
+      await Promise.resolve();
+      releaseFirstRead();
+      await Promise.all([p1, p2]);
+
+      expect(currentYaml).toContain('"defaultLevel":"low"');
+      expect(currentYaml).toContain('"defaultLevel":"max"');
+    });
+  });

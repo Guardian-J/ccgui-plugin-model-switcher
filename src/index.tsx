@@ -1,3 +1,4 @@
+import { createStateStore } from "./state-store";
 import { React, useState, useEffect, useRef, initReact } from "./react-context";
 import type { PluginContext, Disposer } from "./ccgui-plugin";
 import type { PluginState } from "./types";
@@ -7,7 +8,7 @@ import { ProjectEngineIcon, inferModelEngine } from "./icons";
 import { CLI_DISPLAY_NAMES, isPluginProviderId, pluginProviderId, prefetchSystemSnapshot, qualifyEngineModel, updatePiFamilyModelEffort } from "./system-bridge";
 import { DEFAULT_STATE } from "./constants";
 import { useSessionDisplay, withSessionDisplay } from "./session-display";
-import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost, repairLegacyContextSelections } from "./sync-host";
+import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost, disposeDeferredSelections, flushDeferredSelectionsFor, repairLegacyContextSelections } from "./sync-host";
 import { compactPluginModelLabel, installCompactModelLabels } from "./model-display";
 import { disposeHostTransport } from "./host-transport";
 import { withRemoteStorage } from "./remote-storage";
@@ -28,7 +29,7 @@ export default function activate(ctx: PluginContext): Disposer {
     const now = Date.now();
     if (now - lastFocusProbe > 5_000) {
       lastFocusProbe = now;
-      prefetchSystemSnapshot(currentState.selectedCli, true);
+      prefetchSystemSnapshot(stateStore.get().selectedCli, true);
     }
   };
   if (typeof window !== "undefined") {
@@ -39,43 +40,25 @@ export default function activate(ctx: PluginContext): Disposer {
   const themeManager = new GuiThemeManager(ctx);
   let alive = true;
 
-  let currentState: PluginState = { ...DEFAULT_STATE };
-  const listeners = new Set<() => void>();
-
-  const notify = () => {
-    listeners.forEach((fn) => fn());
-  };
+  const stateStore = createStateStore({ ...DEFAULT_STATE }, (next) => ctx.storage.set("state", next));
 
   ctx.storage
     .get<PluginState>("state")
     .then((saved) => {
       if (!alive) return;
-      if (saved) {
-        currentState = { ...DEFAULT_STATE, ...saved };
-        notify();
-      }
+      stateStore.hydrate(saved ? { ...DEFAULT_STATE, ...saved } : null);
       if (saved?.enableTheme !== false) void themeManager.init();
     })
     .catch((err) => {
       console.warn("[model-switcher] 读取配置失败:", err);
-      if (alive) void themeManager.init();
+      if (!alive) return;
+      stateStore.hydrate(null);
+      void themeManager.init();
     });
 
-  const saveState = async (nextState: PluginState) => {
-    await ctx.storage.set("state", nextState);
-    currentState = nextState;
-    notify();
-  };
-
   function useCurrentState(): PluginState {
-    const [state, setState] = useState(currentState);
-    useEffect(() => {
-      const listener = () => setState({ ...currentState });
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    }, []);
+    const [state, setState] = useState(stateStore.get());
+    useEffect(() => stateStore.subscribe(() => setState({ ...stateStore.get() })), []);
     return state;
   }
 
@@ -240,7 +223,7 @@ export default function activate(ctx: PluginContext): Disposer {
             state={state}
             themeManager={themeManager}
             triggerRef={buttonRef}
-            onSave={saveState}
+            onSave={stateStore.save}
             onClose={() => setOpen(false)}
           />
         )}
@@ -250,6 +233,10 @@ export default function activate(ctx: PluginContext): Disposer {
 
   const disposers: Disposer[] = [
     disposeHostTransport,
+    disposeDeferredSelections,
+    // 生成中切换的模型/档位延后到本轮结束落地。`usage://done`（SDK 0.3.8 起，
+    // 引擎 done 事件透传）不依赖 Fiber 找 store，是权威的回合结束信号。
+    ctx.events.on("usage://done", flushDeferredSelectionsFor),
     installCompactModelLabels(),
     // 注册到输入框工具栏 cliMenu 插槽（宿主 SDK 0.3.11 起，registerComposerSlot
     // 与 registerComposerStatusItem 共享同一权限 ui:composer-status；此前
@@ -264,6 +251,7 @@ export default function activate(ctx: PluginContext): Disposer {
     // 释放主题管理器
     () => {
       alive = false;
+      stateStore.dispose();
       themeManager.dispose();
     },
     // 清理窗口聚焦监听

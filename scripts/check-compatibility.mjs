@@ -889,7 +889,7 @@ menu.memoizedProps.onChannelChange = (engine, providerId) => {
   // The host callback returns void while its backend mutation is still pending.
   setTimeout(() => { menu.memoizedProps.selectedChannels = { [engine]: providerId }; }, 40);
 };
-for (const engine of ['dsh', 'agy', 'opencode', 'qoder', 'qoder-cn']) {
+for (const engine of ['dsh', 'agy', 'opencode', 'qoder', 'qoder-cn', 'minimax', 'codebuddy']) {
   footer.memoizedProps.active = null;
   storage.set(activeKey, 'null');
   const storedBefore = [...storage];

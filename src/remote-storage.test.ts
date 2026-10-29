@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { withRemoteStorage } from './remote-storage';
+import { isRemoteHost } from './host-transport';
 import type { PluginContext } from './ccgui-plugin';
 
-vi.mock('./host-transport', () => ({
-  isRemoteHost: vi.fn(() => false),
-}));
+vi.mock('./host-transport', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    isRemoteHost: vi.fn(() => false),
+  };
+});
 
 describe('remote-storage', () => {
   let mockCtx: PluginContext;
@@ -39,12 +44,34 @@ describe('remote-storage', () => {
     vi.clearAllMocks();
   });
 
-  it('应该在非远程模式下返回原始上下文', async () => {
-    const { isRemoteHost } = await import('./host-transport');
+  it('应该在非远程模式下包装 storage 并串行化同 key 并发写入', async () => {
     vi.mocked(isRemoteHost).mockReturnValue(false);
 
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    vi.mocked(mockCtx.storage.set).mockImplementation(async (_key, value: unknown) => {
+      const step = Number((value as Record<string, unknown>).step);
+      events.push(`start:${step}`);
+      if (step === 1) {
+        await firstGate;
+      }
+      events.push(`end:${step}`);
+    });
     const wrapped = withRemoteStorage(mockCtx);
-    expect(wrapped).toBe(mockCtx);
+    const p1 = wrapped.storage.set('state', { step: 1 });
+    const p2 = wrapped.storage.set('state', { step: 2 });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(events).toEqual(['start:1']);
+
+    releaseFirst();
+    await Promise.all([p1, p2]);
+    expect(events).toEqual(['start:1', 'end:1', 'start:2', 'end:2']);
   });
 
   it('应该在远程模式下返回包装的上下文', async () => {
@@ -133,6 +160,33 @@ describe('remote-storage', () => {
     await wrapped.storage.delete('key1');
 
     expect(mockLocalStorage.get('ccgui.plugin.remote:test-plugin:key1')).toBe('null');
+  });
+
+  it('应该让写入之后发起的读取等到写入完成再读', async () => {
+    vi.mocked(isRemoteHost).mockReturnValue(false);
+
+    let stored: unknown = { step: 0 };
+    let releaseSet!: () => void;
+    const setGate = new Promise<void>((resolve) => {
+      releaseSet = resolve;
+    });
+    vi.mocked(mockCtx.storage.set).mockImplementation(async (_key, value: unknown) => {
+      await setGate;
+      stored = value;
+    });
+    vi.mocked(mockCtx.storage.get).mockImplementation(async () => stored as never);
+
+    const wrapped = withRemoteStorage(mockCtx);
+    const write = wrapped.storage.set('state', { step: 1 });
+    const read = wrapped.storage.get('state');
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockCtx.storage.get).not.toHaveBeenCalled();
+
+    releaseSet();
+    await write;
+    await expect(read).resolves.toEqual({ step: 1 });
   });
 });
 

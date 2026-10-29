@@ -4,10 +4,14 @@ import type { PluginContext } from './ccgui-plugin';
 // 宿主 set_current_provider 会拒绝未注册的渠道 ID（config.rs:285-291
 // "provider {id} not found"），因此独立渠道必须先 upsert_provider 注册，
 // 否则切换静默失败。本测试守护该注册步骤不被再次跳过。
-vi.mock('./host-transport', () => ({
-  invokeHost: vi.fn(async () => undefined),
-  isRemoteHost: vi.fn(() => false),
-}));
+vi.mock('./host-transport', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    invokeHost: vi.fn(async () => undefined),
+    isRemoteHost: vi.fn(() => false),
+  };
+});
 
 describe('独立渠道切换', () => {
   beforeEach(() => {

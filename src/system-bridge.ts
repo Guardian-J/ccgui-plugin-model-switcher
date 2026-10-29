@@ -1,7 +1,7 @@
 import type { CliEngineId, CustomPluginChannel, SystemProviderChannel, PiFamilyApiProtocol, EffortLevel } from "./types";
 import { DEFAULT_PI_FAMILY_API, isPiFamilyApiProtocol } from "./types";
 import type { PluginContext } from "./ccgui-plugin";
-import { invokeHost as invokeTauri, isRemoteHost } from "./host-transport";
+import { enqueueSerial, invokeHost as invokeTauri, isRemoteHost } from "./host-transport";
 import {
   parsePiFamilyProviders,
   removePiFamilyProviderText,
@@ -37,6 +37,8 @@ export const CLI_DISPLAY_NAMES: Record<string, string> = {
   opencode: "OpenCode",
   qoder: "Qoder CLI",
   "qoder-cn": "Qoder CLI CN",
+  minimax: "MiniMax Code",
+  codebuddy: "CodeBuddy CLI",
 };
 
 export const NATIVE_PROVIDER_ID = "__local_settings_json__";
@@ -63,6 +65,8 @@ const NATIVE_CONFIG_NAMES: Partial<Record<CliEngineId, string>> = {
   opencode: "CLI 内置服务配置",
   qoder: "CLI 内置服务配置",
   "qoder-cn": "CLI 内置服务配置",
+  minimax: "CLI 内置服务配置",
+  codebuddy: "settings.json",
 };
 
 export interface NativeModel {
@@ -461,12 +465,21 @@ export function parseNativeOfficialFields(
         model: tomlQuoted(toml, "default") || tomlQuoted(toml, "model"),
       };
     }
+    case "codebuddy": {
+      // 与宿主 models/codebuddy.rs 一致：顶层 model 优先于 env.CODEBUDDY_MODEL
+      const content = fileContent(files, "settings.json");
+      return {
+        baseUrl: jsonEnv(content, ["CODEBUDDY_BASE_URL"]),
+        apiKey: jsonEnv(content, ["CODEBUDDY_API_KEY"]),
+        model: jsonField(content, "model").trim() || jsonEnv(content, ["CODEBUDDY_MODEL"]),
+      };
+    }
     default:
       return { ...EMPTY_NATIVE_FIELDS };
   }
 }
 
-const NATIVE_FILE_ENGINES = new Set<CliEngineId>(["claude", "codex", "kimi", "grok"]);
+const NATIVE_FILE_ENGINES = new Set<CliEngineId>(["claude", "codex", "kimi", "grok", "codebuddy"]);
 
 async function getNativeOfficialFields(
   engine: CliEngineId,
@@ -1029,16 +1042,18 @@ async function applyPiFamilyPluginChannel(
   channel: CustomPluginChannel,
   providerId = pluginProviderId(channel.id),
 ): Promise<void> {
-  const { text, format } = await readPiFamilyModelsConfig(engine);
-  const next = upsertPiFamilyProviderText(text, format, providerId, {
-    name: channel.name,
-    baseUrl: channel.baseUrl,
-    apiKey: channel.apiKey,
-    api: isPiFamilyApiProtocol(channel.api || "") ? channel.api! : DEFAULT_PI_FAMILY_API,
-    model: channel.model,
+  return enqueueSerial(`pi_family_models_rmw:${engine}`, async () => {
+    const { text, format } = await readPiFamilyModelsConfig(engine);
+    const next = upsertPiFamilyProviderText(text, format, providerId, {
+      name: channel.name,
+      baseUrl: channel.baseUrl,
+      apiKey: channel.apiKey,
+      api: isPiFamilyApiProtocol(channel.api || "") ? channel.api! : DEFAULT_PI_FAMILY_API,
+      model: channel.model,
+    });
+    await invokeTauri("pi_family_models_config_write", { engine, text: next });
+    invalidateNativeCatalogCache(engine);
   });
-  await invokeTauri("pi_family_models_config_write", { engine, text: next });
-  invalidateNativeCatalogCache(engine);
 }
 
 /**
@@ -1064,32 +1079,34 @@ export async function ensurePiFamilyModelConfigured(
     const registered = new Set(catalog.models.map(model => model.id));
     if (bareModels.every(model => registered.has(`${id}/${model}`))) return;
   }
-  try {
-    const { text, format } = await readPiFamilyModelsConfig(engine);
-    const providers = parsePiFamilyProviders(text, format);
-    const existing = providers[id];
-    const existingIds = new Set(existing?.models.map((m) => m.id) || []);
-    const missing = bareModels.filter((m) => !existingIds.has(m));
-    if (existing && missing.length === 0) {
-      return;
+  return enqueueSerial(`pi_family_models_rmw:${engine}`, async () => {
+    try {
+      const { text, format } = await readPiFamilyModelsConfig(engine);
+      const providers = parsePiFamilyProviders(text, format);
+      const existing = providers[id];
+      const existingIds = new Set(existing?.models.map((m) => m.id) || []);
+      const missing = bareModels.filter((m) => !existingIds.has(m));
+      if (existing && missing.length === 0) {
+        return;
+      }
+      const patch = {
+        name: existing?.name || channel.name || channel.id,
+        baseUrl: existing?.baseUrl || channel.baseUrl || "",
+        apiKey: existing?.apiKey || channel.apiKey || "",
+        api: isPiFamilyApiProtocol(existing?.api || channel.api || "")
+          ? ((existing?.api || channel.api) as PiFamilyApiProtocol)
+          : DEFAULT_PI_FAMILY_API,
+        models: [...bareModels, ...(existing?.models || [])],
+      };
+      const next = upsertPiFamilyProviderText(text, format, id, patch);
+      if (next !== text) {
+        await invokeTauri("pi_family_models_config_write", { engine, text: next });
+        invalidateNativeCatalogCache(engine);
+      }
+    } catch (err) {
+      throw new Error(`写入 ${engine.toUpperCase()} 模型配置失败: ${err instanceof Error ? err.message : String(err)}`);
     }
-    const patch = {
-      name: existing?.name || channel.name || channel.id,
-      baseUrl: existing?.baseUrl || channel.baseUrl || "",
-      apiKey: existing?.apiKey || channel.apiKey || "",
-      api: isPiFamilyApiProtocol(existing?.api || channel.api || "")
-        ? ((existing?.api || channel.api) as PiFamilyApiProtocol)
-        : DEFAULT_PI_FAMILY_API,
-      models: [...bareModels, ...(existing?.models || [])],
-    };
-    const next = upsertPiFamilyProviderText(text, format, id, patch);
-    if (next !== text) {
-      await invokeTauri("pi_family_models_config_write", { engine, text: next });
-      invalidateNativeCatalogCache(engine);
-    }
-  } catch (err) {
-    throw new Error(`写入 ${engine.toUpperCase()} 模型配置失败: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  });
 }
 /**
  * 将用户在插件界面选择的推理强度写入 OMP/PI 的配置文件（models.yml / models.json）。
@@ -1107,76 +1124,78 @@ export async function updatePiFamilyModelEffort(
   if (!bareModel) return;
 
   const id = channel.isPlugin ? pluginProviderId(channel.id) : channel.id;
-  try {
-    const { text, format } = await readPiFamilyModelsConfig(engine);
-    const providers = parsePiFamilyProviders(text, format);
-    const existing = providers[id];
-    if (!existing) return;
-    const api = existing.api || channel.api || "";
-    const mode = api === "anthropic-messages"
-      ? "anthropic-adaptive"
-      : api === "google-generative-ai"
-        ? "google-level"
-        : "effort";
-    const target1MContext = (bareModel.toLowerCase().includes("gemini") || bareModel.toLowerCase().includes("kimi")) ? 1048576 : 1000000;
-    // OMP / PI 原生最高思考级别为 "max"（仅接受 minimal/low/medium/high/xhigh/max）。
-    // ultra 模式适配：将 ultra 映射为 CLI 原生支持的最高级别 "max"，防止 CLI 丢弃 defaultLevel 或无法解析。
-    const targetEffortLevel = (effort === "ultra" && (engine === "omp" || engine === "pi")) ? "max" : effort;
-    const patchModel = (m: PiFamilyModelItem): PiFamilyModelItem => {
-      const updated: PiFamilyModelItem = {
-        ...m,
-        reasoning: true,
-        thinking: {
-          mode,
-          defaultLevel: targetEffortLevel,
-          efforts: ["low", "medium", "high", "xhigh", "max"],
-        },
-      };
-      if (enable1M !== undefined) {
-        if (enable1M) {
-          updated.contextWindow = target1MContext;
-          if (!updated.maxTokens) updated.maxTokens = 65536;
-        } else {
-          updated.contextWindow = 200000;
+  return enqueueSerial(`pi_family_models_rmw:${engine}`, async () => {
+    try {
+      const { text, format } = await readPiFamilyModelsConfig(engine);
+      const providers = parsePiFamilyProviders(text, format);
+      const existing = providers[id];
+      if (!existing) return;
+      const api = existing.api || channel.api || "";
+      const mode = api === "anthropic-messages"
+        ? "anthropic-adaptive"
+        : api === "google-generative-ai"
+          ? "google-level"
+          : "effort";
+      const target1MContext = (bareModel.toLowerCase().includes("gemini") || bareModel.toLowerCase().includes("kimi")) ? 1048576 : 1000000;
+      // OMP / PI 原生最高思考级别为 "max"（仅接受 minimal/low/medium/high/xhigh/max）。
+      // ultra 模式适配：将 ultra 映射为 CLI 原生支持的最高级别 "max"，防止 CLI 丢弃 defaultLevel 或无法解析。
+      const targetEffortLevel = (effort === "ultra" && (engine === "omp" || engine === "pi")) ? "max" : effort;
+      const patchModel = (m: PiFamilyModelItem): PiFamilyModelItem => {
+        const updated: PiFamilyModelItem = {
+          ...m,
+          reasoning: true,
+          thinking: {
+            mode,
+            defaultLevel: targetEffortLevel,
+            efforts: ["low", "medium", "high", "xhigh", "max"],
+          },
+        };
+        if (enable1M !== undefined) {
+          if (enable1M) {
+            updated.contextWindow = target1MContext;
+            if (!updated.maxTokens) updated.maxTokens = 65536;
+          } else {
+            updated.contextWindow = 200000;
+          }
         }
-      }
-      return updated;
-    };
+        return updated;
+      };
 
-    let modelMatched = false;
-    const updatedModels = existing.models.map((m) => {
-      if (m.id === bareModel) {
-        modelMatched = true;
-        return patchModel(m);
-      }
-      if ("thinking" in m && m.thinking !== undefined) {
-        return { ...m, thinking: normalizeThinking(m.thinking) };
-      }
-      return m;
-    });
+      let modelMatched = false;
+      const updatedModels = existing.models.map((m) => {
+        if (m.id === bareModel) {
+          modelMatched = true;
+          return patchModel(m);
+        }
+        if ("thinking" in m && m.thinking !== undefined) {
+          return { ...m, thinking: normalizeThinking(m.thinking) };
+        }
+        return m;
+      });
 
-    if (!modelMatched) {
-      updatedModels.push(patchModel({ id: bareModel }));
+      if (!modelMatched) {
+        updatedModels.push(patchModel({ id: bareModel }));
+      }
+
+      const patch: PiFamilyProviderPatch = {
+        name: existing.name || channel.name || channel.id,
+        baseUrl: existing.baseUrl || channel.baseUrl || "",
+        apiKey: existing.apiKey || channel.apiKey || "",
+        api: isPiFamilyApiProtocol(existing.api || channel.api || "")
+          ? ((existing.api || channel.api) as PiFamilyApiProtocol)
+          : DEFAULT_PI_FAMILY_API,
+        models: updatedModels,
+      };
+
+      const next = upsertPiFamilyProviderText(text, format, id, patch);
+      if (next !== text) {
+        await invokeTauri("pi_family_models_config_write", { engine, text: next });
+        invalidateNativeCatalogCache(engine);
+      }
+    } catch (err) {
+      console.warn(`[model-switcher] 更新 ${engine.toUpperCase()} 配置文件推理强度失败:`, err);
     }
-
-    const patch: PiFamilyProviderPatch = {
-      name: existing.name || channel.name || channel.id,
-      baseUrl: existing.baseUrl || channel.baseUrl || "",
-      apiKey: existing.apiKey || channel.apiKey || "",
-      api: isPiFamilyApiProtocol(existing.api || channel.api || "")
-        ? ((existing.api || channel.api) as PiFamilyApiProtocol)
-        : DEFAULT_PI_FAMILY_API,
-      models: updatedModels,
-    };
-
-    const next = upsertPiFamilyProviderText(text, format, id, patch);
-    if (next !== text) {
-      await invokeTauri("pi_family_models_config_write", { engine, text: next });
-      invalidateNativeCatalogCache(engine);
-    }
-  } catch (err) {
-    console.warn(`[model-switcher] 更新 ${engine.toUpperCase()} 配置文件推理强度失败:`, err);
-  }
+  });
 }
 
 
@@ -1184,11 +1203,13 @@ async function deletePiFamilyYamlProvider(
   engine: "pi" | "omp",
   yamlId: string,
 ): Promise<void> {
-  const { text, format } = await readPiFamilyModelsConfig(engine);
-  const next = removePiFamilyProviderText(text, format, yamlId);
-  if (next === text) return;
-  await invokeTauri("pi_family_models_config_write", { engine, text: next });
-  invalidateNativeCatalogCache(engine);
+  return enqueueSerial(`pi_family_models_rmw:${engine}`, async () => {
+    const { text, format } = await readPiFamilyModelsConfig(engine);
+    const next = removePiFamilyProviderText(text, format, yamlId);
+    if (next === text) return;
+    await invokeTauri("pi_family_models_config_write", { engine, text: next });
+    invalidateNativeCatalogCache(engine);
+  });
 }
 
 async function deletePiFamilyPluginChannel(

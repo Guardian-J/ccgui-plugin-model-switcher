@@ -1,7 +1,7 @@
 import type { CliEngineId, EffortLevel } from "./types";
 import { getHostSession, sessionSelectionError, modelSelectionError } from "./selection-policy";
 import type { HostSession, ModelCompatibility } from "./selection-policy";
-import { invokeHost } from "./host-transport";
+import { enqueueSerial, invokeHost } from "./host-transport";
 import { independentChannelError, NATIVE_PROVIDER_ID, LEGACY_NATIVE_PROVIDER_ID } from "./system-bridge";
 import type { PluginContext } from "./ccgui-plugin";
 
@@ -28,6 +28,8 @@ export interface HostChatStore {
     efforts?: Record<string, string>;
     models?: Record<string, string>;
     openTabs?: Array<HostSession>;
+    /** 宿主按会话 key 记的生成中标记；bySession 记录缺 streaming 时用它判断。 */
+    streamingByKey?: Record<string, boolean>;
     setEffort?: (engine: string, effort: string) => unknown;
     setModel?: (engine: string, model: string) => unknown;
     setActiveEngine?: (engine: string) => unknown;
@@ -37,6 +39,8 @@ export interface HostChatStore {
       | Record<string, unknown>
       | ((s: Record<string, unknown>) => Record<string, unknown>),
   ) => void;
+  /** zustand 的订阅入口；拿到的 store 快照可能没有，缺省时延后应用走轮询。 */
+  subscribe?: (listener: () => void) => () => void;
 }
 
 /** MessageTimeline / SessionTimeline 拿到的 bySession 切片，和 store 是同一引用。 */
@@ -233,6 +237,7 @@ export function findBuiltinTriggerButton(anchor?: HTMLElement | null): HTMLEleme
     'button.group:not([data-ccgui-plugin-btn])[aria-label*="OpenCode"]',
     'button.group:not([data-ccgui-plugin-btn])[aria-label*="AGY"]',
     'button.group:not([data-ccgui-plugin-btn])[aria-label*="mcode"]',
+    'button.group:not([data-ccgui-plugin-btn])[aria-label*="CodeBuddy"]',
   ];
 
   if (typeof document !== "undefined") {
@@ -587,6 +592,268 @@ export function getLastDiagnostic(): string {
 }
 
 /**
+ * 当前会话是否有一轮正在生成，以及判定依据。宿主 store 里的
+ * bySession[key].streaming 是权威值；Fiber 快照与 cliMenu 的 streaming 只是
+ * 渲染时的副本，仅在 store 不可达时兜底。
+ */
+function detectSessionStreaming(
+  store: HostChatStore | null,
+  engine: string,
+  session: HostSession | null | undefined,
+  live: HostSessionState | null | undefined,
+  propStreaming: boolean | undefined,
+): { streaming: boolean; source: string } {
+  const sessionId = session?.sessionId ?? null;
+  if (sessionId) {
+    try {
+      const state = store?.getState();
+      const key = sessionStoreKey(engine, sessionId, session?.workspacePath || "");
+      const record = state?.bySession?.[key] as { streaming?: unknown } | undefined;
+      if (typeof record?.streaming === "boolean") {
+        return { streaming: record.streaming, source: "store" };
+      }
+      if (state?.streamingByKey?.[key] === true) return { streaming: true, source: "store-flag" };
+    } catch { /* store 读失败：回落到渲染快照 */ }
+  }
+  if (live && typeof live.streaming === "boolean") {
+    return { streaming: live.streaming, source: "live" };
+  }
+  return { streaming: propStreaming === true, source: propStreaming === true ? "props" : "none" };
+}
+
+/**
+ * 一轮正在生成时的选择暂存。这一轮跑的是旧的模型/档位，而宿主 done 时会把
+ * bySession.activeModel/activeEffort 盖到消息上（engine-events.ts 的
+ * stampedModel/stampedEffort），会话文件变化触发的 refreshSessions 也会拿
+ * session_models/session_efforts 覆盖内存（模型有 streaming 守卫，档位没有）。
+ * 所以生成期间内存和数据库都不动，等 streaming 翻回 false 再一起落地。
+ */
+interface DeferredSessionSelection {
+  /** Fiber 里找不到 store 时为 undefined：靠 ctx.events 的 usage://done 触发落地。 */
+  store?: HostChatStore;
+  ctx?: PluginContext;
+  engine: string;
+  session: HostSession;
+  /** undefined = 这次切换没动模型；"" 合法（恢复 CLI 默认）。 */
+  model?: string;
+  effort?: string;
+  queuedAt: number;
+  unsubscribe?: () => void;
+}
+
+const DEFERRED_SELECTION_POLL_MS = 250;
+/** 等不到本轮结束就放弃，避免定时器无限存活。 */
+const DEFERRED_SELECTION_TTL_MS = 2 * 60 * 60 * 1000;
+const deferredSelections = new Map<string, DeferredSessionSelection>();
+let deferredSelectionTimer: number | null = null;
+
+function stopDeferredSelectionTimer(): void {
+  if (deferredSelectionTimer !== null) {
+    window.clearInterval(deferredSelectionTimer);
+    deferredSelectionTimer = null;
+  }
+}
+
+/** 取出并注销一条待应用的选择（含它的 store 订阅）。 */
+function takeDeferredSelection(key: string): DeferredSessionSelection | undefined {
+  const entry = deferredSelections.get(key);
+  if (!entry) return undefined;
+  deferredSelections.delete(key);
+  try {
+    entry.unsubscribe?.();
+  } catch { /* store 已经销毁时 unsubscribe 可能抛错 */ }
+  return entry;
+}
+
+/** 插件卸载时调用：丢弃还没生效的选择并停掉轮询。 */
+export function disposeDeferredSelections(): void {
+  for (const key of [...deferredSelections.keys()]) takeDeferredSelection(key);
+  stopDeferredSelectionTimer();
+}
+
+/**
+ * 生成中切换模型/档位只记住选择，等这一轮的 streaming 翻回 false 再落到
+ * 会话内存与数据库。同一个会话后选的值覆盖先选的（最后一次为准）。
+ */
+function deferSessionSelectionUntilIdle(
+  entry: Omit<DeferredSessionSelection, "queuedAt" | "unsubscribe">,
+): void {
+  const key = sessionStoreKey(entry.engine, entry.session.sessionId, entry.session.workspacePath || "");
+  const queued = deferredSelections.get(key);
+  if (queued) {
+    if (entry.model !== undefined) queued.model = entry.model;
+    if (entry.effort !== undefined) queued.effort = entry.effort;
+    queued.ctx = entry.ctx ?? queued.ctx;
+    return;
+  }
+  let unsubscribe: (() => void) | undefined;
+  if (typeof entry.store?.subscribe === "function") {
+    try {
+      unsubscribe = entry.store.subscribe(flushDeferredSelections);
+    } catch (err) {
+      console.warn("[model-switcher] 订阅宿主 store 失败，改用轮询:", err);
+    }
+  }
+  deferredSelections.set(key, { ...entry, queuedAt: Date.now(), unsubscribe });
+  if (deferredSelectionTimer === null) {
+    deferredSelectionTimer = window.setInterval(flushDeferredSelections, DEFERRED_SELECTION_POLL_MS);
+  }
+}
+
+function settleDeferredSelection(key: string, entry: DeferredSessionSelection): void {
+  takeDeferredSelection(key);
+  void applyDeferredSelection(entry)
+    .catch((err) => console.warn("[model-switcher] 延后应用本轮选择失败:", err));
+}
+
+function flushDeferredSelections(): void {
+  if (deferredSelections.size === 0) {
+    stopDeferredSelectionTimer();
+    return;
+  }
+  const now = Date.now();
+  for (const key of [...deferredSelections.keys()]) {
+    const entry = deferredSelections.get(key);
+    if (!entry) continue;
+    if (!entry.store) {
+      // 没有 store 可读：等 usage://done（flushDeferredSelectionsFor）触发
+      if (now - entry.queuedAt > DEFERRED_SELECTION_TTL_MS) takeDeferredSelection(key);
+      continue;
+    }
+    let streaming: boolean | null = null;
+    let gone = false;
+    try {
+      const state = entry.store.getState();
+      const record = state.bySession?.[key] as { streaming?: unknown } | undefined;
+      if (!record) {
+        gone = true;
+      } else if (typeof record.streaming === "boolean") {
+        streaming = record.streaming;
+      } else if (state.streamingByKey?.[key] === true) {
+        streaming = true;
+      }
+    } catch { /* 读失败按"还没结束"处理，下个 tick 再试 */ }
+    if (gone) {
+      // 会话已关闭：没有在跑的一轮了，把选择写回数据库，下次打开时恢复
+      takeDeferredSelection(key);
+      void persistSelectionToDatabase(entry)
+        .catch((err) => console.warn("[model-switcher] 会话已关闭，写入选择失败:", err));
+      continue;
+    }
+    if (streaming !== false) {
+      // 还在生成，或状态暂时读不出来：等下一次通知/轮询
+      if (now - entry.queuedAt > DEFERRED_SELECTION_TTL_MS) takeDeferredSelection(key);
+      continue;
+    }
+    settleDeferredSelection(key, entry);
+  }
+  if (deferredSelections.size === 0) stopDeferredSelectionTimer();
+}
+
+/**
+ * 宿主 `usage://done`（SDK 0.3.8 起，引擎 done 事件透传）落地延后的选择。
+ * 这是不依赖 Fiber 找 store 的权威回合结束信号；payload 是引擎事件信封
+ * `{ runId, sessionId, engine, kind, data }`。
+ *
+ * 推到下一个宏任务：done 事件与 chat store 的 settle 是同一批引擎事件的两个
+ * 订阅者，先后顺序取决于注册顺序；delay 一下保证盖戳（stampedModel/Effort）
+ * 已经写完，我们再改 activeModel/activeEffort。
+ */
+export function flushDeferredSelectionsFor(payload: unknown): void {
+  if (!payload || typeof payload !== "object") return;
+  const envelope = payload as Record<string, unknown>;
+  const data = envelope.data && typeof envelope.data === "object"
+    ? (envelope.data as Record<string, unknown>)
+    : {};
+  const rawSessionId = envelope.sessionId ?? data.sessionId;
+  const rawEngine = envelope.engine ?? data.engine;
+  const sessionId = typeof rawSessionId === "string" && rawSessionId ? rawSessionId : null;
+  const engine = typeof rawEngine === "string" && rawEngine ? rawEngine : null;
+  if (!sessionId) return;
+  window.setTimeout(() => {
+    for (const key of [...deferredSelections.keys()]) {
+      const entry = deferredSelections.get(key);
+      if (!entry) continue;
+      if (entry.session.sessionId !== sessionId) continue;
+      if (engine && entry.engine !== engine) continue;
+      if (entry.store) {
+        // store 可读时仍以它为准：重试/下一轮可能已经开始
+        let streaming: unknown;
+        try {
+          streaming = entry.store.getState().bySession?.[key]?.streaming;
+        } catch { /* 读失败按已结束处理 */ }
+        if (streaming === true) continue;
+      }
+      settleDeferredSelection(key, entry);
+    }
+    if (deferredSelections.size === 0) stopDeferredSelectionTimer();
+  }, 0);
+}
+
+/** 本轮已落定：持久化选择，并把 activeModel 对齐成下一轮要跑的值（盖戳已结束）。 */
+async function applyDeferredSelection(entry: DeferredSessionSelection): Promise<void> {
+  const sessionId = entry.session.sessionId;
+  if (!sessionId) return;
+  if (entry.model !== undefined) {
+    if (await rememberSessionModel(entry.engine, sessionId, entry.model)) {
+      writeSessionActiveModel(entry, entry.model);
+    }
+  }
+  if (entry.effort) {
+    await patchSessionEffort(entry.ctx, entry.store ?? null, entry.engine, entry.effort, entry.session, null);
+  }
+}
+
+/** 会话已关闭时的兜底：只写数据库，不碰内存。 */
+async function persistSelectionToDatabase(entry: DeferredSessionSelection): Promise<void> {
+  const sessionId = entry.session.sessionId;
+  if (!sessionId) return;
+  if (entry.model !== undefined) await rememberSessionModel(entry.engine, sessionId, entry.model);
+  if (entry.effort) await rememberSessionEffort(entry.engine, sessionId, entry.effort);
+}
+
+function writeSessionActiveModel(entry: DeferredSessionSelection, model: string): void {
+  if (!entry.store) return;
+  const key = sessionStoreKey(entry.engine, entry.session.sessionId, entry.session.workspacePath || "");
+  try {
+    entry.store.setState((prev) => {
+      const bySession = (prev as Record<string, unknown>).bySession as
+        | Record<string, Record<string, unknown>>
+        | undefined;
+      const cur = bySession?.[key];
+      if (!cur) return {};
+      return { bySession: { ...bySession, [key]: { ...cur, activeModel: model || null } } };
+    });
+  } catch (err) {
+    console.warn("[model-switcher] 对齐 activeModel 失败:", err);
+  }
+}
+
+/** 只把模型选择写进宿主的 session_models 表，不动当前会话的内存状态。 */
+async function rememberSessionModel(engine: string, sessionId: string, model: string): Promise<boolean> {
+  try {
+    await invokeHost("remember_session_model", { engine, sessionId, model });
+    console.warn(`[model-switcher] 已调用 remember_session_model(${engine}, ${sessionId}, ${model})`);
+    return true;
+  } catch (err) {
+    console.warn("[model-switcher] 调用 remember_session_model 失败:", err);
+    return false;
+  }
+}
+
+/** 只把档位选择写进宿主的 session_efforts 表，不动当前会话的内存状态。 */
+async function rememberSessionEffort(engine: string, sessionId: string, effort: string): Promise<boolean> {
+  try {
+    await invokeHost("remember_session_effort", { engine, sessionId, effort });
+    console.warn(`[model-switcher] 已调用 remember_session_effort(${engine}, ${sessionId}, ${effort})`);
+    return true;
+  } catch (err) {
+    console.warn("[model-switcher] 调用 remember_session_effort 失败:", err);
+    return false;
+  }
+}
+
+/**
  * 已有会话的推理强度 patch 入口：优先走官方 ctx.sessions.setEffort（权限
  * host:session，SDK 0.3.10 起）直写宿主会话状态并持久化；ctx 未传入、
  * 宿主是不支持该方法的旧版本，或调用本身失败时，才 fallback 到
@@ -731,6 +998,13 @@ export async function patchHostSessionEffort(
  * 2. 同步 liveSession.activeModel 内存引用；
  * 3. 同步更新宿主 store 状态（active.model, openTabs[].model, bySession[key].activeModel, models[engine]）；
  * 4. 优先调用 store.getState().setModel 触发宿主自身的内部派发与监听。
+ *
+ * `streaming` 为 true 时不写 bySession.activeModel / live.activeModel，也不写
+ * session_models：宿主把 activeModel 当"这一轮实际跑的模型"（尾部指示器与
+ * settle 盖戳都读它），生成中改写内存或数据库都会让进行中的回合和历史元信息
+ * 显示成刚选的模型（旧宿主 refreshSessions 没有 streaming 守卫，会拿数据库
+ * 记录覆盖内存）。选择本身仍通过 tab 模型生效到下一轮，持久化由
+ * applyModelSelectionToHost 排到本轮结束（deferSessionSelectionUntilIdle）。
  */
 export async function patchHostSessionModel(
   store: HostChatStore | null,
@@ -739,25 +1013,22 @@ export async function patchHostSessionModel(
   session: HostSession | null,
   live?: HostSessionState | null,
   enable1M?: boolean,
+  streaming = false,
 ): Promise<boolean> {
   const sessionId = session?.sessionId ?? null;
+  const holdDisplay = streaming && Boolean(sessionId);
+  // 生成中一律不写 session_models：调用方（applyModelSelectionToHost）会把这次
+  // 选择排到本轮结束（deferSessionSelectionUntilIdle）。提前写会让宿主
+  // refreshSessions 在下一轮请求前把 activeModel 换成本轮没用过的模型。
+  const deferPersistence = holdDisplay;
 
   // 1. 若为已有会话，调用宿主 IPC remember_session_model 持久化到 SQLite
-  if (sessionId) {
-    try {
-      await invokeHost("remember_session_model", {
-        engine,
-        sessionId,
-        model,
-      });
-      console.warn(`[model-switcher] 已调用 remember_session_model(${engine}, ${sessionId}, ${model})`);
-    } catch (err) {
-      console.warn(`[model-switcher] 调用 remember_session_model 失败:`, err);
-    }
+  if (sessionId && !deferPersistence) {
+    await rememberSessionModel(engine, sessionId, model);
   }
 
-  // 2. 同步 liveSession 内存引用
-  if (live) {
+  // 2. 同步 liveSession 内存引用（生成中的回合保持它实际在跑的模型）
+  if (live && !holdDisplay) {
     live.activeModel = model || null;
   }
 
@@ -806,7 +1077,7 @@ export async function patchHostSessionModel(
           const rawBySession = s.bySession as Record<string, Record<string, unknown>> | undefined;
           const bySession: Record<string, Record<string, unknown>> = { ...(rawBySession || {}) };
           const cur = bySession[key] ? { ...bySession[key] } : {};
-          cur.activeModel = model || null;
+          if (!holdDisplay) cur.activeModel = model || null;
           if (enable1M !== undefined) {
             const rawUsage = cur.usage && typeof cur.usage === "object" ? (cur.usage as Record<string, unknown>) : {};
             const windowSize = enable1M ? 1_000_000 : 200_000;
@@ -873,35 +1144,37 @@ function syncLocalStorage(engine: string, model: string, effort: string) {
  * 同步到系统底层 AppSettings（defaultModels、defaultEfforts）
  */
 async function syncAppSettings(engine: string, model: string, effort: string) {
-  try {
-    // 获取当前设置
-    const settings = (await invokeHost("get_app_settings")) as {
-      defaultModels?: Record<string, string>;
-      defaultEfforts?: Record<string, string>;
-      [key: string]: unknown;
-    };
+  return enqueueSerial("app_settings:read_modify_write", async () => {
+    try {
+      // 获取当前设置
+      const settings = (await invokeHost("get_app_settings")) as {
+        defaultModels?: Record<string, string>;
+        defaultEfforts?: Record<string, string>;
+        [key: string]: unknown;
+      };
 
-    if (settings && typeof settings === "object") {
-      const defaultModels = { ...(settings.defaultModels || {}) };
-      const defaultEfforts = { ...(settings.defaultEfforts || {}) };
+      if (settings && typeof settings === "object") {
+        const defaultModels = { ...(settings.defaultModels || {}) };
+        const defaultEfforts = { ...(settings.defaultEfforts || {}) };
 
-      if (model) {
-        defaultModels[engine] = model;
-      } else {
-        delete defaultModels[engine];
+        if (model) {
+          defaultModels[engine] = model;
+        } else {
+          delete defaultModels[engine];
+        }
+        if (effort) {
+          defaultEfforts[engine] = effort;
+        }
+
+        settings.defaultModels = defaultModels;
+        settings.defaultEfforts = defaultEfforts;
+
+        await invokeHost("update_app_settings", { settings });
       }
-      if (effort) {
-        defaultEfforts[engine] = effort;
-      }
-
-      settings.defaultModels = defaultModels;
-      settings.defaultEfforts = defaultEfforts;
-
-      await invokeHost("update_app_settings", { settings });
+    } catch (err) {
+      throw new Error(`保存 CLI 默认配置失败: ${err instanceof Error ? err.message : String(err)}`);
     }
-  } catch (err) {
-    throw new Error(`保存 CLI 默认配置失败: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  });
 }
 
 /**
@@ -959,21 +1232,27 @@ export async function applyModelSelectionToHost(params: {
   const actions = findHostStoreActions(params.anchor);
   const active = callbacks?.session !== undefined ? callbacks.session : (store?.getState().active ?? getHostSession());
   const liveSession = active?.sessionId ? findHostSessionState(params.anchor) : null;
+  const { streaming: sessionStreaming, source: streamingSource } = detectSessionStreaming(
+    store, engine, active, liveSession, callbacks?.streaming,
+  );
 
   // 详细日志：当前状态
   const storeState = store?.getState();
   const currentStoreEffort = storeState?.efforts?.[engine];
   const sessionKey = active?.sessionId ? `${engine}/${active.sessionId}` : null;
-  const bySessionEffort = sessionKey ? (storeState?.bySession as any)?.[sessionKey]?.activeEffort : null;
+  const bySessionRecord = sessionKey
+    ? (storeState?.bySession as Record<string, { activeEffort?: string }> | undefined)?.[sessionKey]
+    : undefined;
+  const bySessionEffort = bySessionRecord?.activeEffort ?? null;
   const liveEffort = liveSession?.activeEffort;
 
   console.warn(`[model-switcher] ========== 档位切换开始 ==========`);
   console.warn(`[model-switcher] 目标: ${engine} / ${finalModel} / effort=${effort ?? "无"}`);
   console.warn(`[model-switcher] 会话: sessionId=${active?.sessionId ?? "null"}, isNewSession=${!active?.sessionId}`);
   console.warn(`[model-switcher] 当前状态: store.efforts[${engine}]=${currentStoreEffort}, bySession[${sessionKey}].activeEffort=${bySessionEffort}, liveSession.activeEffort=${liveEffort}`);
-  console.warn(`[model-switcher] 组件: store=${store ? "✓" : "✗"}, liveSession=${liveSession ? "✓" : "✗"}, ctx.sessions=${params.ctx?.sessions ? "✓" : "✗"}`);
+  console.warn(`[model-switcher] 组件: store=${store ? "✓" : "✗"}, liveSession=${liveSession ? "✓" : "✗"}, ctx.sessions=${params.ctx?.sessions ? "✓" : "✗"}, streaming=${sessionStreaming ? `✓(${streamingSource})` : "✗"}`);
 
-  lastDiagnostic = `sessionId=${active?.sessionId ?? "null"} liveSession=${liveSession ? "✓" : "✗"} store=${store ? "✓" : "✗"}`;
+  lastDiagnostic = `sessionId=${active?.sessionId ?? "null"} liveSession=${liveSession ? "✓" : "✗"} store=${store ? "✓" : "✗"} streaming=${sessionStreaming ? `✓(${streamingSource})` : "✗"}`;
   let patched = false;
   // 已有会话直接改 SessionState（避免 setEffort 触发 refreshSessions 覆盖）；新会话改引擎默认
   try {
@@ -1014,24 +1293,54 @@ export async function applyModelSelectionToHost(params: {
     } else if (callbacks?.onModelChange) {
       callbacks.onModelChange(engine, finalModel);
     }
-    await patchHostSessionModel(store, engine, finalModel, active, liveSession, enable1M);
+    await patchHostSessionModel(store, engine, finalModel, active, liveSession, enable1M, sessionStreaming);
+    // 生成中的选择统一压到本轮结束：这一轮跑的是旧值，宿主 done 盖戳与
+    // refreshSessions 都读会话内存/session_models/session_efforts，
+    // 提前写内存或数据库都会把显示和这一轮的历史元信息改错。
+    if (sessionStreaming && active?.sessionId) {
+      deferSessionSelectionUntilIdle({
+        store: store ?? undefined,
+        ctx: params.ctx,
+        engine,
+        session: active,
+        model: finalModel,
+      });
+      lastDiagnostic = `${lastDiagnostic} → 本轮生成中：模型 ${finalModel || "默认"} 记到下一轮`;
+    }
     // 档位处理：新会话与已有会话全链路对齐与持久化
     if (effectiveHostEffort) {
       console.warn(`[model-switcher] 同步生效推理强度: ${engine} -> ${effectiveHostEffort}${effort !== effectiveHostEffort ? ` (原始请求: ${effort})` : ""}`);
-      const storeSetEffort = store?.getState().setEffort;
-      if (typeof storeSetEffort === "function") {
-        try {
-          await Promise.resolve(storeSetEffort(engine, effectiveHostEffort));
-        } catch (e) {
-          console.warn("[model-switcher] store.setEffort 失败:", e);
+      if (sessionStreaming && active?.sessionId) {
+        // 本轮正在生成：只记住选择，等这一轮结束后再落到 activeEffort。
+        // 生成中改写会让宿主 done 时给这一轮消息盖戳的档位变成新值
+        // （engine-events.ts stampedEffort 读 activeEffort），历史元信息就显示错了。
+        // 落地点：store 通知 / 轮询，或 ctx.events 的 usage://done（拿不到 store 时）。
+        deferSessionSelectionUntilIdle({
+          store: store ?? undefined,
+          ctx: params.ctx,
+          engine,
+          session: active,
+          effort: effectiveHostEffort,
+        });
+        patched = true;
+        lastDiagnostic = `${lastDiagnostic} → 本轮生成中：档位 ${effectiveHostEffort} 记到下一轮`;
+        console.warn(`[model-switcher] 本轮正在生成，档位 ${effectiveHostEffort} 延迟到本轮结束后生效`);
+      } else {
+        const storeSetEffort = store?.getState().setEffort;
+        if (typeof storeSetEffort === "function") {
+          try {
+            await Promise.resolve(storeSetEffort(engine, effectiveHostEffort));
+          } catch (e) {
+            console.warn("[model-switcher] store.setEffort 失败:", e);
+          }
         }
+        if (actions?.setEffort) {
+          await Promise.resolve(actions.setEffort(engine, effectiveHostEffort));
+        } else if (callbacks?.onEffortChange) {
+          callbacks.onEffortChange(engine, effectiveHostEffort);
+        }
+        patched = await patchSessionEffort(params.ctx, store, engine, effectiveHostEffort, active, liveSession);
       }
-      if (actions?.setEffort) {
-        await Promise.resolve(actions.setEffort(engine, effectiveHostEffort));
-      } else if (callbacks?.onEffortChange) {
-        callbacks.onEffortChange(engine, effectiveHostEffort);
-      }
-      patched = await patchSessionEffort(params.ctx, store, engine, effectiveHostEffort, active, liveSession);
     }
   } catch (err) {
     console.warn("[model-switcher] 触发宿主切换失败:", err);
@@ -1101,23 +1410,25 @@ export async function repairLegacyContextSelections(): Promise<void> {
       } catch { /* Leave malformed persisted sessions to the host's recovery path. */ }
     }
   }
-  try {
-    const settings = (await invokeHost("get_app_settings")) as {
-      defaultModels?: Record<string, string>;
-      defaultEfforts?: Record<string, string>;
-    } | null;
-    if (!settings) return;
-    let changed = false;
-    const defaultModels = { ...(settings.defaultModels || {}) };
-    for (const [engine, model] of Object.entries(defaultModels)) {
-      const clean = strip(engine, model) as string;
-      if (clean !== model) { defaultModels[engine] = clean; changed = true; }
-    }
-    if (changed) {
-      const nextSettings: Record<string, unknown> = { ...settings, defaultModels };
-      await invokeHost("update_app_settings", { settings: nextSettings });
-    }
-  } catch { /* ignore host errors */ }
+  await enqueueSerial("app_settings:read_modify_write", async () => {
+    try {
+      const settings = (await invokeHost("get_app_settings")) as {
+        defaultModels?: Record<string, string>;
+        defaultEfforts?: Record<string, string>;
+      } | null;
+      if (!settings) return;
+      let changed = false;
+      const defaultModels = { ...(settings.defaultModels || {}) };
+      for (const [engine, model] of Object.entries(defaultModels)) {
+        const clean = strip(engine, model) as string;
+        if (clean !== model) { defaultModels[engine] = clean; changed = true; }
+      }
+      if (changed) {
+        const nextSettings: Record<string, unknown> = { ...settings, defaultModels };
+        await invokeHost("update_app_settings", { settings: nextSettings });
+      }
+    } catch { /* ignore host errors */ }
+  });
 }
 
 /** Mounted tabs may still hold the old selector after storage has been repaired. */
