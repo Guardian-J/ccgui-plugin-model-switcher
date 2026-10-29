@@ -646,6 +646,43 @@ const DEFERRED_SELECTION_POLL_MS = 250;
 const DEFERRED_SELECTION_TTL_MS = 2 * 60 * 60 * 1000;
 const deferredSelections = new Map<string, DeferredSessionSelection>();
 let deferredSelectionTimer: number | null = null;
+const deferredSelectionListeners = new Set<() => void>();
+
+/** 待落地的选择变化时通知 UI（输入框按钮的档位要立刻跟着变）。 */
+export function subscribeDeferredSelections(listener: () => void): () => void {
+  deferredSelectionListeners.add(listener);
+  return () => {
+    deferredSelectionListeners.delete(listener);
+  };
+}
+
+function notifyDeferredSelections(): void {
+  for (const listener of [...deferredSelectionListeners]) {
+    try {
+      listener();
+    } catch (err) {
+      console.warn("[model-switcher] 待落地选择监听器抛错:", err);
+    }
+  }
+}
+
+/**
+ * 输入框按钮展示用：这一轮还在生成、刚选但尚未落到宿主的档位/模型。
+ * 只影响显示，宿主的会话档位仍保持本轮实际运行的那一套。
+ */
+export function getDeferredSelectionFor(
+  engine: string | null | undefined,
+  sessionId: string | null | undefined,
+): { model?: string; effort?: string } | null {
+  if (!engine || !sessionId) return null;
+  const entry = deferredSelections.get(sessionStoreKey(engine, sessionId, ""));
+  if (!entry) return null;
+  if (entry.model === undefined && entry.effort === undefined) return null;
+  return {
+    ...(entry.model !== undefined ? { model: entry.model } : {}),
+    ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
+  };
+}
 
 function stopDeferredSelectionTimer(): void {
   if (deferredSelectionTimer !== null) {
@@ -662,6 +699,7 @@ function takeDeferredSelection(key: string): DeferredSessionSelection | undefine
   try {
     entry.unsubscribe?.();
   } catch { /* store 已经销毁时 unsubscribe 可能抛错 */ }
+  notifyDeferredSelections();
   return entry;
 }
 
@@ -684,6 +722,7 @@ function deferSessionSelectionUntilIdle(
     if (entry.model !== undefined) queued.model = entry.model;
     if (entry.effort !== undefined) queued.effort = entry.effort;
     queued.ctx = entry.ctx ?? queued.ctx;
+    notifyDeferredSelections();
     return;
   }
   let unsubscribe: (() => void) | undefined;
@@ -698,6 +737,7 @@ function deferSessionSelectionUntilIdle(
   if (deferredSelectionTimer === null) {
     deferredSelectionTimer = window.setInterval(flushDeferredSelections, DEFERRED_SELECTION_POLL_MS);
   }
+  notifyDeferredSelections();
 }
 
 function settleDeferredSelection(key: string, entry: DeferredSessionSelection): void {
@@ -802,6 +842,14 @@ async function applyDeferredSelection(entry: DeferredSessionSelection): Promise<
   if (entry.effort) {
     await patchSessionEffort(entry.ctx, entry.store ?? null, entry.engine, entry.effort, entry.session, null);
   }
+  // 宿主状态已写入：让输入框按钮与弹窗立刻重读会话档位/模型（不用等 1s 轮询）
+  try {
+    window.dispatchEvent(
+      new CustomEvent("ccgui:model-changed", {
+        detail: { engine: entry.engine, model: entry.model ?? "", effort: entry.effort ?? "" },
+      }),
+    );
+  } catch { /* 非浏览器环境 */ }
 }
 
 /** 会话已关闭时的兜底：只写数据库，不碰内存。 */

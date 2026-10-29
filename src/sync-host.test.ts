@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyModelSelectionToHost, disposeDeferredSelections, findHostChatStoreFromFiber, findHostStoreActionsFromFiber, flushDeferredSelectionsFor, normalizeEffort, patchHostSessionEffort, patchHostSessionModel, type HostChatStore } from "./sync-host";
+import { applyModelSelectionToHost, disposeDeferredSelections, findHostChatStoreFromFiber, findHostStoreActionsFromFiber, flushDeferredSelectionsFor, getDeferredSelectionFor, normalizeEffort, patchHostSessionEffort, patchHostSessionModel, subscribeDeferredSelections, type HostChatStore } from "./sync-host";
 import { invokeHost } from "./host-transport";
 
 vi.mock("./host-transport", async (importOriginal) => {
@@ -721,6 +721,58 @@ describe("本轮生成中的切换不改写当前回合的模型/档位", () => 
     } finally {
       if (previous === null) localStorage.removeItem(ACTIVE_KEY);
       else localStorage.setItem(ACTIVE_KEY, previous);
+      disposeDeferredSelections();
+      vi.useRealTimers();
+    }
+  });
+
+  it("生成中刚切的档位对输入框立即可见，落地后清空并通知", async () => {
+    vi.useFakeTimers();
+    try {
+      const { store, flipStreaming } = makeStore({
+        active: { engine: "omp", sessionId: "s1", workspacePath: "/ws" },
+        openTabs: [{ engine: "omp", sessionId: "s1", workspacePath: "/ws" }],
+        models: { omp: "old-model" },
+        efforts: { omp: "medium" },
+        bySession: {
+          "omp/s1": {
+            activeModel: "old-model",
+            activeEffort: "medium",
+            messages: [],
+            streaming: true,
+          },
+        },
+        setModel: () => {},
+        setEffort: vi.fn(),
+      });
+      const container = document.createElement("div");
+      attachStoreFiber(container, store);
+      let notified = 0;
+      const off = subscribeDeferredSelections(() => {
+        notified += 1;
+      });
+      try {
+        expect(getDeferredSelectionFor("omp", "s1")).toBeNull();
+
+        await applyModelSelectionToHost({
+          engine: "omp",
+          model: "new-model",
+          effort: "max",
+          anchor: container,
+        });
+        // 输入框按钮读这个值立刻显示新档位；宿主会话仍是 medium
+        expect(getDeferredSelectionFor("omp", "s1")).toEqual({ model: "new-model", effort: "max" });
+        expect(getDeferredSelectionFor("omp", "other")).toBeNull();
+        expect(notified).toBeGreaterThan(0);
+
+        flipStreaming("omp/s1", false);
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+
+        expect(getDeferredSelectionFor("omp", "s1")).toBeNull();
+      } finally {
+        off();
+      }
+    } finally {
       disposeDeferredSelections();
       vi.useRealTimers();
     }

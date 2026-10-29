@@ -8,7 +8,7 @@ import { ProjectEngineIcon, inferModelEngine } from "./icons";
 import { CLI_DISPLAY_NAMES, isPluginProviderId, pluginProviderId, prefetchSystemSnapshot, qualifyEngineModel, updatePiFamilyModelEffort } from "./system-bridge";
 import { DEFAULT_STATE } from "./constants";
 import { useSessionDisplay, withSessionDisplay } from "./session-display";
-import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost, disposeDeferredSelections, flushDeferredSelectionsFor, repairLegacyContextSelections } from "./sync-host";
+import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost, disposeDeferredSelections, flushDeferredSelectionsFor, getDeferredSelectionFor, normalizeEffort, repairLegacyContextSelections, subscribeDeferredSelections } from "./sync-host";
 import { compactPluginModelLabel, installCompactModelLabels } from "./model-display";
 import { disposeHostTransport } from "./host-transport";
 import { withRemoteStorage } from "./remote-storage";
@@ -70,6 +70,14 @@ export default function activate(ctx: PluginContext): Disposer {
     const buttonRef = useRef<HTMLButtonElement | null>(null);
     const sessionDisplay = useSessionDisplay(containerRef);
     const state = withSessionDisplay(savedState, sessionDisplay);
+    // 生成中刚切的档位/模型：宿主要等本轮结束才接受（否则会改写这一轮的
+    // 历史元信息），但输入框按钮要立刻显示新选择。
+    const [, setPendingRevision] = useState(0);
+    useEffect(() => subscribeDeferredSelections(() => setPendingRevision((n) => n + 1)), []);
+    const pending = getDeferredSelectionFor(sessionDisplay?.selectedCli, sessionDisplay?.sessionId);
+    const view: PluginState = pending?.effort
+      ? { ...state, effort: normalizeEffort(pending.effort) ?? state.effort }
+      : state;
 
     useEffect(() => {
       prefetchSystemSnapshot(state.selectedCli);
@@ -147,7 +155,7 @@ export default function activate(ctx: PluginContext): Disposer {
     const bareModel = state.selectedModel ? compactPluginModelLabel(state.selectedModel.replace(/\[1m\]$/i, "")) : "未选择模型";
     const is1M = (state.selectedCli === "claude" || state.selectedCli === "omp" || state.selectedCli === "pi") && state.enable1MContext;
     const displayModel = is1M ? `${bareModel} [1m]` : bareModel;
-    const effortText = state.effort || "high";
+    const effortText = view.effort || "high";
     const modelIconEngine =
       inferModelEngine(state.selectedModel) || state.selectedCli;
     // 渠道显示名：插件渠道显示名称，系统渠道固定显示"系统渠道"
@@ -220,7 +228,7 @@ export default function activate(ctx: PluginContext): Disposer {
           <CliModelFlyoutMenu
             key={sessionDisplay?.sessionKey || "no-session"}
             ctx={ctx}
-            state={state}
+            state={view}
             themeManager={themeManager}
             triggerRef={buttonRef}
             onSave={stateStore.save}
