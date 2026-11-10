@@ -585,12 +585,6 @@ export function getHostSessionState(sessionKey: string): HostSessionState | null
   }
 }
 
-let lastDiagnostic = "";
-
-export function getLastDiagnostic(): string {
-  return lastDiagnostic;
-}
-
 /**
  * 当前会话是否有一轮正在生成，以及判定依据。宿主 store 里的
  * bySession[key].streaming 是权威值；Fiber 快照与 cliMenu 的 streaming 只是
@@ -938,7 +932,6 @@ async function patchSessionEffort(
       }
       const msg = `ctx.sessions.setEffort(${engine}, ${session.sessionId}, ${effort})`;
       console.warn(`[model-switcher] ✓ ${msg} 成功`);
-      lastDiagnostic = msg;
     } catch (err) {
       console.warn(`[model-switcher] ctx.sessions.setEffort 失败，fallback 到底层 patch:`, err);
     }
@@ -1300,7 +1293,6 @@ export async function applyModelSelectionToHost(params: {
   console.warn(`[model-switcher] 当前状态: store.efforts[${engine}]=${currentStoreEffort}, bySession[${sessionKey}].activeEffort=${bySessionEffort}, liveSession.activeEffort=${liveEffort}`);
   console.warn(`[model-switcher] 组件: store=${store ? "✓" : "✗"}, liveSession=${liveSession ? "✓" : "✗"}, ctx.sessions=${params.ctx?.sessions ? "✓" : "✗"}, streaming=${sessionStreaming ? `✓(${streamingSource})` : "✗"}`);
 
-  lastDiagnostic = `sessionId=${active?.sessionId ?? "null"} liveSession=${liveSession ? "✓" : "✗"} store=${store ? "✓" : "✗"} streaming=${sessionStreaming ? `✓(${streamingSource})` : "✗"}`;
   let patched = false;
   // 已有会话直接改 SessionState（避免 setEffort 触发 refreshSessions 覆盖）；新会话改引擎默认
   try {
@@ -1353,7 +1345,6 @@ export async function applyModelSelectionToHost(params: {
         session: active,
         model: finalModel,
       });
-      lastDiagnostic = `${lastDiagnostic} → 本轮生成中：模型 ${finalModel || "默认"} 记到下一轮`;
     }
     // 档位处理：新会话与已有会话全链路对齐与持久化
     if (effectiveHostEffort) {
@@ -1371,7 +1362,6 @@ export async function applyModelSelectionToHost(params: {
           effort: effectiveHostEffort,
         });
         patched = true;
-        lastDiagnostic = `${lastDiagnostic} → 本轮生成中：档位 ${effectiveHostEffort} 记到下一轮`;
         console.warn(`[model-switcher] 本轮正在生成，档位 ${effectiveHostEffort} 延迟到本轮结束后生效`);
       } else {
         const storeSetEffort = store?.getState().setEffort;

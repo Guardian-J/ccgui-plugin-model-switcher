@@ -106,7 +106,7 @@ function DropdownItem({ model, isAdded, activeEngine, onSelect }: DropdownItemPr
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       style={{
-        padding: '10px 12px',
+        padding: '6px 10px',
         cursor: 'pointer',
         backgroundColor: isHovered ? '#f3f4f6' : '#ffffff',
         borderBottom: '1px solid #e5e7eb',
@@ -118,11 +118,6 @@ function DropdownItem({ model, isAdded, activeEngine, onSelect }: DropdownItemPr
           <div style={{ fontSize: '13px', fontWeight: 500, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {model.label}
           </div>
-          {model.description && (
-            <div style={{ fontSize: '11px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px' }}>
-              {model.description}
-            </div>
-          )}
         </div>
         {isAdded && (
           <span style={{ color: '#9ca3af', flexShrink: 0 }}>

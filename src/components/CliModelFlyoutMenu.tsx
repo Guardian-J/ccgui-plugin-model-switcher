@@ -56,7 +56,6 @@ import {
   applyModelSelectionToHost,
   applyChannelSelectionToHost,
   hostSessionSelectionError as sessionSelectionError,
-  getLastDiagnostic,
 } from "../sync-host";
 import { useSessionDisplay, withSessionDisplay } from "../session-display";
 import { getHostSession, modelSelectionError, isConcreteModel } from "../selection-policy";
@@ -633,7 +632,6 @@ export function CliModelFlyoutMenu({
         ctx,
         anchor: triggerRef?.current,
       });
-      const diagnostic = getLastDiagnostic();
       const sessionError = sessionSelectionError(activeEngine);
       if (sessionError) throw new Error(sessionError);
       const saved = { ...nextState, selectedCli: activeEngine, selectedModel: cleanModel };
@@ -658,15 +656,10 @@ export function CliModelFlyoutMenu({
       const savedWithSessions = { ...saved, sessionChannels };
       await onSave(savedWithSessions);
       setState(savedWithSessions);
-      if (diagnostic) {
-        setStatusMsg(diagnostic);
-        setTimeout(() => setStatusMsg(null), 3000);
-      }
       return true;
     } catch (e) {
       setState(prevState);
-      const diagnostic = getLastDiagnostic();
-      setStatusMsg(`${e instanceof Error ? e.message : "模型切换失败"}${diagnostic ? ` [${diagnostic}]` : ""}`);
+      setStatusMsg(e instanceof Error ? e.message : "模型切换失败");
       return false;
     } finally {
       selectionPending.current = false;

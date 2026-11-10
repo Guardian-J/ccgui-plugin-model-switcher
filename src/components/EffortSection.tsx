@@ -141,6 +141,23 @@ export function EffortSection({
         <span className="ms-effort-label">
           推理强度 <output key={EFFORT_LEVELS[index]}>{EFFORT_LEVELS[index]}</output>
         </span>
+        <EffortSlider
+          position={position}
+          savedIndex={state.savedIndex}
+          disabled={disabled}
+          pending={state.pending}
+          isMax={isMax}
+          reducedMotion={reducedMotion}
+          visible={visible}
+          blast={blast}
+          onUpdatePreview={updatePreview}
+          onCommit={commit}
+          onCancel={cancelPreview}
+          pointerRef={state.pointer}
+          keyboardRef={state.keyboard}
+          savingRef={state.saving}
+          draftRef={state.draft}
+        />
         {is1MSupported ? (
           <button
             type="button"
@@ -175,27 +192,6 @@ export function EffortSection({
           </button>
         )}
       </div>
-      <div className="ms-range-labels">
-        <span>更快</span>
-        <span>更深入</span>
-      </div>
-      <EffortSlider
-        position={position}
-        savedIndex={state.savedIndex}
-        disabled={disabled}
-        pending={state.pending}
-        isMax={isMax}
-        reducedMotion={reducedMotion}
-        visible={visible}
-        blast={blast}
-        onUpdatePreview={updatePreview}
-        onCommit={commit}
-        onCancel={cancelPreview}
-        pointerRef={state.pointer}
-        keyboardRef={state.keyboard}
-        savingRef={state.saving}
-        draftRef={state.draft}
-      />
       {state.saveError && <div role="alert">{state.saveError}</div>}
     </div>
   );

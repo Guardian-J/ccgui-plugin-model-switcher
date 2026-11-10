@@ -124,9 +124,6 @@ function ModelRow({
           <span className="ms-row-title">
             <span className="ms-row-name">{model.label}</span>
           </span>
-          {model.description ? (
-            <span className="ms-row-detail">{model.description}</span>
-          ) : null}
         </span>
         {isSelected ? <CheckIcon size={16} className="ms-check" /> : null}
       </button>
