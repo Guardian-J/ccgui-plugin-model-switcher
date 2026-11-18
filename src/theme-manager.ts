@@ -110,7 +110,7 @@ export function generateThemeCss(config: GuiThemeConfig): string {
   }
   if (config.enableSleekScrollbars) {
     parts.push(`
-      * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--color-text-secondary, #888) 35%, transparent) transparent; }
+      html, body, .overflow-y-auto, .overflow-x-auto, .overflow-auto, pre, textarea { scrollbar-width: thin; scrollbar-color: var(--color-text-secondary, #888) transparent; }
       ::-webkit-scrollbar { width: 6px; height: 6px; }
       ::-webkit-scrollbar-track { background: transparent; }
       ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--color-text-secondary, #888) 35%, transparent); border-radius: 6px; }
@@ -166,7 +166,6 @@ export function generateThemeCss(config: GuiThemeConfig): string {
     parts.push(`${surfaces} {
       background-color: ${canvas};
       background-image: none;
-      background-attachment: fixed;
     }`);
   }
   if (config.customCss?.trim()) parts.push(config.customCss.trim());

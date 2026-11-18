@@ -142,6 +142,8 @@ export function CliModelFlyoutMenu({
   });
   const menuRef = useRef<HTMLDialogElement | null>(null);
   const closeRef = useRef(onClose);
+  const activeEngineRef = useRef(activeEngine);
+  activeEngineRef.current = activeEngine;
   closeRef.current = onClose;
   const busy = switching;
 
@@ -303,7 +305,8 @@ export function CliModelFlyoutMenu({
     const applyEngines = (res: EngineItemRule[]) => {
       if (cancelled || !res || res.length === 0) return;
       setEngines(res);
-      if (!getHostSession() && res.length > 0 && !res.some((e) => e.id === activeEngine)) {
+      const currentEngine = activeEngineRef.current;
+      if (!getHostSession() && res.length > 0 && !res.some((e) => e.id === currentEngine)) {
         const firstAvailable = res.find((e) => e.available) || res[0];
         setActiveEngine(firstAvailable.id);
         setState((prev) => ({ ...prev, selectedCli: firstAvailable.id }));
@@ -318,7 +321,7 @@ export function CliModelFlyoutMenu({
       if (customEvent.detail) applyEngines(customEvent.detail);
       else void getSystemEngines(true).then(applyEngines);
     };
-    const handleConfigChanged = () => void loadChannels(activeEngine);
+    const handleConfigChanged = () => void loadChannels(activeEngineRef.current);
     const handleWindowFocus = () => void getSystemEngines(true).then(applyEngines);
 
     window.addEventListener(CLI_ENGINES_CHANGED_EVENT, handleEnginesChanged);
@@ -331,7 +334,7 @@ export function CliModelFlyoutMenu({
       window.removeEventListener(CLI_CONFIG_CHANGED_EVENT, handleConfigChanged);
       window.removeEventListener("focus", handleWindowFocus);
     };
-  }, [activeEngine]);
+  }, []);
 
   // 引擎或会话切换时重新读取宿主当前渠道：切换会话页签后引擎可能不变，
   // 但宿主的 current provider 已随会话变化，必须重跑才能恢复高亮

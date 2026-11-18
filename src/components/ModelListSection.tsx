@@ -75,6 +75,7 @@ export function ModelListSection({
 
   // 点击外部关闭下拉框
   React.useEffect(() => {
+    if (!isDropdownOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node;
       const clickedInContainer = containerRef.current?.contains(target);
@@ -86,7 +87,7 @@ export function ModelListSection({
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [closeDropdown]);
+  }, [isDropdownOpen, closeDropdown]);
 
   // 计算下拉框位置
   const updateDropdownPosition = React.useCallback(() => {

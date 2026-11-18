@@ -118,6 +118,8 @@ export const flyoutStyles = `
 .ms-favorite-add { flex-shrink: 0; white-space: nowrap; min-height: 32px; padding: 5px 8px; border: 1px solid var(--ms-border); border-radius: 6px; }
 .ms-search .ms-field { height: 32px; padding: 6px 8px 6px 30px; background: var(--ms-surface); }
 .ms-search-icon { position: absolute; left: 10px; top: 9px; color: var(--ms-muted); pointer-events: none; }
+.ms-dropdown-item { padding: 6px 10px; cursor: pointer; background-color: #ffffff; border-bottom: 1px solid #e5e7eb; }
+.ms-dropdown-item:hover { background-color: #f3f4f6; }
 .ms-model-list { display: flex; flex-direction: column; gap: 2px; min-height: 80px; flex: 1; overflow-y: auto; padding: 3px; margin: -3px; }
 .ms-model-list .ms-row { flex-shrink: 0; min-height: 36px; padding: 5px 8px; }
 .ms-model-row { display: flex; align-items: center; gap: 2px; flex-shrink: 0; border: 1px solid transparent; border-radius: 6px; }

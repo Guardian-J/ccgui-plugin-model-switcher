@@ -15,6 +15,8 @@ interface ModelSearchDropdownProps {
   onSelectModel: (modelId: string) => void;
 }
 
+const MAX_DROPDOWN_ITEMS = 120;
+
 export function ModelSearchDropdown({
   isOpen,
   position,
@@ -26,7 +28,23 @@ export function ModelSearchDropdown({
   activeEngine,
   onSelectModel,
 }: ModelSearchDropdownProps) {
+  const [showAll, setShowAll] = React.useState(false);
+  const favoriteIds = React.useMemo(
+    () => new Set(favoriteModels.map((m) => m.id)),
+    [favoriteModels],
+  );
+
+  React.useEffect(() => {
+    setShowAll(false);
+  }, [isOpen, searchQuery]);
+
   if (!isOpen) return null;
+
+  const visibleModels =
+    showAll || filteredModels.length <= MAX_DROPDOWN_ITEMS
+      ? filteredModels
+      : filteredModels.slice(0, MAX_DROPDOWN_ITEMS);
+  const hasMore = !showAll && filteredModels.length > MAX_DROPDOWN_ITEMS;
 
   return (
     <div
@@ -58,18 +76,38 @@ export function ModelSearchDropdown({
           {searchQuery ? '未找到匹配的模型' : '暂无模型'}
         </div>
       ) : (
-        filteredModels.map(model => {
-          const isAdded = favoriteModels.some(m => m.id === model.id);
-          return (
+        <>
+          {visibleModels.map(model => (
             <DropdownItem
               key={model.id}
               model={model}
-              isAdded={isAdded}
+              isAdded={favoriteIds.has(model.id)}
               activeEngine={activeEngine}
               onSelect={onSelectModel}
             />
-          );
-        })
+          ))}
+          {hasMore && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowAll(true);
+              }}
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                border: 0,
+                background: '#f9fafb',
+                color: '#4b5563',
+                fontSize: '12px',
+                cursor: 'pointer',
+                textAlign: 'center',
+              }}
+            >
+              仅显示前 {MAX_DROPDOWN_ITEMS} 项（共 {filteredModels.length} 项），点击展开全部
+            </button>
+          )}
+        </>
       )}
     </div>
   );
@@ -83,8 +121,6 @@ interface DropdownItemProps {
 }
 
 function DropdownItem({ model, isAdded, activeEngine, onSelect }: DropdownItemProps) {
-  const [isHovered, setIsHovered] = React.useState(false);
-
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onSelect(model.id);
@@ -101,16 +137,9 @@ function DropdownItem({ model, isAdded, activeEngine, onSelect }: DropdownItemPr
     <div
       role="button"
       tabIndex={0}
+      className="ms-dropdown-item"
       onClick={handleClick}
       onKeyDown={handleKeyDown}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-      style={{
-        padding: '6px 10px',
-        cursor: 'pointer',
-        backgroundColor: isHovered ? '#f3f4f6' : '#ffffff',
-        borderBottom: '1px solid #e5e7eb',
-      }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <ProjectEngineIcon engine={inferModelEngine(model.id) || activeEngine} size={16} />

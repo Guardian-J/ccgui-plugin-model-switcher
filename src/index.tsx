@@ -12,6 +12,7 @@ import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelect
 import { compactPluginModelLabel, installCompactModelLabels } from "./model-display";
 import { disposeHostTransport } from "./host-transport";
 import { withRemoteStorage } from "./remote-storage";
+import { SEND_BLOCKED_TIP, SEND_GUARD_CSS, installComposerSendGuard, isModelRequiredBlocked } from "./send-guard";
 
 /**
  * CC GUI 插件入口：模型与供应商切换助手 (原生样式对齐 + GUI 美化扩展)
@@ -68,6 +69,8 @@ export default function activate(ctx: PluginContext): Disposer {
     const savedState = useCurrentState();
     const containerRef = useRef<HTMLDivElement | null>(null);
     const buttonRef = useRef<HTMLButtonElement | null>(null);
+    const [sendBlockedNotice, setSendBlockedNotice] = useState(false);
+    const blockedNoticeTimerRef = useRef<number | null>(null);
     const sessionDisplay = useSessionDisplay(containerRef);
     const state = withSessionDisplay(savedState, sessionDisplay);
     // 生成中刚切的档位/模型：宿主要等本轮结束才接受（否则会改写这一轮的
@@ -78,6 +81,11 @@ export default function activate(ctx: PluginContext): Disposer {
     const view: PluginState = pending?.effort
       ? { ...state, effort: normalizeEffort(pending.effort) ?? state.effort }
       : state;
+    const modelRequiredBlocked = isModelRequiredBlocked(
+      sessionDisplay,
+      state.selectedModel,
+      pending?.model,
+    );
 
     useEffect(() => {
       prefetchSystemSnapshot(state.selectedCli);
@@ -191,21 +199,73 @@ export default function activate(ctx: PluginContext): Disposer {
       };
     }, []);
 
+    // 未选择模型时禁止直接发送对话（拦截发送键与发送按钮点击）
+    useEffect(() => {
+      if (!modelRequiredBlocked) {
+        setSendBlockedNotice(false);
+        if (blockedNoticeTimerRef.current !== null) {
+          window.clearTimeout(blockedNoticeTimerRef.current);
+          blockedNoticeTimerRef.current = null;
+        }
+        return;
+      }
+      const el = containerRef.current;
+      if (!el) return;
+      return installComposerSendGuard(el, () => {
+        setSendBlockedNotice(true);
+        if (blockedNoticeTimerRef.current !== null) {
+          window.clearTimeout(blockedNoticeTimerRef.current);
+        }
+        blockedNoticeTimerRef.current = window.setTimeout(() => {
+          blockedNoticeTimerRef.current = null;
+          setSendBlockedNotice(false);
+        }, 2600);
+      });
+    }, [modelRequiredBlocked]);
+
+    useEffect(() => {
+      return () => {
+        if (blockedNoticeTimerRef.current !== null) {
+          window.clearTimeout(blockedNoticeTimerRef.current);
+          blockedNoticeTimerRef.current = null;
+        }
+      };
+    }, []);
+
     return (
       <div
         ref={containerRef}
         data-ccgui-plugin-model-switcher="true"
         className="relative inline-flex min-w-0 items-center"
       >
+        {sendBlockedNotice && !open && (
+          <button
+            type="button"
+            role="status"
+            aria-live="polite"
+            data-ccgui-plugin-btn="true"
+            className="ms-send-blocked-tip"
+            title="点击选择模型"
+            onClick={() => {
+              setSendBlockedNotice(false);
+              setOpen(true);
+            }}
+          >
+            {SEND_BLOCKED_TIP}
+          </button>
+        )}
         <button
           ref={buttonRef}
           type="button"
           data-ccgui-plugin-btn="true"
           aria-haspopup="dialog"
           aria-expanded={open}
-          onClick={() => setOpen((prev) => !prev)}
+          onClick={() => {
+            setSendBlockedNotice(false);
+            setOpen((prev) => !prev);
+          }}
           title={`引擎: ${state.selectedCli}\n渠道: ${channelName}\n模型: ${state.selectedModel || '未选择'}\n推理强度: ${effortText}`}
-          className="group flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 outline-none transition-colors hover:bg-background-primary-hover focus-visible:ring-2 focus-visible:ring-border-focus-ring"
+          className={`group flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 outline-none transition-colors hover:bg-background-primary-hover focus-visible:ring-2 focus-visible:ring-border-focus-ring${sendBlockedNotice ? " ms-model-btn-attention" : ""}`}
         >
           {/* 1. CLI 引擎 Logo */}
           <ProjectEngineIcon engine={state.selectedCli} size={16} />
@@ -246,6 +306,14 @@ export default function activate(ctx: PluginContext): Disposer {
     // 引擎 done 事件透传）不依赖 Fiber 找 store，是权威的回合结束信号。
     ctx.events.on("usage://done", flushDeferredSelectionsFor),
     installCompactModelLabels(),
+    (() => {
+      try {
+        return ctx.theme?.injectCss?.(SEND_GUARD_CSS) ?? (() => {});
+      } catch (err) {
+        console.warn("[model-switcher] 注入发送拦截样式失败:", err);
+        return () => {};
+      }
+    })(),
     // 注册到输入框工具栏 cliMenu 插槽（宿主 SDK 0.3.11 起，registerComposerSlot
     // 与 registerComposerStatusItem 共享同一权限 ui:composer-status；此前
     // registerComposerSlot 误校验不存在的 ui:composer，导致该插槽在 0.3.9~0.3.10

@@ -134,11 +134,22 @@ function Starfield() {
 
     let shooting: (Star & { life: number }) | null = null;
 
+    const unitGrad = ctx.createLinearGradient(0, 0, 1, 0);
+    unitGrad.addColorStop(0, "rgba(255,255,255,1)");
+    unitGrad.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = unitGrad;
+
     let raf = 0;
     let last = performance.now();
     const draw = (now: number) => {
+      if (document.hidden) {
+        raf = 0;
+        return;
+      }
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.globalAlpha = 1;
       ctx.clearRect(0, 0, width, height);
 
       for (const star of stars) {
@@ -146,11 +157,10 @@ function Starfield() {
         if (star.x < -6) Object.assign(star, makeStar(false));
         // motion streak: length scales with speed so near stars smear
         const streak = star.speed * 0.05;
-        const grad = ctx.createLinearGradient(star.x, star.y, star.x + streak, star.y);
-        grad.addColorStop(0, `rgba(255,255,255,${star.alpha.toFixed(3)})`);
-        grad.addColorStop(1, "rgba(255,255,255,0)");
-        ctx.fillStyle = grad;
-        ctx.fillRect(star.x, star.y - star.size / 2, streak + star.size, star.size);
+        const w = streak + star.size;
+        ctx.globalAlpha = star.alpha;
+        ctx.setTransform(dpr * w, 0, 0, dpr * star.size, dpr * star.x, dpr * (star.y - star.size / 2));
+        ctx.fillRect(0, 0, 1, 1);
       }
 
       // ~ every 2.5s launch a shooting star: long bright streak, fades out
@@ -163,20 +173,26 @@ function Starfield() {
         if (shooting.x < -40 || shooting.life <= 0) {
           shooting = null;
         } else {
-          const len = 26;
-          const a = shooting.alpha * Math.max(shooting.life, 0);
-          const grad = ctx.createLinearGradient(shooting.x, shooting.y, shooting.x + len, shooting.y);
-          grad.addColorStop(0, `rgba(255,255,255,${a.toFixed(3)})`);
-          grad.addColorStop(1, "rgba(255,255,255,0)");
-          ctx.fillStyle = grad;
-          ctx.fillRect(shooting.x, shooting.y - 0.6, len, 1.2);
+          ctx.globalAlpha = shooting.alpha * Math.max(shooting.life, 0);
+          ctx.setTransform(dpr * 26, 0, 0, dpr * 1.2, dpr * shooting.x, dpr * (shooting.y - 0.6));
+          ctx.fillRect(0, 0, 1, 1);
         }
       }
 
       raf = requestAnimationFrame(draw);
     };
+    const onVisibility = () => {
+      if (!document.hidden && !raf) {
+        last = performance.now();
+        raf = requestAnimationFrame(draw);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (raf) cancelAnimationFrame(raf);
+    };
   }, []);
 
   return <canvas ref={canvasRef} aria-hidden className="ms-effort-canvas" />;
@@ -205,31 +221,34 @@ function PixelationOverlay() {
     const cols = Math.ceil(width / cell);
     const rows = Math.ceil(height / cell);
     // Blue noise palette (blue-300 → blue-600)
-    const palette = [
-      [142, 197, 255], // blue-300
-      [81, 162, 255], // blue-400
-      [43, 127, 255], // blue-500
-      [21, 93, 252], // blue-600
+    const paletteCss = [
+      "rgb(142,197,255)", // blue-300
+      "rgb(81,162,255)",  // blue-400
+      "rgb(43,127,255)",  // blue-500
+      "rgb(21,93,252)",   // blue-600
     ];
+    const colDensity = Array.from({ length: cols }, (_, col) => {
+      const t = cols > 1 ? col / (cols - 1) : 1;
+      return { t, density: 0.78 * Math.pow(t, 1.6) };
+    });
 
     let raf = 0;
     let last = 0;
     const draw = (time: number) => {
+      if (document.hidden) {
+        raf = 0;
+        return;
+      }
       if (time - last > 70) {
         last = time;
+        ctx.globalAlpha = 1;
         ctx.clearRect(0, 0, width, height);
         for (let col = 0; col < cols; col++) {
-          // 0 at the left edge → 1 at the right edge: dense at the right,
-          // dissolving out toward the left. Capped below 1 so even the
-          // rightmost cells keep flickering instead of reading as solid.
-          const t = col / (cols - 1);
-          const density = 0.78 * Math.pow(t, 1.6);
+          const { t, density } = colDensity[col];
           for (let row = 0; row < rows; row++) {
             if (Math.random() < density) {
-              const [r, g, b] = palette[(Math.random() * palette.length) | 0];
-              // Fully random alpha per cell per frame keeps the field alive
-              const alpha = (0.15 + Math.random() * 0.85) * (0.35 + 0.65 * t);
-              ctx.fillStyle = `rgba(${r},${g},${b},${alpha.toFixed(3)})`;
+              ctx.fillStyle = paletteCss[(Math.random() * paletteCss.length) | 0];
+              ctx.globalAlpha = (0.15 + Math.random() * 0.85) * (0.35 + 0.65 * t);
               ctx.fillRect(col * cell, row * cell, cell - 1, cell - 1);
             }
           }
@@ -237,8 +256,17 @@ function PixelationOverlay() {
       }
       raf = requestAnimationFrame(draw);
     };
+    const onVisibility = () => {
+      if (!document.hidden && !raf) {
+        raf = requestAnimationFrame(draw);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (raf) cancelAnimationFrame(raf);
+    };
   }, []);
 
   return (
@@ -328,6 +356,10 @@ export function FlameOverlay() {
     let raf = 0;
     const start = performance.now();
     const draw = (now: number) => {
+      if (document.hidden) {
+        raf = 0;
+        return;
+      }
       const elapsed = (now - start) / 1000;
       gl.uniform1f(uTime, elapsed);
       // Throttle up over ~1.4s with an ease-out so the burn builds gradually
@@ -338,12 +370,19 @@ export function FlameOverlay() {
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       raf = requestAnimationFrame(draw);
     };
+    const onVisibility = () => {
+      if (!document.hidden && !raf) {
+        raf = requestAnimationFrame(draw);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     raf = requestAnimationFrame(draw);
     // No loseContext() here: React strict-mode re-runs the effect on the same
     // canvas, and a deliberately-lost context would poison the second run.
     // The context is reclaimed with the canvas when the overlay unmounts.
     return () => {
-      cancelAnimationFrame(raf);
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (raf) cancelAnimationFrame(raf);
       gl.deleteBuffer(buffer);
       gl.deleteProgram(program);
     };

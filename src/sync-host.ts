@@ -52,7 +52,7 @@ export interface HostSessionState {
   activeProvider?: string | null;
 }
 
-interface HostCliMenuProps extends HostCliMenuCallbacks {
+export interface HostCliMenuProps extends HostCliMenuCallbacks {
   value?: string;
   models?: Record<string, string>;
   efforts?: Record<string, string>;
@@ -74,6 +74,73 @@ export function normalizeEffort(val: unknown): EffortLevel | undefined {
     if (s.includes(level)) return level;
   }
   return undefined;
+}
+
+function extractSessionLastUsedFromProps(props: Record<string, unknown>): {
+  lastUsedModel?: string;
+  lastUsedEffort?: EffortLevel;
+} | null {
+  let lastUsedModel: string | undefined;
+  let lastUsedEffort: EffortLevel | undefined;
+
+  // 1. SessionState 对象 (包含 activeModel, activeEffort, messages 数组)
+  const sess = (props.session && typeof props.session === "object" ? props.session : null) as {
+    activeModel?: string | null;
+    activeEffort?: string | null;
+    messages?: Array<{ model?: string; effort?: string; role?: string }>;
+  } | null;
+
+  if (sess) {
+    if (sess.activeModel) {
+      lastUsedModel = sess.activeModel.trim();
+    }
+    if (sess.activeEffort) {
+      lastUsedEffort = normalizeEffort(sess.activeEffort);
+    }
+    if ((!lastUsedModel || !lastUsedEffort) && Array.isArray(sess.messages)) {
+      for (let i = sess.messages.length - 1; i >= 0; i--) {
+        const m = sess.messages[i];
+        if (!lastUsedModel && m?.model) {
+          lastUsedModel = m.model.trim();
+        }
+        if (!lastUsedEffort && m?.effort) {
+          lastUsedEffort = normalizeEffort(m.effort);
+        }
+        if (lastUsedModel && lastUsedEffort) break;
+      }
+    }
+  }
+
+  // 2. 直接接收 messages 数组的组件 (如 MessageTimeline)
+  if ((!lastUsedModel || !lastUsedEffort) && Array.isArray(props.messages)) {
+    const msgs = props.messages as Array<{ model?: string; effort?: string }>;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (!lastUsedModel && m?.model) {
+        lastUsedModel = m.model.trim();
+      }
+      if (!lastUsedEffort && m?.effort) {
+        lastUsedEffort = normalizeEffort(m.effort);
+      }
+      if (lastUsedModel && lastUsedEffort) break;
+    }
+  }
+
+  // 3. AgentThinking / TurnStatus 思考指示器属性
+  if (
+    (!lastUsedModel || !lastUsedEffort) &&
+    (typeof props.label === "string" || props.variant === "wave" || props.variant === "spin")
+  ) {
+    if (!lastUsedModel && typeof props.model === "string") {
+      const match = props.model.match(/模型\s+([^\s·]+)/) || [null, props.model];
+      if (match[1]) lastUsedModel = match[1].trim();
+    }
+    if (!lastUsedEffort && typeof props.effort === "string") {
+      lastUsedEffort = normalizeEffort(props.effort);
+    }
+  }
+
+  return lastUsedModel || lastUsedEffort ? { lastUsedModel, lastUsedEffort } : null;
 }
 
 function extractSessionLastUsed(rootFiber: unknown): {
@@ -99,60 +166,13 @@ function extractSessionLastUsed(rootFiber: unknown): {
 
     const props = node.memoizedProps;
     if (props && typeof props === "object") {
-      // 1. SessionState 对象 (包含 activeModel, activeEffort, messages 数组)
-      const sess = (props.session && typeof props.session === "object" ? props.session : null) as {
-        activeModel?: string | null;
-        activeEffort?: string | null;
-        messages?: Array<{ model?: string; effort?: string; role?: string }>;
-      } | null;
-
-      if (sess) {
-        if (!lastUsedModel && sess.activeModel) {
-          lastUsedModel = sess.activeModel.trim();
-        }
-        if (!lastUsedEffort && sess.activeEffort) {
-          lastUsedEffort = normalizeEffort(sess.activeEffort);
-        }
-        if (Array.isArray(sess.messages)) {
-          for (let i = sess.messages.length - 1; i >= 0; i--) {
-            const m = sess.messages[i];
-            if (!lastUsedModel && m?.model) {
-              lastUsedModel = m.model.trim();
-            }
-            if (!lastUsedEffort && m?.effort) {
-              lastUsedEffort = normalizeEffort(m.effort);
-            }
-            if (lastUsedModel && lastUsedEffort) break;
-          }
-        }
+      const extracted = extractSessionLastUsedFromProps(props);
+      if (extracted?.lastUsedModel && !lastUsedModel) {
+        lastUsedModel = extracted.lastUsedModel;
       }
-
-      // 2. 直接接收 messages 数组的组件 (如 MessageTimeline)
-      if (Array.isArray(props.messages)) {
-        const msgs = props.messages as Array<{ model?: string; effort?: string }>;
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i];
-          if (!lastUsedModel && m?.model) {
-            lastUsedModel = m.model.trim();
-          }
-          if (!lastUsedEffort && m?.effort) {
-            lastUsedEffort = normalizeEffort(m.effort);
-          }
-          if (lastUsedModel && lastUsedEffort) break;
-        }
+      if (extracted?.lastUsedEffort && !lastUsedEffort) {
+        lastUsedEffort = extracted.lastUsedEffort;
       }
-
-      // 3. AgentThinking / TurnStatus 思考指示器属性
-      if (typeof props.label === "string" || props.variant === "wave" || props.variant === "spin") {
-        if (!lastUsedModel && typeof props.model === "string") {
-          const match = props.model.match(/模型\s+([^\s·]+)/) || [null, props.model];
-          if (match[1]) lastUsedModel = match[1].trim();
-        }
-        if (!lastUsedEffort && typeof props.effort === "string") {
-          lastUsedEffort = normalizeEffort(props.effort);
-        }
-      }
-
       if (lastUsedModel && lastUsedEffort) {
         return { lastUsedModel, lastUsedEffort };
       }
@@ -163,6 +183,14 @@ function extractSessionLastUsed(rootFiber: unknown): {
   }
 
   return lastUsedModel || lastUsedEffort ? { lastUsedModel, lastUsedEffort } : null;
+}
+
+export function getTimelineLastUsed(): {
+  lastUsedModel?: string;
+  lastUsedEffort?: EffortLevel;
+} | null {
+  const timelineFiber = findTimelineFiber();
+  return timelineFiber ? extractSessionLastUsed(timelineFiber) : null;
 }
 
 function findTimelineFiber(): unknown {
@@ -200,6 +228,8 @@ export function committedFiber(element: HTMLElement): any {
   return fiber;
 }
 
+const toolbarTriggerCache = new WeakMap<Element, HTMLElement>();
+
 export function findBuiltinTriggerButton(anchor?: HTMLElement | null): HTMLElement | null {
   if (typeof document === "undefined") return null;
   const isCliTrigger = (element: HTMLElement | null) => {
@@ -215,12 +245,20 @@ export function findBuiltinTriggerButton(anchor?: HTMLElement | null): HTMLEleme
     : null;
   const toolbar = (anchor && typeof anchor.closest === "function" ? anchor.closest("div.select-none") : null) ||
     (pluginRoot && typeof pluginRoot.closest === "function" ? pluginRoot.closest("div.select-none") : null);
-  if (toolbar && typeof toolbar.querySelectorAll === "function") {
-    for (const button of toolbar.querySelectorAll<HTMLElement>('button:not([data-ccgui-plugin-btn])')) {
-      if (isCliTrigger(button)) return button;
+  if (toolbar) {
+    const cached = toolbarTriggerCache.get(toolbar);
+    if (cached && cached.isConnected && toolbar.contains(cached) && isCliTrigger(cached)) {
+      return cached;
+    }
+    if (typeof toolbar.querySelectorAll === "function") {
+      for (const button of toolbar.querySelectorAll<HTMLElement>('button:not([data-ccgui-plugin-btn])')) {
+        if (isCliTrigger(button)) {
+          toolbarTriggerCache.set(toolbar, button);
+          return button;
+        }
+      }
     }
   }
-
   // 1. 通过选择器直接查找紧随在插件按钮前面的同级原生按钮
   const selectorCandidates = [
     'div.select-none > button.group:not([data-ccgui-plugin-btn])[aria-label*=" · "]',
@@ -271,13 +309,19 @@ export function findBuiltinTriggerButton(anchor?: HTMLElement | null): HTMLEleme
 /**
  * 遍历 React Fiber 树获取 CliMenu 组件的真实回调函数
  */
-export function getHostCliMenuProps(anchor?: HTMLElement | null): HostCliMenuProps | null {
-  const btn = findBuiltinTriggerButton(anchor);
+export function getHostCliMenuProps(
+  anchor?: HTMLElement | null,
+  options?: { includeLastUsed?: boolean; triggerButton?: HTMLElement | null },
+): HostCliMenuProps | null {
+  const btn = options?.triggerButton !== undefined
+    ? options.triggerButton
+    : findBuiltinTriggerButton(anchor);
   if (!btn) return null;
 
   let fiber = committedFiber(btn);
   let depth = 0;
   let result: HostCliMenuProps | null = null;
+  let hasSession = false;
   let lastUsedModel: string | undefined;
   let lastUsedEffort: EffortLevel | undefined;
 
@@ -299,10 +343,11 @@ export function getHostCliMenuProps(anchor?: HTMLElement | null): HostCliMenuPro
         (props.active === null || typeof props.active?.engine === "string")) {
       result.session = props.active;
       result.streaming = props.streaming === true;
+      hasSession = true;
     }
 
-    if ((!lastUsedModel || !lastUsedEffort) && props) {
-      const extracted = extractSessionLastUsed(fiber);
+    if ((!lastUsedModel || !lastUsedEffort) && props && typeof props === "object") {
+      const extracted = extractSessionLastUsedFromProps(props);
       if (extracted?.lastUsedModel && !lastUsedModel) {
         lastUsedModel = extracted.lastUsedModel;
       }
@@ -311,7 +356,7 @@ export function getHostCliMenuProps(anchor?: HTMLElement | null): HostCliMenuPro
       }
     }
 
-    if (result?.session && lastUsedModel && lastUsedEffort) {
+    if (hasSession && (options?.includeLastUsed === false || (lastUsedModel && lastUsedEffort))) {
       break;
     }
 
@@ -319,17 +364,14 @@ export function getHostCliMenuProps(anchor?: HTMLElement | null): HostCliMenuPro
     depth++;
   }
 
-  // 若向上遍历未找齐，尝试从 Timeline 的 DOM Fiber 补充提取
-  if (!lastUsedModel || !lastUsedEffort) {
-    const timelineFiber = findTimelineFiber();
-    if (timelineFiber) {
-      const timelineExtracted = extractSessionLastUsed(timelineFiber);
-      if (timelineExtracted?.lastUsedModel && !lastUsedModel) {
-        lastUsedModel = timelineExtracted.lastUsedModel;
-      }
-      if (timelineExtracted?.lastUsedEffort && !lastUsedEffort) {
-        lastUsedEffort = timelineExtracted.lastUsedEffort;
-      }
+  // 仅在需要兜底且向上遍历未找齐时，尝试一次从 Timeline 的 DOM Fiber 补充提取
+  if (options?.includeLastUsed !== false && (!lastUsedModel || !lastUsedEffort)) {
+    const timelineExtracted = getTimelineLastUsed();
+    if (timelineExtracted?.lastUsedModel && !lastUsedModel) {
+      lastUsedModel = timelineExtracted.lastUsedModel;
+    }
+    if (timelineExtracted?.lastUsedEffort && !lastUsedEffort) {
+      lastUsedEffort = timelineExtracted.lastUsedEffort;
     }
   }
 
@@ -544,10 +586,29 @@ function findHostStoreActions(anchor?: HTMLElement | null): HostStoreActions | n
   return null;
 }
 
+const triggerStoreCache = new WeakMap<HTMLElement, HostChatStore>();
+
+export function findHostChatStoreForTrigger(btn: HTMLElement | null): HostChatStore | null {
+  if (!btn) return null;
+  const cached = triggerStoreCache.get(btn);
+  if (cached && typeof cached.getState === "function") {
+    return cached;
+  }
+  const found = findHostChatStoreFromFiber(committedFiber(btn));
+  if (found) {
+    triggerStoreCache.set(btn, found);
+  }
+  return found;
+}
+
 function findHostChatStore(anchor?: HTMLElement | null): HostChatStore | null {
-  for (const el of hostFiberStarts(anchor)) {
+  const starts = hostFiberStarts(anchor);
+  for (let i = 0; i < starts.length; i++) {
+    const el = starts[i];
     if (!el) continue;
-    const found = findHostChatStoreFromFiber(committedFiber(el));
+    const found = i === 0
+      ? findHostChatStoreForTrigger(el)
+      : findHostChatStoreFromFiber(committedFiber(el));
     if (found) return found;
   }
   return null;
@@ -1470,8 +1531,8 @@ export async function repairLegacyContextSelections(): Promise<void> {
 }
 
 /** Mounted tabs may still hold the old selector after storage has been repaired. */
-export function repairLegacyHostModel(anchor?: HTMLElement | null): void {
-  const host = getHostCliMenuProps(anchor);
+export function repairLegacyHostModel(anchor?: HTMLElement | null, preloadedHost?: HostCliMenuProps | null): void {
+  const host = preloadedHost !== undefined ? preloadedHost : getHostCliMenuProps(anchor, { includeLastUsed: false });
   if (!host?.onModelChange || host.streaming) return;
   const session = host.session !== undefined ? host.session : getHostSession();
   const engine = session?.engine || host.value;

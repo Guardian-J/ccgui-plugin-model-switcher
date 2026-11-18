@@ -46,8 +46,50 @@ export function installCompactModelLabels(): Disposer {
   };
 
   const scan = (element: Element) => {
-    if (element.matches(metadataSelector)) update(element);
+    if (element.matches(metadataSelector)) {
+      update(element);
+      return;
+    }
+    if (element.closest("pre, code, .prose, .markdown-body")) {
+      return;
+    }
     element.querySelectorAll(metadataSelector).forEach(update);
+  };
+
+  const pending = new Set<Element>();
+  let scheduledId: number | null = null;
+  let microtaskPending = false;
+  let lastPruneAt = 0;
+
+  const flush = () => {
+    scheduledId = null;
+    microtaskPending = false;
+    if (pending.size > 0) {
+      for (const el of pending) {
+        if (el.isConnected) scan(el);
+      }
+      pending.clear();
+    }
+    const now = Date.now();
+    if (now - lastPruneAt >= 500) {
+      lastPruneAt = now;
+      for (const text of changed.keys()) {
+        if (!text.isConnected) changed.delete(text);
+      }
+      for (const [parent, obs] of nodeObservers) {
+        if (!parent.isConnected) { obs.disconnect(); nodeObservers.delete(parent); }
+      }
+    }
+  };
+
+  const scheduleFlush = () => {
+    if (scheduledId !== null || microtaskPending) return;
+    if (typeof requestAnimationFrame === "function") {
+      scheduledId = requestAnimationFrame(flush);
+    } else {
+      microtaskPending = true;
+      queueMicrotask(flush);
+    }
   };
 
   // Only watch childList additions — no characterData on the whole body.
@@ -55,15 +97,11 @@ export function installCompactModelLabels(): Disposer {
   const observer = new MutationObserver(records => {
     for (const record of records) {
       for (const node of record.addedNodes) {
-        if (node instanceof Element) scan(node);
+        if (node instanceof Element) pending.add(node);
       }
     }
-    // Release stale references from unmounted virtual rows.
-    for (const text of changed.keys()) {
-      if (!text.isConnected) changed.delete(text);
-    }
-    for (const [parent, obs] of nodeObservers) {
-      if (!parent.isConnected) { obs.disconnect(); nodeObservers.delete(parent); }
+    if (pending.size > 0 || changed.size > 0 || nodeObservers.size > 0) {
+      scheduleFlush();
     }
   });
 
@@ -72,6 +110,11 @@ export function installCompactModelLabels(): Disposer {
 
   return () => {
     observer.disconnect();
+    if (scheduledId !== null && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(scheduledId);
+      scheduledId = null;
+    }
+    pending.clear();
     for (const obs of nodeObservers.values()) obs.disconnect();
     nodeObservers.clear();
     for (const [text, value] of changed) {

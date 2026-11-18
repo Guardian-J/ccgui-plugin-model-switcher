@@ -1,6 +1,15 @@
 import { useEffect, useState } from "./react-context";
 import { getHostSession, isConcreteModel } from "./selection-policy";
-import { findBuiltinTriggerButton, getHostCliMenuProps, findHostChatStoreFromFiber, committedFiber, normalizeEffort, repairLegacyHostModel } from "./sync-host";
+import {
+  findBuiltinTriggerButton,
+  getHostCliMenuProps,
+  findHostChatStoreForTrigger,
+  getTimelineLastUsed,
+  normalizeEffort,
+  repairLegacyHostModel,
+  type HostCliMenuProps,
+  type HostChatStore,
+} from "./sync-host";
 import type { CliEngineId, EffortLevel, PluginState } from "./types";
 import { isPluginProviderId, pluginProviderId } from "./system-bridge";
 
@@ -17,8 +26,16 @@ export interface SessionDisplay {
   selectedProviderId?: string;
 }
 
-export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay | null {
-  const host = getHostCliMenuProps(anchor);
+export function readSessionDisplay(
+  anchor?: HTMLElement | null,
+  preloaded?: { triggerButton?: HTMLElement | null; host?: HostCliMenuProps | null },
+): SessionDisplay | null {
+  const btn = preloaded?.triggerButton !== undefined
+    ? preloaded.triggerButton
+    : findBuiltinTriggerButton(anchor);
+  const host = preloaded?.host !== undefined
+    ? preloaded.host
+    : getHostCliMenuProps(anchor, { includeLastUsed: false, triggerButton: btn });
   const session = host?.session !== undefined ? host.session : getHostSession();
   const engine = session?.engine || host?.value;
   if (!engine) return null;
@@ -33,10 +50,8 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
   let sessionContextWindow: number | undefined;
   // 从 store / bySession 读取真实状态
   try {
-    const btn = findBuiltinTriggerButton(anchor);
     if (btn) {
-      const fiber = committedFiber(btn);
-      const store = findHostChatStoreFromFiber(fiber);
+      const store = findHostChatStoreForTrigger(btn);
       if (store) {
         const state = store.getState();
         if (state.active && state.active.engine === engine && state.active.model) {
@@ -81,19 +96,31 @@ export function readSessionDisplay(anchor?: HTMLElement | null): SessionDisplay 
   // 3. 会话真实 activeModel（bySession[sessionKey].activeModel）
   // 4. 消息历史兜底（host?.lastUsedModel）
   const explicitModel = session?.model || tabActiveModel;
-  const isNewSession = !session?.sessionId && !host?.lastUsedModel && !sessionActiveModel;
+  let lastUsedModel = host?.lastUsedModel;
+  let lastUsedEffort = host?.lastUsedEffort;
+  if (
+    session?.sessionId &&
+    ((!explicitModel && !sessionActiveModel && !matchingHost?.models?.[engine] && !lastUsedModel) ||
+      (!sessionActiveEffort && !session?.effort && !matchingHost?.efforts?.[engine] && !lastUsedEffort))
+  ) {
+    const timelineUsed = getTimelineLastUsed();
+    if (timelineUsed) {
+      if (!lastUsedModel) lastUsedModel = timelineUsed.lastUsedModel;
+      if (!lastUsedEffort) lastUsedEffort = timelineUsed.lastUsedEffort;
+    }
+  }
+  const isNewSession = !session?.sessionId && !lastUsedModel && !sessionActiveModel;
   const model = isNewSession
     ? (explicitModel || "")
-    : (explicitModel || sessionActiveModel || host?.lastUsedModel || matchingHost?.models?.[engine] || "");
+    : (explicitModel || sessionActiveModel || lastUsedModel || matchingHost?.models?.[engine] || "");
   // 档位由细到粗：会话真实 activeEffort -> 会话显式 effort -> 消息历史兜底 -> 引擎默认 -> 默认
   const effort = (
     sessionActiveEffort ||
     (session?.effort as EffortLevel) ||
-    host?.lastUsedEffort ||
+    lastUsedEffort ||
     (matchingHost?.efforts?.[engine] as EffortLevel) ||
     "high"
   );
-  // 兜底：localStorage、props、全局默认
   if (!selectedProviderId) {
     const localStorageSession = getHostSession();
     // 新宿主（无 onChannelChange）自己管理渠道绑定，props 上的 session.provider
@@ -237,23 +264,35 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
   };
 }
 
+function isSameSessionDisplay(a: SessionDisplay | null, b: SessionDisplay | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.sessionKey === b.sessionKey &&
+    a.stableKey === b.stableKey &&
+    a.sessionId === b.sessionId &&
+    a.selectedCli === b.selectedCli &&
+    a.selectedModel === b.selectedModel &&
+    a.effort === b.effort &&
+    a.enable1MContext === b.enable1MContext &&
+    a.selectedProviderId === b.selectedProviderId
+  );
+}
+
 export function useSessionDisplay(anchor?: { current: HTMLElement | null }): SessionDisplay | null {
   const [display, setDisplay] = useState(() => readSessionDisplay(anchor?.current));
   useEffect(() => {
+    let disposed = false;
     let observed: HTMLElement | null = null;
-    let cachedTrigger: HTMLElement | null = null;
-    let cacheExpiry = 0;
-    const observer = new MutationObserver(() => refresh());
+    let subscribedStore: HostChatStore | null = null;
+    let unsubscribeStore: (() => void) | null = null;
+    let microtaskQueued = false;
+    const observer = new MutationObserver(() => scheduleRefresh());
 
     const refresh = () => {
-      repairLegacyHostModel(anchor?.current);
-      // 缓存触发按钮引用 1s，避免每次 MutationObserver 回调都重走 Fiber 树扫描
-      const now = Date.now();
-      if (now > cacheExpiry) {
-        cachedTrigger = findBuiltinTriggerButton(anchor?.current);
-        cacheExpiry = now + 1000;
-      }
-      const trigger = cachedTrigger;
+      if (disposed) return;
+      const anchorEl = anchor?.current;
+      const trigger = findBuiltinTriggerButton(anchorEl);
       if (trigger !== observed) {
         observer.disconnect();
         observed = trigger;
@@ -263,20 +302,45 @@ export function useSessionDisplay(anchor?: { current: HTMLElement | null }): Ses
           observer.observe(trigger, { attributes: true, attributeFilter: ["aria-label", "disabled", "data-value"] });
         }
       }
-      const next = readSessionDisplay(anchor?.current);
-      setDisplay(prev => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
+      const store = trigger ? findHostChatStoreForTrigger(trigger) : null;
+      if (store !== subscribedStore) {
+        unsubscribeStore?.();
+        unsubscribeStore = null;
+        subscribedStore = store;
+        if (store && typeof store.subscribe === "function") {
+          unsubscribeStore = store.subscribe(() => scheduleRefresh());
+        }
+      }
+      const host = trigger
+        ? getHostCliMenuProps(anchorEl, { includeLastUsed: false, triggerButton: trigger })
+        : null;
+      repairLegacyHostModel(anchorEl, host);
+      const next = readSessionDisplay(anchorEl, { triggerButton: trigger, host });
+      setDisplay((prev) => (isSameSessionDisplay(prev, next) ? prev : next));
     };
+
+    const scheduleRefresh = () => {
+      if (disposed || microtaskQueued) return;
+      microtaskQueued = true;
+      queueMicrotask(() => {
+        microtaskQueued = false;
+        refresh();
+      });
+    };
+
     refresh();
-    const timer = window.setInterval(refresh, 1000);
-    window.addEventListener("storage", refresh);
-    window.addEventListener("ccgui:model-changed", refresh);
-    window.addEventListener("ccgui:channel-changed", refresh);
+    const timer = window.setInterval(refresh, 1500);
+    window.addEventListener("storage", scheduleRefresh);
+    window.addEventListener("ccgui:model-changed", scheduleRefresh);
+    window.addEventListener("ccgui:channel-changed", scheduleRefresh);
     return () => {
+      disposed = true;
       observer.disconnect();
+      unsubscribeStore?.();
       clearInterval(timer);
-      window.removeEventListener("storage", refresh);
-      window.removeEventListener("ccgui:model-changed", refresh);
-      window.removeEventListener("ccgui:channel-changed", refresh);
+      window.removeEventListener("storage", scheduleRefresh);
+      window.removeEventListener("ccgui:model-changed", scheduleRefresh);
+      window.removeEventListener("ccgui:channel-changed", scheduleRefresh);
     };
   }, [anchor]);
   return display;
