@@ -101,10 +101,11 @@ export function readSessionDisplay(
   // 3. 消息历史兜底（host?.lastUsedModel）
   // 4. 宿主计算的当前页签权威模型 / 引擎默认模型
   //
-  // 新会话也必须认引擎默认模型：插件选定模型后会写 store.models 与
-  // AppSettings.defaultModels（syncAppSettings），宿主发送时
+  // 新会话页签（sessionId === null）也必须认引擎默认模型：插件选定模型后会写
+  // store.models 与 AppSettings.defaultModels（syncAppSettings），宿主发送时
   // resolveSessionModel 正是用它兜底。只认 active.model 会把"已选模型"
   // 误判成未选择，发送守卫因此永远拦截首条消息。
+  // 但连活动页签都没有（session === null）时保持原语义：不把引擎默认当作已选。
   const explicitModel = session?.model || tabActiveModel;
   let lastUsedModel = host?.lastUsedModel;
   let lastUsedEffort = host?.lastUsedEffort;
@@ -119,13 +120,13 @@ export function readSessionDisplay(
       if (!lastUsedEffort) lastUsedEffort = timelineUsed.lastUsedEffort;
     }
   }
-  const model =
-    explicitModel ||
-    sessionActiveModel ||
-    lastUsedModel ||
-    matchingHost?.models?.[engine] ||
-    engineDefaultModel ||
-    "";
+  const isNewSession = !session?.sessionId && !lastUsedModel && !sessionActiveModel;
+  // 引擎默认模型只在确实存在活动页签时才算"已选"；session === null（连新会话
+  // 页签都没有）时保持原语义，不把默认模型当作已选。
+  const engineModel = session ? (matchingHost?.models?.[engine] || engineDefaultModel || "") : "";
+  const model = isNewSession
+    ? (explicitModel || engineModel)
+    : (explicitModel || sessionActiveModel || lastUsedModel || matchingHost?.models?.[engine] || engineDefaultModel || "");
   // 档位由细到粗：会话真实 activeEffort -> 会话显式 effort -> 消息历史兜底 -> 引擎默认 -> 默认
   const effort = (
     sessionActiveEffort ||

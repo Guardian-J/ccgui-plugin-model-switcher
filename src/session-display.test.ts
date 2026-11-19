@@ -55,6 +55,13 @@ describe("readSessionDisplay 模型解析与发送守卫", () => {
     expect(display && isModelRequiredBlocked(display, display.selectedModel)).toBe(true);
   });
 
+  it("没有活动页签时不把引擎默认模型当作已选", () => {
+    // localStorage 无 activeSession：宿主连新会话页签都还没建。
+    const display = readWithHost(makeHost({ claude: "claude-sonnet-4-5" }));
+    expect(display?.selectedModel).toBe("");
+    expect(display && isModelRequiredBlocked(display, display.selectedModel)).toBe(true);
+  });
+
   it("页签显式选择优先于引擎默认模型", () => {
     setActiveSession({
       engine: "claude",
