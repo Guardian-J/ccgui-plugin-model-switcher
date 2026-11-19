@@ -47,6 +47,7 @@ export function readSessionDisplay(
   let sessionActiveEffort: EffortLevel | undefined;
   let sessionActiveModel: string | undefined;
   let tabActiveModel: string | undefined;
+  let engineDefaultModel: string | undefined;
   let sessionContextWindow: number | undefined;
   // 从 store / bySession 读取真实状态
   try {
@@ -56,6 +57,10 @@ export function readSessionDisplay(
         const state = store.getState();
         if (state.active && state.active.engine === engine && state.active.model) {
           tabActiveModel = state.active.model.trim();
+        }
+        const rawDefaultModel = state.models?.[engine];
+        if (typeof rawDefaultModel === "string" && rawDefaultModel.trim()) {
+          engineDefaultModel = rawDefaultModel.trim();
         }
         if (session?.sessionId) {
           const sessionKey = `${engine}/${session.sessionId}`;
@@ -90,11 +95,16 @@ export function readSessionDisplay(
     // 读取失败时降级
   }
 
-  // 模型解析优先级（与宿主 1.1.2 的 useTabModelDisplay / resolveSessionModel 完全对齐）：
+  // 模型解析优先级（与宿主 useTabModelDisplay / resolveSessionModel 对齐）：
   // 1. 显式选择（session?.model 或 tabActiveModel）
-  // 2. 宿主计算的当前页签权威模型（matchingHost?.models?.[engine]）
-  // 3. 会话真实 activeModel（bySession[sessionKey].activeModel）
-  // 4. 消息历史兜底（host?.lastUsedModel）
+  // 2. 会话真实 activeModel（bySession[sessionKey].activeModel）
+  // 3. 消息历史兜底（host?.lastUsedModel）
+  // 4. 宿主计算的当前页签权威模型 / 引擎默认模型
+  //
+  // 新会话也必须认引擎默认模型：插件选定模型后会写 store.models 与
+  // AppSettings.defaultModels（syncAppSettings），宿主发送时
+  // resolveSessionModel 正是用它兜底。只认 active.model 会把"已选模型"
+  // 误判成未选择，发送守卫因此永远拦截首条消息。
   const explicitModel = session?.model || tabActiveModel;
   let lastUsedModel = host?.lastUsedModel;
   let lastUsedEffort = host?.lastUsedEffort;
@@ -109,10 +119,13 @@ export function readSessionDisplay(
       if (!lastUsedEffort) lastUsedEffort = timelineUsed.lastUsedEffort;
     }
   }
-  const isNewSession = !session?.sessionId && !lastUsedModel && !sessionActiveModel;
-  const model = isNewSession
-    ? (explicitModel || "")
-    : (explicitModel || sessionActiveModel || lastUsedModel || matchingHost?.models?.[engine] || "");
+  const model =
+    explicitModel ||
+    sessionActiveModel ||
+    lastUsedModel ||
+    matchingHost?.models?.[engine] ||
+    engineDefaultModel ||
+    "";
   // 档位由细到粗：会话真实 activeEffort -> 会话显式 effort -> 消息历史兜底 -> 引擎默认 -> 默认
   const effort = (
     sessionActiveEffort ||
