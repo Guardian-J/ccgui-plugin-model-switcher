@@ -3,13 +3,16 @@ import { DEFAULT_PI_FAMILY_API, isPiFamilyApiProtocol } from "./types";
 import type { PluginContext } from "./ccgui-plugin";
 import { enqueueSerial, invokeHost as invokeTauri, isRemoteHost } from "./host-transport";
 import {
+  clearPiFamilyModelMetadataText,
   parsePiFamilyProviders,
+  removePiFamilyModelText,
   removePiFamilyProviderText,
   upsertPiFamilyProviderText,
   normalizeThinking,
   type PiFamilyModelItem,
   type PiFamilyProviderPatch,
 } from "./pi-family-parser";
+import type { ModelMetadata } from "./model-metadata";
 
 export interface EngineItemRule {
   id: CliEngineId;
@@ -75,6 +78,8 @@ export interface NativeModel {
   description?: string | null;
   provider?: string;
   protocols?: string[];
+  contextWindow?: number | null;
+  maxTokens?: number | null;
 }
 
 export interface NativeCatalog {
@@ -1115,6 +1120,169 @@ export async function ensurePiFamilyModelConfigured(
     }
   });
 }
+function hasModelMetadata(metadata: ModelMetadata): boolean {
+  return metadataValue(metadata.contextWindow) !== undefined || metadataValue(metadata.maxTokens) !== undefined;
+}
+
+function metadataValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function applyMetadataFields(
+  model: PiFamilyModelItem,
+  metadata: ModelMetadata,
+  overwrite: boolean,
+): ModelMetadata {
+  const contextWindow = metadataValue(metadata.contextWindow);
+  const maxTokens = metadataValue(metadata.maxTokens);
+  const currentContextWindow = metadataValue(model.contextWindow);
+  const currentMaxTokens = metadataValue(model.maxTokens);
+
+  if (contextWindow !== undefined && (overwrite || currentContextWindow === undefined)) {
+    model.contextWindow = contextWindow;
+  } else if (currentContextWindow !== undefined) {
+    model.contextWindow = currentContextWindow;
+  }
+  if (maxTokens !== undefined && (overwrite || currentMaxTokens === undefined)) {
+    model.maxTokens = maxTokens;
+  } else if (currentMaxTokens !== undefined) {
+    model.maxTokens = currentMaxTokens;
+  }
+
+  const effectiveContextWindow = metadataValue(model.contextWindow);
+  const effectiveMaxTokens = metadataValue(model.maxTokens);
+  return {
+    ...(effectiveContextWindow !== undefined ? { contextWindow: effectiveContextWindow } : {}),
+    ...(effectiveMaxTokens !== undefined ? { maxTokens: effectiveMaxTokens } : {}),
+  };
+}
+
+/**
+ * 读取 OMP/PI 配置文件里当前模型已有的窗口元数据。
+ * 已有字段是用户或 CLI 配置，自动查询只能补缺，不能覆盖。
+ */
+export async function readPiFamilyModelMetadata(
+  engine: CliEngineId,
+  channel: { id: string; isPlugin?: boolean } | null,
+  modelId: string,
+): Promise<ModelMetadata | null> {
+  if (!isPiFamilyEngine(engine) || !channel?.id || !modelId) return null;
+  const bareModel = displayEngineModel(engine, channel, modelId).trim();
+  if (!bareModel) return null;
+  const id = channel.isPlugin ? pluginProviderId(channel.id) : channel.id;
+  const { text, format } = await readPiFamilyModelsConfig(engine);
+  const model = parsePiFamilyProviders(text, format)[id]?.models.find((m) => m.id === bareModel);
+  if (!model) return null;
+  return {
+    ...(typeof model.contextWindow === "number" && Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
+      ? { contextWindow: model.contextWindow } : {}),
+    ...(typeof model.maxTokens === "number" && Number.isSafeInteger(model.maxTokens) && model.maxTokens > 0
+      ? { maxTokens: model.maxTokens } : {}),
+  };
+}
+
+/**
+ * 写回 OMP/PI 模型的 `contextWindow` / `maxTokens`。
+ * `overwrite=false` 只补空缺，保护已经手工配置的值；`true` 用于用户明确保存覆盖值。
+ */
+export async function updatePiFamilyModelMetadata(
+  engine: CliEngineId,
+  channel: { id: string; isPlugin?: boolean; baseUrl?: string; apiKey?: string; name?: string; api?: string } | null,
+  modelId: string,
+  metadata: ModelMetadata,
+  overwrite = false,
+): Promise<ModelMetadata | null> {
+  if (!isPiFamilyEngine(engine) || !channel?.id || !modelId || !hasModelMetadata(metadata)) return null;
+  const bareModel = displayEngineModel(engine, channel, modelId).trim();
+  if (!bareModel) return null;
+  const id = channel.isPlugin ? pluginProviderId(channel.id) : channel.id;
+  return enqueueSerial(`pi_family_models_rmw:${engine}`, async () => {
+    try {
+      const { text, format } = await readPiFamilyModelsConfig(engine);
+      const providers = parsePiFamilyProviders(text, format);
+      const existing = providers[id];
+      if (!existing) return null;
+      let effective: ModelMetadata | null = null;
+      const models = existing.models.map((model) => {
+        if (model.id !== bareModel) return model;
+        const next = { ...model };
+        effective = applyMetadataFields(next, metadata, overwrite);
+        return next;
+      });
+      if (!effective) return null;
+      const patch: PiFamilyProviderPatch = {
+        name: existing.name || channel.name || channel.id,
+        baseUrl: existing.baseUrl || channel.baseUrl || "",
+        apiKey: existing.apiKey || channel.apiKey || "",
+        api: isPiFamilyApiProtocol(existing.api || channel.api || "")
+          ? ((existing.api || channel.api) as PiFamilyApiProtocol)
+          : DEFAULT_PI_FAMILY_API,
+        models,
+      };
+      const next = upsertPiFamilyProviderText(text, format, id, patch);
+      if (next !== text) {
+        await invokeTauri("pi_family_models_config_write", { engine, text: next });
+        invalidateNativeCatalogCache(engine);
+      }
+      return effective;
+    } catch (err) {
+      console.warn(`[model-switcher] 更新 ${engine.toUpperCase()} 模型窗口元数据失败:`, err);
+      throw err;
+    }
+  });
+}
+
+/**
+ * 从 OMP/PI 配置文件（models.yml / models.json）中删除指定渠道下的单个模型条目。
+ */
+export async function removePiFamilyModelFromConfig(
+  engine: CliEngineId,
+  channel: { id: string; isPlugin?: boolean; isNative?: boolean } | null,
+  modelId: string,
+): Promise<boolean> {
+  if (!isPiFamilyEngine(engine) || !channel?.id || channel.isNative || channel.id === NATIVE_PROVIDER_ID || !modelId) {
+    return false;
+  }
+  const bareModel = displayEngineModel(engine, channel, modelId).trim();
+  if (!bareModel) return false;
+  const id = channel.isPlugin ? pluginProviderId(channel.id) : channel.id;
+  return enqueueSerial(`pi_family_models_rmw:${engine}`, async () => {
+    const { text, format } = await readPiFamilyModelsConfig(engine);
+    const next = removePiFamilyModelText(text, format, id, bareModel);
+    if (next === text) return false;
+    await invokeTauri("pi_family_models_config_write", { engine, text: next });
+    invalidateNativeCatalogCache(engine);
+    notifyCliConfigChanged();
+    return true;
+  });
+}
+
+/**
+ * 清除 OMP/PI 配置文件（models.yml / models.json）中指定模型的 contextWindow / maxTokens，
+ * 保留模型本身及 thinking 等其余字段。
+ */
+export async function clearPiFamilyModelMetadata(
+  engine: CliEngineId,
+  channel: { id: string; isPlugin?: boolean; isNative?: boolean } | null,
+  modelId: string,
+): Promise<boolean> {
+  if (!isPiFamilyEngine(engine) || !channel?.id || channel.isNative || channel.id === NATIVE_PROVIDER_ID || !modelId) {
+    return false;
+  }
+  const bareModel = displayEngineModel(engine, channel, modelId).trim();
+  if (!bareModel) return false;
+  const id = channel.isPlugin ? pluginProviderId(channel.id) : channel.id;
+  return enqueueSerial(`pi_family_models_rmw:${engine}`, async () => {
+    const { text, format } = await readPiFamilyModelsConfig(engine);
+    const next = clearPiFamilyModelMetadataText(text, format, id, bareModel);
+    if (next === text) return false;
+    await invokeTauri("pi_family_models_config_write", { engine, text: next });
+    invalidateNativeCatalogCache(engine);
+    notifyCliConfigChanged();
+    return true;
+  });
+}
+
 /**
  * 将用户在插件界面选择的推理强度写入 OMP/PI 的配置文件（models.yml / models.json）。
  * 这样 CLI 即使完全走本地配置文件，也能读到用户配置的模型推理强度（reasoning / thinking.defaultLevel）。
@@ -1157,13 +1325,9 @@ export async function updatePiFamilyModelEffort(
             efforts: ["low", "medium", "high", "xhigh", "max"],
           },
         };
-        if (enable1M !== undefined) {
-          if (enable1M) {
-            updated.contextWindow = target1MContext;
-            if (!updated.maxTokens) updated.maxTokens = 65536;
-          } else {
-            updated.contextWindow = 200000;
-          }
+        if (enable1M) {
+          updated.contextWindow = target1MContext;
+          if (!updated.maxTokens) updated.maxTokens = 65536;
         }
         return updated;
       };
@@ -1224,16 +1388,35 @@ async function deletePiFamilyPluginChannel(
   engine: "pi" | "omp",
   channelId: string,
 ): Promise<void> {
-  await deletePiFamilyYamlProvider(engine, pluginProviderId(channelId));
+  const prefixed = pluginProviderId(channelId);
+  const stripped = stripPluginProviderPrefix(channelId);
+  const idsToRemove = [prefixed];
+  if (stripped !== prefixed && /^custom_\d+$/.test(stripped)) {
+    idsToRemove.push(stripped);
+  }
+  return enqueueSerial(`pi_family_models_rmw:${engine}`, async () => {
+    const { text, format } = await readPiFamilyModelsConfig(engine);
+    let next = text;
+    for (const yamlId of idsToRemove) {
+      next = removePiFamilyProviderText(next, format, yamlId);
+    }
+    if (next === text) return;
+    await invokeTauri("pi_family_models_config_write", { engine, text: next });
+    invalidateNativeCatalogCache(engine);
+  });
 }
 
-/** 删除 OMP/PI 宿主 YAML 供应商（裸 id，不加 plugin_ 前缀）。 */
+/** 删除 OMP/PI 宿主 YAML 供应商（裸 id，不加 plugin_ 前缀）及可选的已授权 API Key 凭证。 */
 export async function deleteHostProviderChannel(
   engine: CliEngineId,
   channelId: string,
+  { deleteAuthCredential = false }: { deleteAuthCredential?: boolean } = {},
 ): Promise<void> {
   if (isPiFamilyEngine(engine)) {
     await deletePiFamilyYamlProvider(engine, channelId);
+    if (deleteAuthCredential) {
+      await invokeTauri("pi_family_auth_delete_credential", { engine, providerId: channelId });
+    }
   }
   await invokeTauri("delete_provider", { engine, id: channelId });
   invalidateCliConfig();

@@ -21,11 +21,11 @@ function normalizeModelIds(value: unknown): string[] {
       ? (item as { id: string }).id : "").filter(Boolean);
 }
 
-export async function fetchModelsFromProvider(
+export async function fetchProviderModelEntries(
   ctx: PluginContext,
   baseUrl: string,
   apiKey: string,
-): Promise<string[]> {
+): Promise<unknown[]> {
   const trimmedUrl = baseUrl.trim().replace(/\/+$/, "");
   if (!trimmedUrl) {
     throw new Error("请先填写供应商的基础 API 地址 (Base URL)");
@@ -41,9 +41,9 @@ export async function fetchModelsFromProvider(
       baseUrl: trimmedUrl,
       apiKey: apiKey.trim(),
     });
-    const hostModels = normalizeModelIds(res?.models).concat(normalizeModelIds(res?.data));
-    if (hostModels.length > 0) {
-      return Array.from(new Set(hostModels));
+    const hostEntries = (Array.isArray(res?.models) ? res.models : []).concat(Array.isArray(res?.data) ? res.data : []);
+    if (hostEntries.length > 0) {
+      return hostEntries;
     }
   } catch (tauriErr) {
     // Remote keys/endpoints belong to the host, including its localhost URLs.
@@ -96,31 +96,10 @@ export async function fetchModelsFromProvider(
 
   try {
     const json = JSON.parse(rawBody);
-    // 兼容 OpenAI 格式: { data: [{ id: "xxx" }] }
-    if (Array.isArray(json.data)) {
-      return json.data
-        .map((item: FetchedModelItem) => item.id)
-        .filter(Boolean);
-    }
-    // 兼容数组直接返回: [{ id: "xxx" }] 或 ["model-a", "model-b"]
-    if (Array.isArray(json)) {
-      return json
-        .map((item: unknown) => {
-          if (typeof item === "string") return item;
-          if (item && typeof item === "object" && "id" in item) {
-            return (item as { id: string }).id;
-          }
-          return "";
-        })
-        .filter(Boolean);
-    }
-    // 兼容 Ollama /api/tags: { models: [{ name: "xxx" }] }
-    if (Array.isArray(json.models)) {
-      return json.models
-        .map((m: { name?: string; id?: string }) => m.name || m.id || "")
-        .filter(Boolean);
-    }
-
+    // 保留原始条目，供模型元数据（context_window/max_tokens 等）提取使用
+    if (Array.isArray(json.data)) return json.data;
+    if (Array.isArray(json)) return json;
+    if (Array.isArray(json.models)) return json.models;
     throw new Error("返回的数据结构中未包含识别出的模型列表数据 (data/models)");
   } catch (err) {
     if (err instanceof Error && err.message.includes("返回的数据结构")) {
@@ -128,6 +107,21 @@ export async function fetchModelsFromProvider(
     }
     throw new Error(`模型响应数据解析 JSON 失败: ${rawBody.slice(0, 100)}`);
   }
+}
+
+export async function fetchModelsFromProvider(
+  ctx: PluginContext,
+  baseUrl: string,
+  apiKey: string,
+): Promise<string[]> {
+  const entries = await fetchProviderModelEntries(ctx, baseUrl, apiKey);
+  const byId = normalizeModelIds(entries);
+  if (byId.length > 0) return Array.from(new Set(byId));
+  // Ollama /api/tags 等只返回 name 的列表：id 全空时回退到 name
+  const byName = entries.map(item =>
+    item && typeof item === "object" && "name" in item && typeof item.name === "string" ? item.name : "",
+  ).filter(Boolean);
+  return Array.from(new Set(byName));
 }
 
 /**

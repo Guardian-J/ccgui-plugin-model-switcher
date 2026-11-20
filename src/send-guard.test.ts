@@ -11,6 +11,7 @@ function makeSessionDisplay(overrides: Partial<SessionDisplay> = {}): SessionDis
   return {
     sessionKey: '["claude",null,"/ws",false]',
     stableKey: '["claude",null,"/ws"]',
+    workspacePath: "/ws",
     sessionId: null,
     selectedCli: "claude",
     selectedModel: "",

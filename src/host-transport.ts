@@ -56,6 +56,8 @@ function persistenceSlotKey(command: string, args: Record<string, unknown>): str
       return `cli_config:${engine}`;
     case "pi_family_models_config_write":
       return `pi_family_models:${engine}`;
+    case "pi_family_auth_delete_credential":
+      return `pi_family_auth:${engine}`;
     case "plugin_storage_set":
     case "plugin_storage_delete": {
       const id = typeof args.id === "string" ? args.id : "";

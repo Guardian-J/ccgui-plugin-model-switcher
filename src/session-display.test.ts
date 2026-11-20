@@ -105,6 +105,7 @@ describe("withSessionDisplay 按默认模型前缀恢复渠道", () => {
   const display = {
     sessionKey: '["omp",null,"/ws",false]',
     stableKey: '["omp",null,"/ws"]',
+    workspacePath: "/ws",
     sessionId: null,
     selectedCli: "omp" as const,
     selectedModel: "plugin_model-switcher_right/gpt-4o",

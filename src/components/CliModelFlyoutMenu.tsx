@@ -26,11 +26,14 @@ import {
   deleteCustomPluginChannel,
   deleteHostProviderChannel,
   pluginProviderId,
+  stripPluginProviderPrefix,
   qualifyEngineModel,
   displayEngineModel,
   withoutCustomModel,
   ensurePiFamilyModelConfigured,
+  removePiFamilyModelFromConfig,
   updatePiFamilyModelEffort,
+  updatePiFamilyModelMetadata,
   peekNativeCatalog,
   invalidateNativeCatalogCache,
   type EngineItemRule,
@@ -43,6 +46,7 @@ import {
 } from "../system-bridge";
 import { fetchModelsFromProvider, loadNativeChannelModels } from "../api";
 import { invokeHost } from "../host-transport";
+import { clearChannelContextOverrides, clearModelContextOverride } from "../model-context-override";
 import {
   ProjectEngineIcon,
   RefreshIcon,
@@ -64,6 +68,7 @@ import { getHostSession, modelSelectionError, isConcreteModel } from "../selecti
 import { ScrubSection } from "./ScrubSection";
 import { ChannelSection } from "./ChannelSection";
 import { ModelListSection, type ModelOptionItem } from "./ModelListSection";
+import { ModelMetadataEditor } from "./ModelMetadataEditor";
 
 const ROW = "ms-row";
 const ROW_ON = "is-selected";
@@ -592,6 +597,7 @@ export function CliModelFlyoutMenu({
     activeChannel,
     state.selectedModel.replace(/\[1m\]$/i, ""),
   );
+  const hostSelectedModel = state.selectedModel.trim();
   const nativeIds = nativeActive ? nativeModels.map((model) => model.id) : undefined;
   const compatibilityFor = (model: string) => {
     const cleanId = model.replace(/\[1m\]$/i, "");
@@ -700,6 +706,19 @@ export function CliModelFlyoutMenu({
 
   const handleToggle1M = async (enabled: boolean) => {
     if (activeEngine !== "claude" && activeEngine !== "codex" && activeEngine !== "omp" && activeEngine !== "pi") return;
+    if (!enabled && activeChannel && state.selectedModel && (activeEngine === "omp" || activeEngine === "pi")) {
+      try {
+        await updatePiFamilyModelMetadata(
+          activeEngine,
+          activeChannel,
+          state.selectedModel,
+          { contextWindow: 200_000 },
+          true,
+        );
+      } catch (error) {
+        setStatusMsg(error instanceof Error ? error.message : "关闭 1M 上下文后恢复窗口参数失败");
+      }
+    }
     await commitSelection({ ...state, enable1MContext: enabled }, { silent: true });
   };
 
@@ -819,10 +838,20 @@ export function CliModelFlyoutMenu({
     selectionPending.current = true;
     setSwitching(true);
     try {
+      const qualifiedModel = qualifyEngineModel(activeEngine, activeChannel, modelId);
+      const bareModel = displayEngineModel(activeEngine, activeChannel, modelId);
+      const removedFromConfig = await removePiFamilyModelFromConfig(activeEngine, activeChannel, modelId);
+      await clearModelContextOverride(activeEngine, qualifiedModel);
+      if (bareModel && bareModel !== qualifiedModel) {
+        await clearModelContextOverride(activeEngine, bareModel);
+      }
       await onSave(nextState);
       setState(nextState);
       setPendingDeleteModel(null);
-      setStatusMsg("已移出自选");
+      if (removedFromConfig) {
+        void loadChannels(activeEngine);
+      }
+      setStatusMsg(removedFromConfig ? "已移出自选并删除配置文件中的模型" : "已移出自选");
     } catch (e) {
       setPendingDeleteModel(null);
       setStatusMsg(e instanceof Error ? e.message : "移出自选失败，请重试");
@@ -1106,6 +1135,15 @@ export function CliModelFlyoutMenu({
           )
         : undefined;
       const currentStableKey = sessionDisplay?.stableKey;
+      const channelKeys = [
+        channelModelKey(activeEngine, channelId),
+        activeEngine === legacyEngine.current ? channelId : "",
+      ].filter(Boolean);
+      const pruneChannelMap = (map?: Record<string, string[]>): Record<string, string[]> => {
+        const copy = { ...map };
+        for (const k of channelKeys) delete copy[k];
+        return copy;
+      };
       const nextState: PluginState = {
         ...state,
         activeChannelType: isDeletingCurrent ? "system" : state.activeChannelType,
@@ -1116,6 +1154,8 @@ export function CliModelFlyoutMenu({
           ...state.pluginChannels,
           [activeEngine]: nextChannels,
         },
+        customModels: pruneChannelMap(state.customModels),
+        fetchedModels: pruneChannelMap(state.fetchedModels),
         // 当前会话写一条明确的系统渠道空模型覆盖，防止历史 last-used 又把旧模型回读出来
         sessionChannels: isDeletingCurrent && currentStableKey ? {
           ...filteredSessionChannels,
@@ -1133,6 +1173,7 @@ export function CliModelFlyoutMenu({
       };
       guardSession();
       await deleteCustomPluginChannel(activeEngine, channelId);
+      await clearChannelContextOverrides(activeEngine, [hostProviderId, stripPluginProviderPrefix(channelId)]);
       if (isDeletingCurrent) {
         guardSession();
         await applyChannelSelectionToHost({ engine: activeEngine, providerId: fallbackId, anchor: triggerRef?.current });
@@ -1207,10 +1248,25 @@ export function CliModelFlyoutMenu({
           )
         : undefined;
       const currentStableKey = sessionDisplay?.stableKey;
+      const targetChannel = allSystemChannels.find((c) => c.id === channelId);
+      const deleteAuthCredential = (activeEngine === "omp" || activeEngine === "pi")
+        && typeof targetChannel?.remark === "string"
+        && targetChannel.remark.includes("已授权凭证");
+      const channelKeys = [
+        channelModelKey(activeEngine, channelId),
+        activeEngine === legacyEngine.current ? channelId : "",
+      ].filter(Boolean);
+      const pruneChannelMap = (map?: Record<string, string[]>): Record<string, string[]> => {
+        const copy = { ...map };
+        for (const k of channelKeys) delete copy[k];
+        return copy;
+      };
       const nextState: PluginState = {
         ...state,
         selectedProviderId: isDeletingCurrent ? fallbackId : state.selectedProviderId,
         selectedModel: isDeletingCurrent ? "" : state.selectedModel,
+        customModels: pruneChannelMap(state.customModels),
+        fetchedModels: pruneChannelMap(state.fetchedModels),
         // 当前会话写一条明确的系统渠道空模型覆盖，防止历史 last-used 又把旧模型回读出来
         sessionChannels: isDeletingCurrent && currentStableKey ? {
           ...filteredSessionChannels,
@@ -1227,7 +1283,8 @@ export function CliModelFlyoutMenu({
         } : filteredSessionChannels,
       };
       guardSession();
-      await deleteHostProviderChannel(activeEngine, channelId);
+      await deleteHostProviderChannel(activeEngine, channelId, { deleteAuthCredential });
+      await clearChannelContextOverrides(activeEngine, [channelId]);
       if (isDeletingCurrent) {
         guardSession();
         await applyChannelSelectionToHost({ engine: activeEngine, providerId: fallbackId, anchor: triggerRef?.current });
@@ -1472,7 +1529,27 @@ export function CliModelFlyoutMenu({
               onEffortChange={handleEffortChange}
               enable1M={Boolean(state.enable1MContext)}
               onToggle1M={(enabled) => void handleToggle1M(enabled)}
-            />
+            >
+              {hostSelectedModel && (activeChannel || nativeModels.length > 0) ? (
+                <ModelMetadataEditor
+                  ctx={ctx}
+                  engine={activeEngine}
+                  channel={activeChannel}
+                  providerId={activeChannel?.isPlugin ? pluginProviderId(activeChannel.id) : activeChannel?.id ?? ""}
+                  hostModelId={hostSelectedModel}
+                  modelId={bareSelectedModel}
+                  nativeModels={nativeModels}
+                  onStatus={(message) => {
+                    setStatusMsg(message);
+                    setTimeout(() => setStatusMsg((current) => current === message ? null : current), 2000);
+                  }}
+                  onSaved={() => {
+                    invalidateNativeCatalogCache(activeEngine);
+                    void loadChannels(activeEngine);
+                  }}
+                />
+              ) : null}
+            </ModelListSection>
           </div>
         )}
 
@@ -1490,7 +1567,11 @@ export function CliModelFlyoutMenu({
               aria-labelledby="ms-delete-title"
             >
               <h3 id="ms-delete-title">移出自选</h3>
-              <p>确定将"{pendingDeleteModel}"移出自选吗？之后可以重新添加。</p>
+              <p>
+                {(activeEngine === "omp" || activeEngine === "pi") && activeChannel && activeChannel.id !== NATIVE_PROVIDER_ID
+                  ? `确定将"${pendingDeleteModel}"移出自选并从配置文件中删除吗？之后可以重新添加。`
+                  : `确定将"${pendingDeleteModel}"移出自选吗？之后可以重新添加。`}
+              </p>
               <div className="ms-confirm-actions">
                 <button type="button" className="ms-button" onClick={() => setPendingDeleteModel(null)}>
                   取消

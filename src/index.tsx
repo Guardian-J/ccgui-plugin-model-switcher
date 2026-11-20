@@ -77,7 +77,11 @@ export default function activate(ctx: PluginContext): Disposer {
     // 历史元信息），但输入框按钮要立刻显示新选择。
     const [, setPendingRevision] = useState(0);
     useEffect(() => subscribeDeferredSelections(() => setPendingRevision((n) => n + 1)), []);
-    const pending = getDeferredSelectionFor(sessionDisplay?.selectedCli, sessionDisplay?.sessionId);
+    const pending = getDeferredSelectionFor(
+      sessionDisplay?.selectedCli,
+      sessionDisplay?.sessionId,
+      sessionDisplay?.workspacePath,
+    );
     const view: PluginState = pending?.effort
       ? { ...state, effort: normalizeEffort(pending.effort) ?? state.effort }
       : state;

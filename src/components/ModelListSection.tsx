@@ -37,6 +37,7 @@ interface ModelListSectionProps {
   onEffortChange: (effort: EffortLevel) => Promise<boolean>;
   enable1M: boolean;
   onToggle1M: (enabled: boolean) => void;
+  children?: React.ReactNode;
 }
 
 export function ModelListSection({
@@ -61,6 +62,7 @@ export function ModelListSection({
   onEffortChange,
   enable1M,
   onToggle1M,
+  children,
 }: ModelListSectionProps) {
   const [isDropdownOpen, setIsDropdownOpen] = React.useState(false);
   const [dropdownPosition, setDropdownPosition] = React.useState({ top: 0, left: 0, width: 0 });
@@ -209,6 +211,8 @@ export function ModelListSection({
         enable1M={(activeEngine === "claude" || activeEngine === "codex" || activeEngine === "omp" || activeEngine === "pi") ? enable1M : false}
         onToggle1M={onToggle1M}
       />
+
+      {children}
     </div>
   );
 }

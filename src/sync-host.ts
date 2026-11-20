@@ -710,6 +710,10 @@ const DEFERRED_SELECTION_POLL_MS = 250;
 /** 等不到本轮结束就放弃，避免定时器无限存活。 */
 const DEFERRED_SELECTION_TTL_MS = 2 * 60 * 60 * 1000;
 const deferredSelections = new Map<string, DeferredSessionSelection>();
+
+function deferredSelectionKey(engine: string, sessionId: string | null, workspacePath: string): string {
+  return JSON.stringify([engine, sessionId, workspacePath]);
+}
 let deferredSelectionTimer: number | null = null;
 const deferredSelectionListeners = new Set<() => void>();
 
@@ -738,9 +742,10 @@ function notifyDeferredSelections(): void {
 export function getDeferredSelectionFor(
   engine: string | null | undefined,
   sessionId: string | null | undefined,
+  workspacePath = "",
 ): { model?: string; effort?: string } | null {
   if (!engine || !sessionId) return null;
-  const entry = deferredSelections.get(sessionStoreKey(engine, sessionId, ""));
+  const entry = deferredSelections.get(deferredSelectionKey(engine, sessionId, workspacePath));
   if (!entry) return null;
   if (entry.model === undefined && entry.effort === undefined) return null;
   return {
@@ -781,7 +786,7 @@ export function disposeDeferredSelections(): void {
 function deferSessionSelectionUntilIdle(
   entry: Omit<DeferredSessionSelection, "queuedAt" | "unsubscribe">,
 ): void {
-  const key = sessionStoreKey(entry.engine, entry.session.sessionId, entry.session.workspacePath || "");
+  const key = deferredSelectionKey(entry.engine, entry.session.sessionId, entry.session.workspacePath || "");
   const queued = deferredSelections.get(key);
   if (queued) {
     if (entry.model !== undefined) queued.model = entry.model;
@@ -829,12 +834,12 @@ function flushDeferredSelections(): void {
     let gone = false;
     try {
       const state = entry.store.getState();
-      const record = state.bySession?.[key] as { streaming?: unknown } | undefined;
+      const record = state.bySession?.[sessionStoreKey(entry.engine, entry.session.sessionId, entry.session.workspacePath || "")] as { streaming?: unknown } | undefined;
       if (!record) {
         gone = true;
       } else if (typeof record.streaming === "boolean") {
         streaming = record.streaming;
-      } else if (state.streamingByKey?.[key] === true) {
+      } else if (state.streamingByKey?.[sessionStoreKey(entry.engine, entry.session.sessionId, entry.session.workspacePath || "")] === true) {
         streaming = true;
       }
     } catch { /* 读失败按"还没结束"处理，下个 tick 再试 */ }
@@ -885,7 +890,7 @@ export function flushDeferredSelectionsFor(payload: unknown): void {
         // store 可读时仍以它为准：重试/下一轮可能已经开始
         let streaming: unknown;
         try {
-          streaming = entry.store.getState().bySession?.[key]?.streaming;
+          streaming = entry.store.getState().bySession?.[sessionStoreKey(entry.engine, entry.session.sessionId, entry.session.workspacePath || "")]?.streaming;
         } catch { /* 读失败按已结束处理 */ }
         if (streaming === true) continue;
       }

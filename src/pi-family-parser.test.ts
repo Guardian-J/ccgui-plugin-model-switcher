@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { parsePiFamilyProviders, upsertPiFamilyProviderText, removePiFamilyProviderText } from './pi-family-parser';
+import {
+  clearPiFamilyModelMetadataText,
+  parsePiFamilyProviders,
+  removePiFamilyModelText,
+  removePiFamilyProviderText,
+  upsertPiFamilyProviderText,
+} from './pi-family-parser';
 
 describe('pi-family-parser', () => {
   describe('parsePiFamilyProviders', () => {
@@ -363,6 +369,126 @@ describe('pi-family-parser', () => {
       expect(typeof model?.thinking).toBe('object');
       expect((model?.thinking as any).mode).toBe('anthropic-adaptive');
       expect((model?.thinking as any).defaultLevel).toBe('max');
+    });
+  });
+
+  describe('removePiFamilyProviderText 缩进兼容', () => {
+    it('应该支持 4 空格缩进的 YAML provider 删除', () => {
+      const initial = `providers:\n    test1:\n        name: Test 1\n        models:\n            - id: m1\n    test2:\n        name: Test 2\n`;
+      const result = removePiFamilyProviderText(initial, 'yaml', 'test1');
+      expect(result).not.toContain('test1:');
+      expect(result).toContain('test2:');
+    });
+  });
+
+  describe('removePiFamilyModelText', () => {
+    it('应该从 YAML 中删除单个模型并保留其余模型、额外字段与其他供应商', () => {
+      const initial = `providers:
+  my-relay:
+    name: "My Relay"
+    baseUrl: "https://api.relay.com/v1"
+    api: openai-completions
+    auth: apiKey
+    apiKey: "sk-1"
+    headers:
+      X-Custom: "1"
+    models:
+      - id: "keep-model"
+        contextWindow: 128000
+      - id: "drop-model"
+        contextWindow: 1048576
+        maxTokens: 65536
+  other:
+    name: "Other"
+    models:
+      - id: "drop-model"
+`;
+      const next = removePiFamilyModelText(initial, 'yaml', 'my-relay', 'drop-model');
+      const parsed = parsePiFamilyProviders(next, 'yaml');
+      expect(parsed['my-relay'].models.map((m) => m.id)).toEqual(['keep-model']);
+      expect(parsed['my-relay'].models[0].contextWindow).toBe(128000);
+      expect(parsed['other'].models.map((m) => m.id)).toEqual(['drop-model']);
+      expect(next).toContain('headers:');
+      expect(next).toContain('X-Custom: "1"');
+    });
+
+    it('删除最后一个 YAML 模型后应输出 models: []', () => {
+      const initial = `providers:
+  only:
+    name: "Only"
+    baseUrl: "https://api.only.com"
+    api: openai-completions
+    auth: apiKey
+    apiKey: "sk-1"
+    models:
+      - id: "last-model"
+`;
+      const next = removePiFamilyModelText(initial, 'yaml', 'only', 'last-model');
+      expect(next).toContain('models: []');
+      expect(parsePiFamilyProviders(next, 'yaml')['only'].models).toEqual([]);
+    });
+
+    it('应该从 JSON 中删除单个模型，未命中时原样返回', () => {
+      const initial = JSON.stringify({
+        providers: {
+          p1: {
+            name: 'P1',
+            models: [{ id: 'm1', contextWindow: 200000 }, 'm2'],
+          },
+        },
+      }, null, 2);
+      const next = removePiFamilyModelText(initial, 'json', 'p1', 'm1');
+      expect(JSON.parse(next).providers.p1.models).toEqual([{ id: 'm2' }]);
+      expect(removePiFamilyModelText(initial, 'json', 'p1', 'missing')).toBe(initial);
+    });
+  });
+
+  describe('clearPiFamilyModelMetadataText', () => {
+    it('应该只删除 YAML 模型的 contextWindow 与 maxTokens，保留模型与 thinking 配置', () => {
+      const initial = `providers:
+  my-relay:
+    name: "My Relay"
+    baseUrl: "https://api.relay.com/v1"
+    api: anthropic-messages
+    auth: apiKey
+    apiKey: "sk-1"
+    models:
+      - id: "target"
+        reasoning: true
+        thinking: {"mode":"anthropic-adaptive","defaultLevel":"high"}
+        contextWindow: 1048576
+        maxTokens: 65536
+      - id: "untouched"
+        contextWindow: 200000
+`;
+      const next = clearPiFamilyModelMetadataText(initial, 'yaml', 'my-relay', 'target');
+      const parsed = parsePiFamilyProviders(next, 'yaml');
+      const target = parsed['my-relay'].models.find((m) => m.id === 'target');
+      const untouched = parsed['my-relay'].models.find((m) => m.id === 'untouched');
+      expect(target).toBeDefined();
+      expect(target?.contextWindow).toBeUndefined();
+      expect(target?.maxTokens).toBeUndefined();
+      expect(target?.reasoning).toBe(true);
+      expect(target?.thinking).toMatchObject({ mode: 'anthropic-adaptive', defaultLevel: 'high' });
+      expect(untouched?.contextWindow).toBe(200000);
+    });
+
+    it('JSON 模型没有窗口字段时原样返回，有时仅清掉窗口字段', () => {
+      const initial = JSON.stringify({
+        providers: {
+          p1: {
+            name: 'P1',
+            models: [
+              { id: 'm1', contextWindow: 500000, maxTokens: 32768, reasoning: true },
+              { id: 'm2', reasoning: false },
+            ],
+          },
+        },
+      });
+      expect(clearPiFamilyModelMetadataText(initial, 'json', 'p1', 'm2')).toBe(initial);
+      const next = clearPiFamilyModelMetadataText(initial, 'json', 'p1', 'm1');
+      const m1 = (JSON.parse(next) as { providers: { p1: { models: Array<{ id: string }> } } }).providers.p1.models.find((m) => m.id === 'm1');
+      expect(m1).toEqual({ id: 'm1', reasoning: true });
     });
   });
 });

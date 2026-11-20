@@ -729,7 +729,7 @@ describe("本轮生成中的切换不改写当前回合的模型/档位", () => 
   it("生成中刚切的档位对输入框立即可见，落地后清空并通知", async () => {
     vi.useFakeTimers();
     try {
-      const { store, flipStreaming } = makeStore({
+      const { store, read, flipStreaming } = makeStore({
         active: { engine: "omp", sessionId: "s1", workspacePath: "/ws" },
         openTabs: [{ engine: "omp", sessionId: "s1", workspacePath: "/ws" }],
         models: { omp: "old-model" },
@@ -752,7 +752,7 @@ describe("本轮生成中的切换不改写当前回合的模型/档位", () => 
         notified += 1;
       });
       try {
-        expect(getDeferredSelectionFor("omp", "s1")).toBeNull();
+        expect(getDeferredSelectionFor("omp", "s1", "/ws")).toBeNull();
 
         await applyModelSelectionToHost({
           engine: "omp",
@@ -760,15 +760,18 @@ describe("本轮生成中的切换不改写当前回合的模型/档位", () => 
           effort: "max",
           anchor: container,
         });
-        // 输入框按钮读这个值立刻显示新档位；宿主会话仍是 medium
-        expect(getDeferredSelectionFor("omp", "s1")).toEqual({ model: "new-model", effort: "max" });
-        expect(getDeferredSelectionFor("omp", "other")).toBeNull();
+        // 首轮选择也会延迟落库；发送守卫必须按完整工作区键读到它。
+        expect(getDeferredSelectionFor("omp", "s1", "/ws")).toEqual({ model: "new-model", effort: "max" });
+        expect(getDeferredSelectionFor("omp", "s1", "/other")).toBeNull();
+        expect(getDeferredSelectionFor("omp", "other", "/ws")).toBeNull();
         expect(notified).toBeGreaterThan(0);
 
+        // 手动终止同样会让 streaming 翻回 false；暂存项落地、移除。
         flipStreaming("omp/s1", false);
         for (let i = 0; i < 10; i++) await Promise.resolve();
 
-        expect(getDeferredSelectionFor("omp", "s1")).toBeNull();
+        expect(getDeferredSelectionFor("omp", "s1", "/ws")).toBeNull();
+        expect(read().bySession?.["omp/s1"]?.activeModel).toBe("new-model");
       } finally {
         off();
       }

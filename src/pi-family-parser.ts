@@ -167,11 +167,27 @@ export function parsePiFamilyProviders(text: string, format: string): Record<str
   }
 
   // YAML parser
-  const providers: Record<string, any> = {};
+  const providers: Record<string, {
+    id: string;
+    name: string;
+    baseUrl: string;
+    apiKey: string;
+    api?: string;
+    models: Array<PiFamilyModelItem>;
+  }> = {};
   const lines = text.split(/\r?\n/);
   let inProviders = false;
-  let curProvider: any = null;
-  let curModel: any = null;
+  let providerIndent = -1;
+  let curProvider: {
+    id: string;
+    name: string;
+    baseUrl: string;
+    apiKey: string;
+    api?: string;
+    models: Array<PiFamilyModelItem>;
+  } | null = null;
+  let curProviderFieldIndent = -1;
+  let curModel: PiFamilyModelItem | null = null;
   let curModelProp: string | null = null;
   let curModelPropIndent = 0;
   let inModels = false;
@@ -192,17 +208,25 @@ export function parsePiFamilyProviders(text: string, format: string): Record<str
 
     if (indent === 0) {
       inProviders = trimmed.startsWith("providers:");
+      providerIndent = -1;
       curProvider = null;
+      curProviderFieldIndent = -1;
+      inModels = false;
+      curModel = null;
       curModelProp = null;
       continue;
     }
     if (!inProviders) continue;
 
-    // 供应商 key 以 YAML 映射键为准（id）。`name: value` 同行赋值不能当成新 key。
-    if (indent >= 2 && indent <= 4 && trimmed.endsWith(":") && !trimmed.startsWith("-") && !trimmed.startsWith("models:")) {
+    if (providerIndent < 0) providerIndent = indent;
+
+    // 供应商 key 以 YAML 映射键为准（id）。`name: value` 同行赋值不能当成新 key；
+    // 仅认与首个供应商同缩进的键，避免把 provider 内的 `headers:` 等子块误判为新供应商。
+    if (indent === providerIndent && trimmed.endsWith(":") && !trimmed.startsWith("-") && !trimmed.startsWith("models:")) {
       const id = yamlProviderKey(line);
       if (!id) continue;
       curProvider = { id, name: id, baseUrl: "", apiKey: "", models: [] };
+      curProviderFieldIndent = -1;
       providers[id] = curProvider;
       inModels = false;
       curModel = null;
@@ -211,14 +235,23 @@ export function parsePiFamilyProviders(text: string, format: string): Record<str
     }
 
     if (!curProvider) continue;
+    if (curProviderFieldIndent < 0) curProviderFieldIndent = indent;
 
-    if (trimmed.startsWith("models:")) {
+    if (indent === curProviderFieldIndent && trimmed.startsWith("models:")) {
       inModels = true;
+      curModel = null;
       curModelProp = null;
       continue;
     }
 
+    if (inModels && indent <= curProviderFieldIndent) {
+      inModels = false;
+      curModel = null;
+      curModelProp = null;
+    }
+
     if (!inModels) {
+      if (indent !== curProviderFieldIndent) continue;
       const kv = trimmed.match(/^([a-zA-Z0-9_-]+)\s*:\s*(.*)$/);
       if (kv) {
         const k = kv[1];
@@ -235,13 +268,15 @@ export function parsePiFamilyProviders(text: string, format: string): Record<str
         if (propKv) {
           const pk = propKv[1];
           const pval = propKv[2].trim().replace(/^['"]|['"]$/g, "");
-          if (curModel[curModelProp] && typeof curModel[curModelProp] === "object") {
-            curModel[curModelProp][pk] = pval;
+          const propVal = curModel[curModelProp];
+          if (propVal && typeof propVal === "object" && !Array.isArray(propVal)) {
+            (propVal as Record<string, unknown>)[pk] = pval;
           }
-        } else if (trimmed.startsWith("-") && curModel[curModelProp]) {
+        } else if (trimmed.startsWith("-")) {
           const itemVal = trimmed.slice(1).trim().replace(/^['"]|['"]$/g, "");
-          if (Array.isArray(curModel[curModelProp])) {
-            curModel[curModelProp].push(itemVal);
+          const propVal = curModel[curModelProp];
+          if (Array.isArray(propVal)) {
+            propVal.push(itemVal);
           }
         }
         continue;
@@ -249,7 +284,7 @@ export function parsePiFamilyProviders(text: string, format: string): Record<str
       curModelProp = null;
 
       if (trimmed.startsWith("-")) {
-        curModel = {};
+        curModel = { id: "" };
         curProvider.models.push(curModel);
         const rest = trimmed.slice(1).trim();
         const kv = rest.match(/^([a-zA-Z0-9_-]+)\s*:\s*(.*)$/);
@@ -367,17 +402,19 @@ function findYamlProviderLineRange(lines: string[], id: string): YamlProviderLin
   }
   if (providersIndex < 0) return null;
 
-  const keyIndent = providersIndent + 2;
+  let keyIndent = -1;
   let startLine = -1;
   for (let i = providersIndex + 1; i < lines.length; i++) {
     const indent = lines[i].search(/\S/);
     if (indent < 0 || lines[i].trim().startsWith("#")) continue;
     if (indent <= providersIndent) break;
+    if (keyIndent < 0) keyIndent = indent;
     if (indent === keyIndent && yamlProviderKey(lines[i]) === id) {
       startLine = i;
       break;
     }
   }
+  if (keyIndent < 0) keyIndent = providersIndent + 2;
   if (startLine < 0) {
     return { providersIndex, keyIndent, startLine: -1, endLine: -1 };
   }
@@ -395,18 +432,35 @@ function findYamlProviderLineRange(lines: string[], id: string): YamlProviderLin
 }
 
 /**
- * 从现有 provider 块中提取插件不管理的额外字段行，避免 upsert 时静默丢弃用户自定义配置。
- * fieldIndent 为 provider 字段所在缩进深度（通常为 4）。
+ * 从现有 provider 块中提取插件不管理的额外字段行，避免改写时静默丢弃用户自定义配置。
  */
 function extractExtraYamlLines(
   lines: string[],
   startLine: number,
   endLine: number,
-  fieldIndent: number,
+  targetFieldIndent: number,
 ): string[] {
-  const MANAGED_KEYS = new Set(["name", "baseUrl", "api", "auth", "apiKey", "models"]);
+  const MANAGED_KEYS: Record<string, true> = {
+    name: true,
+    baseUrl: true,
+    api: true,
+    auth: true,
+    apiKey: true,
+    models: true,
+  };
+  let fieldIndent = -1;
+  for (let i = startLine + 1; i < endLine; i++) {
+    const line = lines[i];
+    const indent = line.search(/\S/);
+    if (indent < 0 || line.trim().startsWith("#")) continue;
+    fieldIndent = indent;
+    break;
+  }
+  if (fieldIndent < 0) return [];
+
   const extra: string[] = [];
   let capturing = false;
+  const shift = targetFieldIndent - fieldIndent;
   for (let i = startLine + 1; i < endLine; i++) {
     const line = lines[i];
     const indent = line.search(/\S/);
@@ -414,9 +468,16 @@ function extractExtraYamlLines(
     if (indent === fieldIndent) {
       const kv = line.trim().match(/^([a-zA-Z0-9_-]+)\s*:/);
       const key = kv ? kv[1] : null;
-      capturing = key !== null && !MANAGED_KEYS.has(key);
+      capturing = key !== null && !MANAGED_KEYS[key];
     }
-    if (capturing) extra.push(line);
+    if (capturing) {
+      if (shift === 0) {
+        extra.push(line);
+      } else {
+        const nextIndent = Math.max(targetFieldIndent, indent + shift);
+        extra.push(`${" ".repeat(nextIndent)}${line.trimStart()}`);
+      }
+    }
   }
   return extra;
 }
@@ -426,39 +487,44 @@ function renderYamlProviderLines(
   patch: PiFamilyProviderPatch,
   models: Array<PiFamilyModelItem>,
   extraLines: string[] = [],
+  keyIndent = 2,
 ): string[] {
+  const kPad = " ".repeat(keyIndent);
+  const fPad = " ".repeat(keyIndent + 2);
+  const mPad = " ".repeat(keyIndent + 4);
+  const pPad = " ".repeat(keyIndent + 6);
   // omp: anthropic-messages 且未写 auth 时会强制 isOAuth，请求被塑成 Claude Code
   // OAuth（Accept: json、?beta=true），中转站按 SSE/API Key 走就会卡 1–2 分钟。
   // 独立渠道一律走 baseUrl + apiKey，显式关掉 OAuth。
   const lines = [
-    `  ${id}:`,
-    `    name: ${JSON.stringify(patch.name)}`,
-    `    baseUrl: ${JSON.stringify(patch.baseUrl)}`,
-    `    api: ${patch.api}`,
-    `    auth: apiKey`,
-    `    apiKey: ${JSON.stringify(patch.apiKey)}`,
+    `${kPad}${id}:`,
+    `${fPad}name: ${JSON.stringify(patch.name)}`,
+    `${fPad}baseUrl: ${JSON.stringify(patch.baseUrl)}`,
+    `${fPad}api: ${patch.api}`,
+    `${fPad}auth: apiKey`,
+    `${fPad}apiKey: ${JSON.stringify(patch.apiKey)}`,
     ...extraLines,
   ];
   if (models.length > 0) {
-    lines.push("    models:");
+    lines.push(`${fPad}models:`);
     for (const m of models) {
-      lines.push(`      - id: ${JSON.stringify(m.id)}`);
+      lines.push(`${mPad}- id: ${JSON.stringify(m.id)}`);
       for (const [key, val] of Object.entries(m)) {
         if (key === "id") continue;
         if (key === "thinking") {
           const thinkingObj = normalizeThinking(val);
-          lines.push(`        thinking: ${JSON.stringify(thinkingObj)}`);
+          lines.push(`${pPad}thinking: ${JSON.stringify(thinkingObj)}`);
         } else if (typeof val === "boolean" || typeof val === "number") {
-          lines.push(`        ${key}: ${val}`);
+          lines.push(`${pPad}${key}: ${val}`);
         } else if (typeof val === "string") {
-          lines.push(`        ${key}: ${JSON.stringify(val)}`);
+          lines.push(`${pPad}${key}: ${JSON.stringify(val)}`);
         } else if (Array.isArray(val) || (val && typeof val === "object")) {
-          lines.push(`        ${key}: ${JSON.stringify(val)}`);
+          lines.push(`${pPad}${key}: ${JSON.stringify(val)}`);
         }
       }
     }
   } else {
-    lines.push("    models: []");
+    lines.push(`${fPad}models: []`);
   }
   return lines;
 }
@@ -490,12 +556,12 @@ export function upsertPiFamilyProviderText(
     const mergedModels = mergePiFamilyModels(existingModels, nextPatch);
 
     const range = findYamlProviderLineRange(lines, id);
+    const keyIndent = range?.keyIndent ?? 2;
     // 保留现有 provider 中插件不管理的额外字段，避免每次 upsert 时静默丢弃用户自定义配置
     const extraLines = range && range.startLine >= 0
-      ? extractExtraYamlLines(lines, range.startLine, range.endLine, range.keyIndent + 2)
+      ? extractExtraYamlLines(lines, range.startLine, range.endLine, keyIndent + 2)
       : [];
-    const newBlockLines = renderYamlProviderLines(id, nextPatch, mergedModels, extraLines);
-
+    const newBlockLines = renderYamlProviderLines(id, nextPatch, mergedModels, extraLines, keyIndent);
     if (!range || range.startLine < 0) {
       const pIdx = range?.providersIndex ?? lines.findIndex((l) => /^providers\s*:/.test(l.trim()));
       // Expand an empty mapping before inserting the first provider again.
@@ -545,12 +611,103 @@ export function removePiFamilyProviderText(text: string, format: string, id: str
     return lines.join(nl) + (lines.length > 0 ? nl : "");
   }
   try {
-    const obj = JSON.parse(stripJsoncComments(text)) as { providers?: Record<string, unknown> };
+    const obj = JSON.parse(stripJsoncComments(text)) as Record<string, unknown>;
     if (obj.providers && typeof obj.providers === "object") {
-      delete obj.providers[id];
+      const providers = obj.providers as Record<string, unknown>;
+      if (!(id in providers)) return text;
+      delete providers[id];
+      return `${JSON.stringify(obj, null, 2)}\n`;
     }
+    if (!(id in obj)) return text;
+    delete obj[id];
     return `${JSON.stringify(obj, null, 2)}\n`;
   } catch {
     return text;
   }
+}
+
+function rewritePiFamilyProviderModels(
+  text: string,
+  format: string,
+  providerId: string,
+  transform: (models: Array<PiFamilyModelItem>) => { changed: boolean; models: Array<PiFamilyModelItem> },
+): string {
+  if (!text.trim() || !providerId) return text;
+  if (format === "yaml") {
+    const nl = text.includes("\r\n") ? "\r\n" : "\n";
+    const lines = text.split(/\r?\n/);
+    while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+    const range = findYamlProviderLineRange(lines, providerId);
+    if (!range || range.startLine < 0) return text;
+    const existing = parsePiFamilyProviders(text, "yaml")[providerId];
+    if (!existing) return text;
+    const { changed, models } = transform(existing.models);
+    if (!changed) return text;
+    const patch: PiFamilyProviderPatch = {
+      name: existing.name || providerId,
+      baseUrl: existing.baseUrl || "",
+      apiKey: existing.apiKey || "",
+      api: isPiFamilyApiProtocol(existing.api || "") ? (existing.api as PiFamilyApiProtocol) : DEFAULT_PI_FAMILY_API,
+    };
+    const extraLines = extractExtraYamlLines(lines, range.startLine, range.endLine, range.keyIndent + 2);
+    const newBlockLines = renderYamlProviderLines(providerId, patch, models, extraLines, range.keyIndent);
+    lines.splice(range.startLine, range.endLine - range.startLine, ...newBlockLines);
+    return lines.join(nl) + nl;
+  }
+  try {
+    const obj = JSON.parse(stripJsoncComments(text)) as Record<string, unknown>;
+    const container = obj.providers && typeof obj.providers === "object"
+      ? (obj.providers as Record<string, unknown>)
+      : obj;
+    const rawProvider = container[providerId];
+    if (!rawProvider || typeof rawProvider !== "object" || Array.isArray(rawProvider)) return text;
+    const providerObj = rawProvider as Record<string, unknown>;
+    if (!Array.isArray(providerObj.models)) return text;
+    const parsedModels: PiFamilyModelItem[] = providerObj.models
+      .map((m: unknown) => (typeof m === "string" ? { id: m } : (m && typeof m === "object" ? { ...(m as Record<string, unknown>), id: String((m as Record<string, unknown>).id || "") } : { id: "" })))
+      .filter((m) => !!m.id);
+    const { changed, models } = transform(parsedModels);
+    if (!changed) return text;
+    providerObj.models = models;
+    return `${JSON.stringify(obj, null, 2)}\n`;
+  } catch {
+    return text;
+  }
+}
+
+/** 从 models.yml / models.json 中指定供应商的 models 列表删除单个模型。 */
+export function removePiFamilyModelText(
+  text: string,
+  format: string,
+  providerId: string,
+  modelId: string,
+): string {
+  const target = modelId.trim();
+  if (!target) return text;
+  return rewritePiFamilyProviderModels(text, format, providerId, (models) => {
+    const next = models.filter((m) => m.id.trim() !== target);
+    return { changed: next.length !== models.length, models: next };
+  });
+}
+
+/** 从 models.yml / models.json 中清除指定模型的 contextWindow / maxTokens，保留模型本身及其他字段。 */
+export function clearPiFamilyModelMetadataText(
+  text: string,
+  format: string,
+  providerId: string,
+  modelId: string,
+): string {
+  const target = modelId.trim();
+  if (!target) return text;
+  return rewritePiFamilyProviderModels(text, format, providerId, (models) => {
+    let changed = false;
+    const next = models.map((m) => {
+      if (m.id.trim() !== target) return m;
+      if (!("contextWindow" in m) && !("maxTokens" in m)) return m;
+      changed = true;
+      const { contextWindow: _cw, maxTokens: _mt, ...rest } = m;
+      return rest;
+    });
+    return { changed, models: next };
+  });
 }

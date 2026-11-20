@@ -18,6 +18,7 @@ export interface SessionDisplay {
   sessionKey: string;
   /** 不含 streaming，仅 engine+sessionId+workspacePath，用于对话级渠道记录的存储键 */
   stableKey: string;
+  workspacePath: string;
   sessionId: string | null;
   selectedCli: CliEngineId;
   selectedModel: string;
@@ -152,6 +153,7 @@ export function readSessionDisplay(
     // Selection updates must not remount a flyout whose host/storage writes are still in flight.
     sessionKey: JSON.stringify([engine, session?.sessionId ?? null, session?.workspacePath ?? "", host?.streaming ?? false]),
     stableKey: JSON.stringify([engine, session?.sessionId ?? null, session?.workspacePath ?? ""]),
+    workspacePath: session?.workspacePath ?? "",
     sessionId: session?.sessionId ?? null,
     selectedCli: engine as CliEngineId,
     selectedModel: isConcreteModel(model) ? model.replace(/\[1m\]$/i, "").trim() : "",

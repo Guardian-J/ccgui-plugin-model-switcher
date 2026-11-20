@@ -17,7 +17,13 @@ import {
   mergePluginChannelsById,
   withoutPluginTwinChannels,
   pluginProviderId,
+  clearPiFamilyModelMetadata,
+  deleteCustomPluginChannel,
+  deleteHostProviderChannel,
+  readPiFamilyModelMetadata,
+  removePiFamilyModelFromConfig,
   updatePiFamilyModelEffort,
+  updatePiFamilyModelMetadata,
   getSystemProviderChannels,
   parseNativeOfficialFields,
 } from './system-bridge';
@@ -536,5 +542,148 @@ describe('getSystemEngines 并发强制刷新', () => {
 
       expect(currentYaml).toContain('"defaultLevel":"low"');
       expect(currentYaml).toContain('"defaultLevel":"max"');
+    });
+  });
+
+  describe('模型窗口元数据', () => {
+    it('自动元数据只补缺，不覆盖已有配置', async () => {
+      const initialYaml = `providers:\n  test-provider:\n    name: "test"\n    baseUrl: "https://api.test.com"\n    api: openai-completions\n    models:\n      - id: "shared-model"\n        contextWindow: 1048576\n`;
+      let writtenText = "";
+      vi.mocked(invokeHost).mockImplementation(async (cmd, args?: Record<string, unknown>) => {
+        if (cmd === 'pi_family_models_config_read') return { text: initialYaml, file: { format: 'yaml' } };
+        if (cmd === 'pi_family_models_config_write') {
+          writtenText = String(args?.text ?? '');
+          return {};
+        }
+        return {};
+      });
+
+      await expect(updatePiFamilyModelMetadata(
+        'omp',
+        { id: 'test-provider', name: 'test', baseUrl: 'https://api.test.com' },
+        'shared-model',
+        { contextWindow: 200000, maxTokens: 8192 },
+      )).resolves.toEqual({ contextWindow: 1048576, maxTokens: 8192 });
+      expect(writtenText).toContain('contextWindow: 1048576');
+      expect(writtenText).toContain('maxTokens: 8192');
+    });
+
+    it('读取配置返回 provider 与 model 已有的窗口字段', async () => {
+      const initialYaml = `providers:\n  plugin_model-switcher_test-provider:\n    models:\n      - id: "shared-model"\n        contextWindow: 1000000\n        maxTokens: 65536\n`;
+      vi.mocked(invokeHost).mockResolvedValueOnce({ text: initialYaml, file: { format: 'yaml' } });
+
+      await expect(readPiFamilyModelMetadata(
+        'omp',
+        { id: 'plugin_model-switcher_test-provider', isPlugin: true },
+        'plugin_model-switcher_test-provider/shared-model',
+      )).resolves.toEqual({ contextWindow: 1000000, maxTokens: 65536 });
+    });
+
+    it('推理强度更新不得把自动得到的模型窗口重置为 200k', async () => {
+      const initialYaml = `providers:\n  test-provider:\n    name: "test"\n    baseUrl: "https://api.test.com"\n    api: openai-completions\n    models:\n      - id: "shared-model"\n        contextWindow: 1000000\n        maxTokens: 65536\n`;
+      let writtenText = '';
+      vi.mocked(invokeHost).mockImplementation(async (cmd, args?: Record<string, unknown>) => {
+        if (cmd === 'pi_family_models_config_read') return { text: initialYaml, file: { format: 'yaml' } };
+        if (cmd === 'pi_family_models_config_write') {
+          writtenText = String(args?.text ?? '');
+          return {};
+        }
+        return {};
+      });
+
+      await updatePiFamilyModelEffort(
+        'omp',
+        { id: 'test-provider', name: 'test', baseUrl: 'https://api.test.com' },
+        'shared-model',
+        'medium',
+        false,
+      );
+
+      expect(writtenText).toContain('contextWindow: 1000000');
+      expect(writtenText).toContain('maxTokens: 65536');
+    });
+
+    it('删除模型时应同步从 OMP models.yml 删除对应条目', async () => {
+      const initialYaml = `providers:\n  plugin_model-switcher_custom_1:\n    name: "test"\n    baseUrl: "https://api.test.com"\n    api: openai-completions\n    auth: apiKey\n    apiKey: "sk-1"\n    models:\n      - id: "keep-model"\n      - id: "drop-model"\n        contextWindow: 1000000\n`;
+      let writtenText = '';
+      vi.mocked(invokeHost).mockImplementation(async (cmd, args?: Record<string, unknown>) => {
+        if (cmd === 'pi_family_models_config_read') return { text: initialYaml, file: { format: 'yaml' } };
+        if (cmd === 'pi_family_models_config_write') {
+          writtenText = String(args?.text ?? '');
+          return {};
+        }
+        return {};
+      });
+
+      await expect(removePiFamilyModelFromConfig(
+        'omp',
+        { id: 'custom_1', isPlugin: true },
+        'plugin_model-switcher_custom_1/drop-model',
+      )).resolves.toBe(true);
+      expect(writtenText).toContain('keep-model');
+      expect(writtenText).not.toContain('drop-model');
+    });
+
+    it('清除模型窗口配置时应同步从 OMP models.yml 删除 contextWindow 与 maxTokens', async () => {
+      const initialYaml = `providers:\n  test-provider:\n    name: "test"\n    baseUrl: "https://api.test.com"\n    api: openai-completions\n    auth: apiKey\n    apiKey: "sk-1"\n    models:\n      - id: "shared-model"\n        reasoning: true\n        contextWindow: 1048576\n        maxTokens: 65536\n`;
+      let writtenText = '';
+      vi.mocked(invokeHost).mockImplementation(async (cmd, args?: Record<string, unknown>) => {
+        if (cmd === 'pi_family_models_config_read') return { text: initialYaml, file: { format: 'yaml' } };
+        if (cmd === 'pi_family_models_config_write') {
+          writtenText = String(args?.text ?? '');
+          return {};
+        }
+        return {};
+      });
+
+      await expect(clearPiFamilyModelMetadata(
+        'omp',
+        { id: 'test-provider', isPlugin: false },
+        'test-provider/shared-model',
+      )).resolves.toBe(true);
+      expect(writtenText).toContain('shared-model');
+      expect(writtenText).toContain('reasoning: true');
+      expect(writtenText).not.toContain('contextWindow');
+      expect(writtenText).not.toContain('maxTokens');
+    });
+
+    it('删除插件渠道时同时删除 models.yml 中插件条目与遗留裸 custom_* 孪生条目', async () => {
+      const initialYaml = `providers:\n  plugin_model-switcher_custom_42:\n    name: "P"\n  custom_42:\n    name: "P twin"\n  keep:\n    name: "Keep"\n`;
+      let writtenText = '';
+      vi.mocked(invokeHost).mockImplementation(async (cmd, args?: Record<string, unknown>) => {
+        if (cmd === 'pi_family_models_config_read') return { text: initialYaml, file: { format: 'yaml' } };
+        if (cmd === 'pi_family_models_config_write') {
+          writtenText = String(args?.text ?? '');
+          return {};
+        }
+        return {};
+      });
+
+      await deleteCustomPluginChannel('omp', 'custom_42');
+      expect(writtenText).not.toContain('plugin_model-switcher_custom_42');
+      expect(writtenText).not.toContain('custom_42:');
+      expect(writtenText).toContain('keep:');
+      expect(invokeHost).toHaveBeenCalledWith('delete_provider', {
+        engine: 'omp',
+        id: 'plugin_model-switcher_custom_42',
+      });
+    });
+
+    it('删除已授权凭证渠道时同步调用 pi_family_auth_delete_credential', async () => {
+      vi.mocked(invokeHost).mockReset();
+      vi.mocked(invokeHost).mockImplementation(async (cmd) => {
+        if (cmd === 'pi_family_models_config_read') return { text: 'providers: {}\n', file: { format: 'yaml' } };
+        return {};
+      });
+
+      await deleteHostProviderChannel('omp', 'google', { deleteAuthCredential: true });
+      expect(invokeHost).toHaveBeenCalledWith('pi_family_auth_delete_credential', {
+        engine: 'omp',
+        providerId: 'google',
+      });
+      expect(invokeHost).toHaveBeenCalledWith('delete_provider', {
+        engine: 'omp',
+        id: 'google',
+      });
     });
   });
