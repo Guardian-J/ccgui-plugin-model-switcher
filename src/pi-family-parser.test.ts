@@ -174,6 +174,22 @@ describe('pi-family-parser', () => {
       expect(result).toContain('auth: apiKey');
     });
 
+    it('YAML 已有其他顶层配置但无 providers 时保留原文并追加 providers', () => {
+      const initial = '# 用户注释\ndefaultModel: test-model\ncustom:\n  enabled: true\n';
+      const patch = {
+        name: 'Test',
+        baseUrl: 'https://test.com',
+        apiKey: 'sk-test',
+        api: 'openai-completions' as const,
+        models: ['model-1'],
+      };
+
+      const result = upsertPiFamilyProviderText(initial, 'yaml', 'test', patch);
+
+      expect(result.startsWith(initial)).toBe(true);
+      expect(result).toContain('providers:\n  test:');
+    });
+
     it('应该合并模型列表（新模型优先）', () => {
       const initial = JSON.stringify({
         providers: {

@@ -383,8 +383,14 @@ export function getHostCliMenuProps(
   return result;
 }
 
-export function hostSessionSelectionError(engine: string): string | null {
-  const host = getHostCliMenuProps();
+/** 多段异步会话操作的统一中止原因；调用方据此避免回滚已经切换的页签。 */
+export const SESSION_CHANGED_MESSAGE = "当前会话已变化，已停止后续操作，请在目标会话重试";
+
+export function hostSessionSelectionError(
+  engine: string,
+  anchor?: HTMLElement | null,
+): string | null {
+  const host = getHostCliMenuProps(anchor, { includeLastUsed: false });
   return sessionSelectionError(engine,
     host?.session !== undefined ? host.session : getHostSession(), host?.streaming);
 }
@@ -397,9 +403,13 @@ export function hostSessionSelectionError(engine: string): string | null {
  *        引擎变为 engine；sessionId/workspacePath 仍必须一致。默认任何变化都算会话已变。
  * @returns 校验器；会话已变化时抛错，未变化则静默返回
  */
-export function captureHostSessionGuard(engine: string, allowEngineRetarget = false): () => void {
+export function captureHostSessionGuard(
+  engine: string,
+  allowEngineRetarget = false,
+  anchor?: HTMLElement | null,
+): () => void {
   const readIdentity = () => {
-    const host = getHostCliMenuProps();
+    const host = getHostCliMenuProps(anchor, { includeLastUsed: false });
     const session = host?.session !== undefined ? host.session : getHostSession();
     return {
       engine: session?.engine ?? null,
@@ -416,7 +426,7 @@ export function captureHostSessionGuard(engine: string, allowEngineRetarget = fa
       current.sessionId !== original.sessionId ||
       current.workspacePath !== original.workspacePath
     ) {
-      throw new Error("当前会话已变化，已停止后续模型切换，请在目标会话重试");
+      throw new Error(SESSION_CHANGED_MESSAGE);
     }
   };
 }
@@ -425,8 +435,8 @@ export function captureHostSessionGuard(engine: string, allowEngineRetarget = fa
  * 检测新版 CC GUI：宿主 props 可读且不含 onChannelChange 才视为新宿主，渠道隔离存储，不写入 CLI 配置文件。
  * props 未就绪（getHostCliMenuProps 返回 null）时保守地返回 false，避免误跳过旧宿主的配置文件写入。
  */
-export function isNewHost(): boolean {
-  const props = getHostCliMenuProps();
+export function isNewHost(anchor?: HTMLElement | null): boolean {
+  const props = getHostCliMenuProps(anchor, { includeLastUsed: false });
   return props !== null && !props.onChannelChange;
 }
 
@@ -1297,7 +1307,7 @@ export async function applyModelSelectionToHost(params: {
   ctx?: PluginContext;
   anchor?: HTMLElement | null;
 }): Promise<void> {
-  const error = hostSessionSelectionError(params.engine) ||
+  const error = hostSessionSelectionError(params.engine, params.anchor) ||
     (params.model ? modelSelectionError(params.engine, params.model, params.compatibility) : null);
   if (error) throw new Error(error);
   const { engine, effort, enable1M = false } = params;
@@ -1328,7 +1338,7 @@ export async function applyModelSelectionToHost(params: {
     : effort;
 
   // 在任何宿主改动之前取快照：模型切换允许把待建会话改派到 engine，但不允许换页签
-  const guardHostSession = captureHostSessionGuard(engine, true);
+  const guardHostSession = captureHostSessionGuard(engine, true, params.anchor);
   const callbacks = getHostCliMenuProps(params.anchor);
   const store = findHostChatStore(params.anchor);
   const actions = findHostStoreActions(params.anchor);
@@ -1552,7 +1562,11 @@ export function repairLegacyHostModel(anchor?: HTMLElement | null, preloadedHost
  * 切渠道时还会把页签的 provider 清空。此时插件再写这个字段既不会被读取，
  * 又会在回读时伪造出一条会话级绑定，反而盖掉宿主的真实选择。
  */
-export function syncSessionProviderToLocalStorage(engine: string, providerId: string): void {
+export function syncSessionProviderToLocalStorage(
+  engine: string,
+  providerId: string,
+  anchor?: HTMLElement | null,
+): void {
   if (typeof localStorage === "undefined") return;
 
   const ACTIVE_KEY = "ccgui-next.activeSession:v1";
@@ -1560,14 +1574,14 @@ export function syncSessionProviderToLocalStorage(engine: string, providerId: st
 
   // 以宿主 props 的活动会话为准：localStorage 的 activeSession 可能是别的页签延迟
   // 写入的记录，engine 相同也不代表就是当前会话，按它打补丁会污染那个页签的渠道
-  const hostProps = getHostCliMenuProps();
+  const hostProps = getHostCliMenuProps(anchor, { includeLastUsed: false });
   const active = hostProps?.session !== undefined ? hostProps.session : getHostSession();
   if (!active || active.engine !== engine) return;
   // 旧宿主靠 active.provider 认会话级渠道，任何会话都要写。新宿主自己用
   // bySession[engine/sessionId].activeProvider 管绑定，切换时还会把 provider 清成
   // undefined；给已建会话补这个字段等于伪造一份它根本不读的绑定，只会被 readSessionDisplay
   // 当成陈旧值回读。待建会话（sessionId 为空）例外：首次 spawn 要靠它选对渠道。
-  if (isNewHost() && (active.sessionId ?? null) !== null) return;
+  if (isNewHost(anchor) && (active.sessionId ?? null) !== null) return;
   const isActiveSession = (tab: unknown): boolean => {
     if (!tab || typeof tab !== "object") return false;
     const record = tab as { engine?: string; sessionId?: string | null; workspacePath?: string };
@@ -1611,13 +1625,14 @@ export function syncSessionProviderToLocalStorage(engine: string, providerId: st
 export async function applyChannelSelectionToHost(params: {
   engine: CliEngineId;
   providerId: string;
+  anchor?: HTMLElement | null;
 }): Promise<void> {
-  const { engine, providerId } = params;
+  const { engine, providerId, anchor } = params;
   const channelError = independentChannelError(engine);
   if (channelError && providerId && ![NATIVE_PROVIDER_ID, "__local_config_toml__"].includes(providerId)) throw new Error(channelError);
-  const error = hostSessionSelectionError(engine);
+  const error = hostSessionSelectionError(engine, anchor);
   if (error) throw new Error(error);
-  const callbacks = getHostCliMenuProps();
+  const callbacks = getHostCliMenuProps(anchor, { includeLastUsed: false });
   if (!callbacks) {
     throw new Error("无法连接宿主渠道切换入口，请重载插件后重试");
   }
@@ -1636,7 +1651,7 @@ export async function applyChannelSelectionToHost(params: {
   }
   if (callbacks.onChannelChange) {
     // 渠道切换不改派引擎，任何会话字段变化都要中止轮询
-    const guardSession = captureHostSessionGuard(engine);
+    const guardSession = captureHostSessionGuard(engine, false, anchor);
     await callbacks.onChannelChange(engine, providerId);
 
     // The host wraps its asynchronous setProvider in a void callback and catches
@@ -1644,8 +1659,8 @@ export async function applyChannelSelectionToHost(params: {
     const deadline = Date.now() + 5000;
     while (true) {
       guardSession();
-      const current = getHostCliMenuProps();
-      const selectionError = hostSessionSelectionError(engine);
+      const current = getHostCliMenuProps(anchor, { includeLastUsed: false });
+      const selectionError = hostSessionSelectionError(engine, anchor);
       if (selectionError) throw new Error(selectionError);
       const confirmedProvider = current?.selectedChannels?.[engine] ?? current?.session?.provider;
       if (confirmedProvider === providerId) break;
@@ -1667,12 +1682,12 @@ export async function applyChannelSelectionToHost(params: {
     // 渠道切换不改派引擎，IPC 期间用户切走页签就要中止：set_current_provider 已在
     // 宿主落地无法回滚，但后续的 localStorage 写入和成功事件必须不能落到新页签上，
     // 否则调用方会继续把模型/档位链式写进另一个会话。
-    const guardSession = captureHostSessionGuard(engine);
+    const guardSession = captureHostSessionGuard(engine, false, anchor);
     await invokeHost("set_current_provider", { engine, id: targetId });
     guardSession();
   }
 
-  syncSessionProviderToLocalStorage(engine, providerId);
+  syncSessionProviderToLocalStorage(engine, providerId, anchor);
 
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event("ccgui:cli-config-changed"));

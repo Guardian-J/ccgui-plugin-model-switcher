@@ -143,8 +143,20 @@ function run(action, target) {
         const backup = entry.path + ".orig.bak";
         if (!fs.existsSync(backup)) fs.writeFileSync(backup, current, { flag: "wx", mode: fs.statSync(entry.path).mode });
       }
-      if (!fs.readFileSync(entry.path).equals(current)) throw new Error("CLI changed during patch; retry after its update finishes");
-      fs.writeFileSync(entry.path, expected);
+      // 原子替换：同目录临时文件完整写入 + 回读校验 + rename 覆盖，避免截断目标。
+      const tmp = entry.path + ".tmp-" + process.pid;
+      try {
+        fs.writeFileSync(tmp, expected, { mode: fs.statSync(entry.path).mode });
+        let written = null;
+        try { written = fs.readFileSync(tmp); } catch { /* 读取失败按校验失败处理 */ }
+        if (!written || !written.equals(expected)) throw new Error("CLI write verification failed");
+        if (!fs.readFileSync(entry.path).equals(current)) throw new Error("CLI changed during patch; retry after its update finishes");
+        // Node 的 renameSync 在 Windows 下也覆盖已存在目标（MoveFileExW + MOVEFILE_REPLACE_EXISTING）。
+        fs.renameSync(tmp, entry.path);
+      } finally {
+        // 失败或校验不通过时清理临时文件，绝不留半成品。
+        try { fs.rmSync(tmp, { force: true }); } catch { /* 清理失败不影响已报告的错误 */ }
+      }
       if (!fs.readFileSync(entry.path).equals(expected)) throw new Error("CLI write verification failed");
       changedCount += matches;
     } catch (error) {

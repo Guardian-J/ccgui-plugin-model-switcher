@@ -16,8 +16,27 @@ export function withRemoteStorage(ctx: PluginContext): PluginContext {
       async get<T>(key: string): Promise<T | null> {
         return enqueueSerial(`ctx_storage:${ctx.pluginId}:${key}`, async () => {
           if (remote) {
-            const local = localStorage.getItem(prefix + key);
-            if (local !== null) return JSON.parse(local) as T | null;
+            let local: string | null = null;
+            try {
+              local = localStorage.getItem(prefix + key);
+            } catch (error) {
+              // 浏览器禁用存储访问时，远程宿主仍是可信数据源。
+              if (typeof error !== "object" || error === null || !("name" in error) || error.name !== "SecurityError") {
+                throw error;
+              }
+            }
+            if (local !== null) {
+              try {
+                return JSON.parse(local) as T | null;
+              } catch {
+                // 损坏的本地回退值不能永久遮蔽远程数据。
+                try {
+                  localStorage.removeItem(prefix + key);
+                } catch {
+                  // 清理失败不妨碍回退远程读取。
+                }
+              }
+            }
           }
           return ctx.storage.get<T>(key);
         });
@@ -30,10 +49,17 @@ export function withRemoteStorage(ctx: PluginContext): PluginContext {
           }
           try {
             await ctx.storage.set(key, value);
-            localStorage.removeItem(prefix + key);
           } catch (error) {
             if (!/unknown command:\s*plugin_storage_(set|delete)\b/i.test(String(error))) throw error;
+            // 远程写入不可用时退回 localStorage；本地写入失败必须上抛，不能静默丢数据。
             localStorage.setItem(prefix + key, JSON.stringify(value));
+            return;
+          }
+          try {
+            // 远程写入已成功，缓存清理异常不代表本次操作失败。
+            localStorage.removeItem(prefix + key);
+          } catch {
+            // 忽略清理异常。
           }
         });
       },
@@ -45,10 +71,15 @@ export function withRemoteStorage(ctx: PluginContext): PluginContext {
           }
           try {
             await ctx.storage.delete(key);
-            localStorage.removeItem(prefix + key);
           } catch (error) {
             if (!/unknown command:\s*plugin_storage_(set|delete)\b/i.test(String(error))) throw error;
             localStorage.setItem(prefix + key, "null");
+            return;
+          }
+          try {
+            localStorage.removeItem(prefix + key);
+          } catch {
+            // 远程删除已成功，忽略缓存清理异常。
           }
         });
       },

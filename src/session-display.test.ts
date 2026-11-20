@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { readSessionDisplay } from "./session-display";
+import { readSessionDisplay, withSessionDisplay } from "./session-display";
+import { DEFAULT_STATE } from "./constants";
+import type { CustomPluginChannel } from "./types";
 import { isModelRequiredBlocked } from "./send-guard";
 import type { HostCliMenuProps } from "./sync-host";
 
@@ -72,5 +74,92 @@ describe("readSessionDisplay 模型解析与发送守卫", () => {
     const display = readWithHost(makeHost({ claude: "claude-sonnet-4-5" }));
     expect(display?.selectedModel).toBe("claude-opus-4-1");
     expect(display && isModelRequiredBlocked(display, display.selectedModel)).toBe(false);
+  });
+});
+
+describe("withSessionDisplay 按默认模型前缀恢复渠道", () => {
+  const channels: CustomPluginChannel[] = [
+    { id: "wrong", name: "Wrong", baseUrl: "https://wrong.example", apiKey: "" },
+    { id: "right", name: "Right", baseUrl: "https://right.example", apiKey: "" },
+  ];
+  const state = {
+    ...DEFAULT_STATE,
+    selectedCli: "omp" as const,
+    selectedModel: "wrong-model",
+    selectedProviderId: "plugin_model-switcher_wrong",
+    activeChannelType: "plugin" as const,
+    activePluginChannelId: "wrong",
+    pluginChannels: { omp: channels },
+    sessionChannels: {
+      other: {
+        selectedCli: "omp" as const,
+        selectedProviderId: "plugin_model-switcher_wrong",
+        selectedModel: "wrong-model",
+        effort: "high" as const,
+        enable1MContext: false,
+        activeChannelType: "plugin" as const,
+        activePluginChannelId: "wrong",
+      },
+    },
+  };
+  const display = {
+    sessionKey: '["omp",null,"/ws",false]',
+    stableKey: '["omp",null,"/ws"]',
+    sessionId: null,
+    selectedCli: "omp" as const,
+    selectedModel: "plugin_model-switcher_right/gpt-4o",
+    effort: "high" as const,
+    enable1MContext: false,
+    selectedProviderId: "",
+  };
+
+  it("默认模型属于另一插件渠道时选中模型自己的渠道", () => {
+    const next = withSessionDisplay(state, display);
+    expect(next.activeChannelType).toBe("plugin");
+    expect(next.activePluginChannelId).toBe("right");
+    expect(next.selectedProviderId).toBe("plugin_model-switcher_right");
+  });
+
+  it("模型名自带斜杠但不匹配插件前缀时不改变渠道", () => {
+    const next = withSessionDisplay(state, {
+      ...display,
+      selectedModel: "openrouter/anthropic/claude-sonnet",
+    });
+    expect(next.activeChannelType).toBe("system");
+    expect(next.activePluginChannelId).toBeUndefined();
+    expect(next.selectedProviderId).toBe("");
+  });
+
+  it("已有会话的权威 provider 优先于模型前缀", () => {
+    const next = withSessionDisplay(state, {
+      ...display,
+      sessionId: "s1",
+      stableKey: '["omp","s1","/ws"]',
+      selectedProviderId: "plugin_model-switcher_wrong",
+    });
+    expect(next.activeChannelType).toBe("plugin");
+    expect(next.activePluginChannelId).toBe("wrong");
+    expect(next.selectedProviderId).toBe("plugin_model-switcher_wrong");
+  });
+
+  it("系统 provider 不被模型名中的斜杠覆盖", () => {
+    const next = withSessionDisplay(state, {
+      ...display,
+      selectedModel: "system-relay/gpt-4o",
+      selectedProviderId: "actual-system",
+    });
+    expect(next.activeChannelType).toBe("system");
+    expect(next.activePluginChannelId).toBeUndefined();
+    expect(next.selectedProviderId).toBe("actual-system");
+  });
+
+  it("普通斜杠模型不被猜成系统渠道", () => {
+    const next = withSessionDisplay(state, {
+      ...display,
+      selectedModel: "system-relay/gpt-4o",
+    });
+    expect(next.activeChannelType).toBe("system");
+    expect(next.activePluginChannelId).toBeUndefined();
+    expect(next.selectedProviderId).toBe("");
   });
 });

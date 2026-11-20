@@ -55,6 +55,8 @@ import type { GuiThemeManager } from "../theme-manager";
 import {
   applyModelSelectionToHost,
   applyChannelSelectionToHost,
+  captureHostSessionGuard,
+  SESSION_CHANGED_MESSAGE,
   hostSessionSelectionError as sessionSelectionError,
 } from "../sync-host";
 import { useSessionDisplay, withSessionDisplay } from "../session-display";
@@ -601,7 +603,7 @@ export function CliModelFlyoutMenu({
       engineProtocols: engines.find((engine) => engine.id === activeEngine)?.supportedProtocols,
     } : undefined;
   };
-  const selectionError = (model: string) => sessionSelectionError(activeEngine) ||
+  const selectionError = (model: string) => sessionSelectionError(activeEngine, triggerRef?.current) ||
     (engines.find((engine) => engine.id === activeEngine)?.disabled ? "当前 CLI 不可用" : null) ||
     modelSelectionError(activeEngine, model, compatibilityFor(model));
   const commitSelection = async (nextState: PluginState, options?: { silent?: boolean }) => {
@@ -612,6 +614,7 @@ export function CliModelFlyoutMenu({
       selectionError(targetModel) || (hostModel ? selectionError(hostModel) : null);
     if (error) { setStatusMsg(error); return false; }
     const prevState = state;
+    const guardSession = captureHostSessionGuard(activeEngine, true, triggerRef?.current);
     const isSilent = options?.silent ?? false;
     selectionPending.current = true;
     if (!isSilent) setSwitching(true);
@@ -619,12 +622,14 @@ export function CliModelFlyoutMenu({
     const optimisticState = { ...nextState, selectedCli: activeEngine, selectedModel: cleanModel };
     setState(optimisticState);
     try {
+      guardSession();
       if (activeChannel && targetModel) {
         await ensurePiFamilyModelConfigured(activeEngine, activeChannel, targetModel);
         if (activeEngine === "omp" || activeEngine === "pi") {
           await updatePiFamilyModelEffort(activeEngine, activeChannel, targetModel, nextState.effort, nextState.enable1MContext);
         }
       }
+      guardSession();
       const enable1M = (activeEngine === "claude" || activeEngine === "codex" || activeEngine === "omp" || activeEngine === "pi") ? Boolean(nextState.enable1MContext) : false;
       await applyModelSelectionToHost({
         engine: activeEngine,
@@ -635,8 +640,9 @@ export function CliModelFlyoutMenu({
         ctx,
         anchor: triggerRef?.current,
       });
-      const sessionError = sessionSelectionError(activeEngine);
+      const sessionError = sessionSelectionError(activeEngine, triggerRef?.current);
       if (sessionError) throw new Error(sessionError);
+      guardSession();
       const saved = { ...nextState, selectedCli: activeEngine, selectedModel: cleanModel };
       committedSelection.current = sessionDisplay
         ? { sessionKey: sessionDisplay.sessionKey, effort: saved.effort, model: cleanModel }
@@ -661,6 +667,17 @@ export function CliModelFlyoutMenu({
       setState(savedWithSessions);
       return true;
     } catch (e) {
+      if (e instanceof Error && e.message === SESSION_CHANGED_MESSAGE) {
+        if (activeChannel && targetModel) {
+          void applyChannelSelectionToHost({
+            engine: activeEngine,
+            providerId: prevState.selectedProviderId,
+            anchor: triggerRef?.current,
+          }).catch(() => {});
+        }
+        setStatusMsg(e.message);
+        return false;
+      }
       setState(prevState);
       setStatusMsg(e instanceof Error ? e.message : "模型切换失败");
       return false;
@@ -819,10 +836,11 @@ export function CliModelFlyoutMenu({
     if (busy || fetchingModels || selectionPending.current) return;
     if (state.activeChannelType !== "plugin" && channel.id === (state.selectedProviderId || currentChannelId)) return;
     const hostModel = qualifyEngineModel(activeEngine, channel, channel.model || "");
-    const error = sessionSelectionError(activeEngine) || (hostModel ? modelSelectionError(activeEngine, hostModel) : null);
+    const error = sessionSelectionError(activeEngine, triggerRef?.current) || (hostModel ? modelSelectionError(activeEngine, hostModel) : null);
     if (error) { setStatusMsg(error); return; }
     const prevState = state;
     const prevChannelId = currentChannelId;
+    const guardSession = captureHostSessionGuard(activeEngine, false, triggerRef?.current);
     selectionPending.current = true;
     setSwitching(true);
     const nextState: PluginState = {
@@ -836,6 +854,7 @@ export function CliModelFlyoutMenu({
     setCurrentChannelId(channel.id);
     setState(nextState);
     try {
+      guardSession();
       if ((activeEngine === "omp" || activeEngine === "pi") && channel.id !== NATIVE_PROVIDER_ID) {
         await invokeHost("upsert_provider", {
           engine: activeEngine,
@@ -848,7 +867,8 @@ export function CliModelFlyoutMenu({
           },
         }).catch(() => {});
       }
-      await applyChannelSelectionToHost({ engine: activeEngine, providerId: channel.id });
+      await applyChannelSelectionToHost({ engine: activeEngine, providerId: channel.id, anchor: triggerRef?.current });
+      guardSession();
       if (hostModel) {
         await applyModelSelectionToHost({
           engine: activeEngine,
@@ -879,6 +899,10 @@ export function CliModelFlyoutMenu({
       setStatusMsg(hostModel ? `已生效: ${channel.name}` : "渠道已切换，请选择模型");
       setTimeout(() => setStatusMsg(null), 2000);
     } catch (e) {
+      if (e instanceof Error && e.message === SESSION_CHANGED_MESSAGE) {
+        setStatusMsg(e.message);
+        return;
+      }
       setCurrentChannelId(prevChannelId);
       setState(prevState);
       setStatusMsg(e instanceof Error ? e.message : "切换失败");
@@ -892,10 +916,11 @@ export function CliModelFlyoutMenu({
     if (busy || fetchingModels || selectionPending.current) return;
     const pluginChannel = { ...channel, isPlugin: true as const };
     const hostModel = qualifyEngineModel(activeEngine, pluginChannel, channel.model || "");
-    const error = sessionSelectionError(activeEngine) || (hostModel ? modelSelectionError(activeEngine, hostModel) : null);
+    const error = sessionSelectionError(activeEngine, triggerRef?.current) || (hostModel ? modelSelectionError(activeEngine, hostModel) : null);
     if (error) { setStatusMsg(error); return; }
     const prevState = state;
     const prevChannelId = currentChannelId;
+    const guardSession = captureHostSessionGuard(activeEngine, false, triggerRef?.current);
     selectionPending.current = true;
     setSwitching(true);
     const hostProviderId = pluginProviderId(channel.id);
@@ -910,8 +935,10 @@ export function CliModelFlyoutMenu({
     setCurrentChannelId(hostProviderId);
     setState(nextState);
     try {
+      guardSession();
       await applyCustomPluginChannelToEngine(ctx, activeEngine, channel);
-      await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(channel.id) });
+      await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(channel.id), anchor: triggerRef?.current });
+      guardSession();
       if (hostModel) {
         await applyModelSelectionToHost({
           engine: activeEngine,
@@ -942,6 +969,10 @@ export function CliModelFlyoutMenu({
       setStatusMsg(hostModel ? `已生效: ${channel.name}` : "渠道已切换，请选择模型");
       setTimeout(() => setStatusMsg(null), 2000);
     } catch (e) {
+      if (e instanceof Error && e.message === SESSION_CHANGED_MESSAGE) {
+        setStatusMsg(e.message);
+        return;
+      }
       setCurrentChannelId(prevChannelId);
       setState(prevState);
       setStatusMsg(`应用失败: ${e instanceof Error ? e.message : String(e)}`);
@@ -1029,7 +1060,7 @@ export function CliModelFlyoutMenu({
   const handleDeletePluginChannel = async (channelId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (busy || fetchingModels || selectionPending.current) return;
-    const error = sessionSelectionError(activeEngine);
+    const error = sessionSelectionError(activeEngine, triggerRef?.current);
     if (error) { setStatusMsg(error); return; }
 
     const channelToDelete = pluginCustomChannels.find((c) => c.id === channelId);
@@ -1054,39 +1085,76 @@ export function CliModelFlyoutMenu({
     const currentList = state.pluginChannels?.[activeEngine] || [];
     const nextChannels = currentList.filter((c) => c.id !== channelId);
     const isDeletingCurrent = state.activeChannelType === "plugin" && state.activePluginChannelId === channelId;
+    const guardSession = captureHostSessionGuard(activeEngine, false, triggerRef?.current);
 
     selectionPending.current = true;
     setSwitching(true);
     try {
       const fallbackId = !independentChannelError(activeEngine) && currentChannelId && !isPluginProviderId(currentChannelId)
         ? currentChannelId : NATIVE_PROVIDER_ID;
+      const hostProviderId = pluginProviderId(channelId);
+      const filteredSessionChannels = state.sessionChannels
+        ? Object.fromEntries(
+            Object.entries(state.sessionChannels).filter(
+              ([, rec]) => !(
+                rec.selectedCli === activeEngine &&
+                (rec.activePluginChannelId === channelId ||
+                  rec.selectedProviderId === channelId ||
+                  rec.selectedProviderId === hostProviderId)
+              ),
+            ),
+          )
+        : undefined;
+      const currentStableKey = sessionDisplay?.stableKey;
       const nextState: PluginState = {
         ...state,
         activeChannelType: isDeletingCurrent ? "system" : state.activeChannelType,
         activePluginChannelId: isDeletingCurrent ? undefined : state.activePluginChannelId,
         selectedProviderId: isDeletingCurrent ? fallbackId : state.selectedProviderId,
+        selectedModel: isDeletingCurrent ? "" : state.selectedModel,
         pluginChannels: {
           ...state.pluginChannels,
           [activeEngine]: nextChannels,
         },
-        sessionChannels: state.sessionChannels
-          ? Object.fromEntries(
-              Object.entries(state.sessionChannels).filter(
-                ([, rec]) => !(rec.activePluginChannelId === channelId && rec.selectedCli === activeEngine),
-              ),
-            )
-          : undefined,
+        // 当前会话写一条明确的系统渠道空模型覆盖，防止历史 last-used 又把旧模型回读出来
+        sessionChannels: isDeletingCurrent && currentStableKey ? {
+          ...filteredSessionChannels,
+          [currentStableKey]: {
+            selectedCli: activeEngine,
+            selectedProviderId: fallbackId,
+            selectedModel: "",
+            effort: state.effort,
+            enable1MContext: state.enable1MContext,
+            activeChannelType: "system",
+            activePluginChannelId: undefined,
+            activeChannelName: undefined,
+          },
+        } : filteredSessionChannels,
       };
+      guardSession();
       await deleteCustomPluginChannel(activeEngine, channelId);
       if (isDeletingCurrent) {
-        await applyChannelSelectionToHost({ engine: activeEngine, providerId: fallbackId });
+        guardSession();
+        await applyChannelSelectionToHost({ engine: activeEngine, providerId: fallbackId, anchor: triggerRef?.current });
         setCurrentChannelId(fallbackId);
+        guardSession();
+        await applyModelSelectionToHost({
+          engine: activeEngine,
+          model: "",
+          effort: nextState.effort,
+          ctx,
+          anchor: triggerRef?.current,
+        });
       }
       await onSave(nextState);
       setState(nextState);
       await loadChannels(activeEngine);
-      setStatusMsg("已删除该渠道");
+      setStatusMsg(isDeletingCurrent ? "渠道已删除，请选择新模型" : "已删除该渠道");
     } catch (e) {
+      if (e instanceof Error && e.message === SESSION_CHANGED_MESSAGE) {
+        setStatusMsg(e.message);
+        return;
+      }
       setStatusMsg(`删除渠道失败: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       selectionPending.current = false;
@@ -1114,7 +1182,7 @@ export function CliModelFlyoutMenu({
   const handleDeleteHostChannel = async (channelId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (busy || fetchingModels || selectionPending.current) return;
-    const error = sessionSelectionError(activeEngine);
+    const error = sessionSelectionError(activeEngine, triggerRef?.current);
     if (error) { setStatusMsg(error); return; }
 
     const channel = allSystemChannels.find((c) => c.id === channelId);
@@ -1125,33 +1193,63 @@ export function CliModelFlyoutMenu({
 
   const confirmDeleteHostChannel = async (channelId: string) => {
     const isDeletingCurrent = state.activeChannelType !== "plugin" && state.selectedProviderId === channelId;
+    const guardSession = captureHostSessionGuard(activeEngine, false, triggerRef?.current);
 
     selectionPending.current = true;
     setSwitching(true);
     try {
-      const remainingHostChannels = allSystemChannels.filter((c) => c.id !== channelId);
       const fallbackId = NATIVE_PROVIDER_ID;
+      const filteredSessionChannels = state.sessionChannels
+        ? Object.fromEntries(
+            Object.entries(state.sessionChannels).filter(
+              ([, rec]) => !(rec.selectedProviderId === channelId && rec.selectedCli === activeEngine),
+            ),
+          )
+        : undefined;
+      const currentStableKey = sessionDisplay?.stableKey;
       const nextState: PluginState = {
         ...state,
         selectedProviderId: isDeletingCurrent ? fallbackId : state.selectedProviderId,
-        sessionChannels: state.sessionChannels
-          ? Object.fromEntries(
-              Object.entries(state.sessionChannels).filter(
-                ([, rec]) => !(rec.selectedProviderId === channelId && rec.selectedCli === activeEngine),
-              ),
-            )
-          : undefined,
+        selectedModel: isDeletingCurrent ? "" : state.selectedModel,
+        // 当前会话写一条明确的系统渠道空模型覆盖，防止历史 last-used 又把旧模型回读出来
+        sessionChannels: isDeletingCurrent && currentStableKey ? {
+          ...filteredSessionChannels,
+          [currentStableKey]: {
+            selectedCli: activeEngine,
+            selectedProviderId: fallbackId,
+            selectedModel: "",
+            effort: state.effort,
+            enable1MContext: state.enable1MContext,
+            activeChannelType: "system",
+            activePluginChannelId: undefined,
+            activeChannelName: undefined,
+          },
+        } : filteredSessionChannels,
       };
+      guardSession();
       await deleteHostProviderChannel(activeEngine, channelId);
       if (isDeletingCurrent) {
-        await applyChannelSelectionToHost({ engine: activeEngine, providerId: fallbackId });
+        guardSession();
+        await applyChannelSelectionToHost({ engine: activeEngine, providerId: fallbackId, anchor: triggerRef?.current });
         setCurrentChannelId(fallbackId);
+        guardSession();
+        await applyModelSelectionToHost({
+          engine: activeEngine,
+          model: "",
+          effort: nextState.effort,
+          ctx,
+          anchor: triggerRef?.current,
+        });
       }
       await onSave(nextState);
       setState(nextState);
       await loadChannels(activeEngine);
-      setStatusMsg("已删除该渠道");
+      setStatusMsg(isDeletingCurrent ? "渠道已删除，请选择新模型" : "已删除该渠道");
     } catch (e) {
+      if (e instanceof Error && e.message === SESSION_CHANGED_MESSAGE) {
+        setStatusMsg(e.message);
+        return;
+      }
       setStatusMsg(`删除渠道失败: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       selectionPending.current = false;
@@ -1265,7 +1363,7 @@ export function CliModelFlyoutMenu({
                 if (enabled) {
                   themeManager.apply();
                 } else {
-                  themeManager.dispose();
+                  themeManager.clearStyles();
                 }
               }}
             />

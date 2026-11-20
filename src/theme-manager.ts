@@ -251,12 +251,16 @@ export class GuiThemeManager {
     }
   }
 
-  public dispose(): void {
+  public clearStyles(): void {
     this.applyGeneration++;
     if (this.currentDisposer) {
       this.currentDisposer();
       this.currentDisposer = null;
     }
+  }
+
+  public dispose(): void {
+    this.clearStyles();
     this.listeners.clear();
   }
 }

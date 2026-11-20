@@ -78,7 +78,7 @@ try {
   // Exercise denied writes without depending on root/admin permission semantics.
   const fakeFs = Object.create(fs);
   fakeFs.writeFileSync = () => { const error = new Error("locked"); error.code = "EACCES"; throw error; };
-  const sandbox = { Buffer, require: name => name === "node:fs" ? fakeFs : require(name),
+  const sandbox = { Buffer, process, require: name => name === "node:fs" ? fakeFs : require(name),
     module: { exports: {} }, __filename: "fixture-module.cjs" };
   vm.runInNewContext(source, sandbox);
   const denied = sandbox.module.exports.run("apply", entry);
@@ -89,6 +89,16 @@ try {
   const ignored = sandbox.module.exports.run("apply", entry);
   assert.equal(ignored.success, false, "A write that did not persist must fail readback verification");
   assert.match(ignored.errors[0].error, /verification failed/);
+  // 部分写入：只写前半段字节，回读校验必须失败且目标文件保持原样、临时文件被清理。
+  fakeFs.writeFileSync = (target, data) => {
+    const buffer = Buffer.from(data);
+    fs.writeFileSync(target, buffer.subarray(0, Math.floor(buffer.length / 2)));
+  };
+  const partial = sandbox.module.exports.run("apply", entry);
+  assert.equal(partial.success, false, "A partial write must fail readback verification");
+  assert.match(partial.errors[0].error, /verification failed/);
+  assert.deepEqual(fs.readFileSync(entry), original, "Partial write must leave the target untouched");
+  assert.ok(!fs.existsSync(entry.path + ".tmp-" + process.pid), "Failed write must clean up its temp file");
 
   for (const args of [[path.join(__dirname, "scrub-core.cjs"), "selftest"], ["-e", source, "--", "selftest"]]) {
     const result = execFileSync(process.execPath, args, { encoding: "utf8", windowsHide: true });

@@ -188,12 +188,25 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
   // 引擎切换时必须重置渠道选择
   const engineChanged = state.selectedCli !== display.selectedCli;
 
+  // 只有插件渠道的前缀是无歧义标识；普通 provider/model 中的 provider 也可能
+  // 是模型名本身（例如 OpenRouter），不能据此猜测系统渠道。
+  const modelPluginChannel = !display.sessionId && !selectedProviderId &&
+    (display.selectedCli === "omp" || display.selectedCli === "pi")
+    ? state.pluginChannels?.[display.selectedCli]?.find(item =>
+      display.selectedModel.startsWith(`${pluginProviderId(item.id)}/`)
+    )
+    : undefined;
+
   // 确定渠道类型和 ID（优先使用宿主提供的 selectedProviderId）
   let activeChannelType: "system" | "plugin";
   let activePluginChannelId: string | undefined;
   let finalProviderId: string;
 
-  if (selectedProviderId) {
+  if (modelPluginChannel) {
+    activeChannelType = "plugin";
+    activePluginChannelId = modelPluginChannel.id;
+    finalProviderId = pluginProviderId(modelPluginChannel.id);
+  } else if (selectedProviderId) {
     // 宿主提供了明确的 providerId（来自 session.provider 或 selectedChannels[engine]）
     if (channel) {
       // 匹配到插件渠道：使用带前缀的 providerId

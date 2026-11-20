@@ -6,7 +6,12 @@ import {
   independentChannelError,
   NATIVE_PROVIDER_ID,
   peekNativeCatalog,
+  getNativeCatalog,
   invalidateNativeCatalogCache,
+  getSystemEngines,
+  peekSystemEngines,
+  invalidateSystemEnginesCache,
+  CLI_ENGINES_CHANGED_EVENT,
   classifyProviderChannels,
   mergeYamlProviderIntoHostChannel,
   mergePluginChannelsById,
@@ -104,6 +109,23 @@ describe('system-bridge', () => {
       invalidateNativeCatalogCache();
       expect(peekNativeCatalog('claude')).toBe(null);
       expect(peekNativeCatalog('pi')).toBe(null);
+    });
+
+    it('无参数清理后不再复用任意引擎的 inflight 请求', async () => {
+      invalidateNativeCatalogCache();
+      const { promise: firstResponse, resolve: releaseFirst } = Promise.withResolvers<{ models: []; authoritative: boolean }>();
+      vi.mocked(invokeHost)
+        .mockImplementationOnce(async () => firstResponse)
+        .mockImplementationOnce(async () => ({ models: [], authoritative: true }));
+
+      const first = getNativeCatalog('claude');
+      invalidateNativeCatalogCache();
+      const second = getNativeCatalog('claude');
+
+      expect(invokeHost).toHaveBeenCalledTimes(2);
+      releaseFirst({ models: [], authoritative: false });
+      await expect(first).resolves.toEqual({ models: [], authoritative: false });
+      await expect(second).resolves.toEqual({ models: [], authoritative: true });
     });
   });
 
@@ -350,6 +372,42 @@ describe('system-bridge', () => {
   });
 });
 
+describe('getSystemEngines 并发强制刷新', () => {
+  it('仅最新 inflight 请求可以提交缓存并发送变更通知', async () => {
+    invalidateSystemEnginesCache();
+    const first = Promise.withResolvers<Array<{ id: string; enabled: boolean; available: boolean }>>();
+    const second = Promise.withResolvers<Array<{ id: string; enabled: boolean; available: boolean }>>();
+    vi.mocked(invokeHost)
+      .mockImplementationOnce(async () => first.promise)
+      .mockImplementationOnce(async () => second.promise);
+    const listener = vi.fn();
+    window.addEventListener(CLI_ENGINES_CHANGED_EVENT, listener);
+
+    try {
+      const staleRequest = getSystemEngines(true);
+      const latestRequest = getSystemEngines(true);
+      second.resolve([{ id: 'codex', enabled: true, available: true }]);
+      await expect(latestRequest).resolves.toEqual([
+        expect.objectContaining({ id: 'codex', available: true }),
+      ]);
+      first.resolve([{ id: 'claude', enabled: true, available: true }]);
+      await expect(staleRequest).resolves.toEqual([
+        expect.objectContaining({ id: 'claude', available: true }),
+      ]);
+
+      expect(peekSystemEngines()).toEqual([
+        expect.objectContaining({ id: 'codex', available: true }),
+      ]);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual([
+        expect.objectContaining({ id: 'codex', available: true }),
+      ]);
+    } finally {
+      window.removeEventListener(CLI_ENGINES_CHANGED_EVENT, listener);
+    }
+  });
+});
+
   describe('updatePiFamilyModelEffort Ultra 模式适配', () => {
     it('当 effort 为 ultra 时，写入 YAML 的 defaultLevel 应适配为 max', async () => {
       const initialYaml = `providers:\n  test-provider:\n    name: "test"\n    baseUrl: "https://api.test.com"\n    api: anthropic-messages\n    models:\n      - id: "gemini-3.8-flash"\n`;
@@ -400,6 +458,47 @@ describe('system-bridge', () => {
       );
 
       expect(writtenText).toContain('"defaultLevel":"medium"');
+    });
+
+    it('读取配置失败时 reject，不吞掉宿主错误', async () => {
+      const error = new Error('read failed');
+      vi.mocked(invokeHost).mockRejectedValueOnce(error);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        await expect(updatePiFamilyModelEffort(
+          'omp',
+          { id: 'test-provider', name: 'test', baseUrl: 'https://api.test.com' },
+          'test-model',
+          'medium',
+        )).rejects.toBe(error);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('写入配置失败时 reject，不吞掉宿主错误', async () => {
+      const error = new Error('write failed');
+      const initialYaml = 'providers:\n  test-provider:\n    models:\n      - id: "test-model"\n';
+      vi.mocked(invokeHost).mockImplementation(async (cmd) => {
+        if (cmd === 'pi_family_models_config_read') {
+          return { text: initialYaml, file: { format: 'yaml' } };
+        }
+        if (cmd === 'pi_family_models_config_write') throw error;
+        return {};
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        await expect(updatePiFamilyModelEffort(
+          'omp',
+          { id: 'test-provider', name: 'test', baseUrl: 'https://api.test.com' },
+          'test-model',
+          'medium',
+        )).rejects.toBe(error);
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     it('并发调用 updatePiFamilyModelEffort 时按序读取-修改-写入，后一次不会用过期 YAML 覆盖前一次修改', async () => {

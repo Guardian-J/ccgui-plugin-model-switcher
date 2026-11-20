@@ -100,6 +100,8 @@ export function invalidateNativeCatalogCache(engine?: CliEngineId): void {
   } else {
     for (const key of Object.keys(nativeCatalogsCache) as CliEngineId[]) {
       delete nativeCatalogsCache[key];
+    }
+    for (const key of Object.keys(nativeCatalogsInflight) as CliEngineId[]) {
       delete nativeCatalogsInflight[key];
     }
   }
@@ -264,19 +266,7 @@ export function optimisticSystemEngines(selected: CliEngineId): EngineItemRule[]
 async function loadSystemEngines(): Promise<EngineItemRule[]> {
   try {
     const list = (await invokeTauri<HostEngineInfo[]>("list_engines")) || [];
-    const mapped = mapHostEngines(list);
-    const previous = enginesCache?.value;
-    enginesCache = { at: Date.now(), value: mapped };
-    if (!previous || !areEnginesEqual(previous, mapped)) {
-      notifySystemEnginesChanged(mapped);
-    }
-    // 后台预热可用引擎的原生模型（特别是 omp/pi 等耗时子进程），避免点开弹窗时等待
-    for (const e of mapped) {
-      if (e.available && (e.id === "omp" || e.id === "pi")) {
-        void getNativeCatalog(e.id).catch(() => {});
-      }
-    }
-    return mapped;
+    return mapHostEngines(list);
   } catch (error) {
     console.warn(
       "[model-switcher] 读取系统 engines 失败，使用规则降级:",
@@ -301,11 +291,28 @@ export async function getSystemEngines(force = false): Promise<EngineItemRule[]>
     }
     if (enginesInflight) return enginesInflight;
   }
-  const pending = loadSystemEngines().finally(() => {
-    if (enginesInflight === pending) {
-      enginesInflight = null;
-    }
-  });
+  const pending = loadSystemEngines()
+    .then((mapped) => {
+      if (enginesInflight === pending) {
+        const previous = enginesCache?.value;
+        enginesCache = { at: Date.now(), value: mapped };
+        if (!previous || !areEnginesEqual(previous, mapped)) {
+          notifySystemEnginesChanged(mapped);
+        }
+        // 后台预热可用引擎的原生模型（特别是 omp/pi 等耗时子进程），避免点开弹窗时等待
+        for (const e of mapped) {
+          if (e.available && (e.id === "omp" || e.id === "pi")) {
+            void getNativeCatalog(e.id).catch(() => {});
+          }
+        }
+      }
+      return mapped;
+    })
+    .finally(() => {
+      if (enginesInflight === pending) {
+        enginesInflight = null;
+      }
+    });
   enginesInflight = pending;
   return pending;
 }
@@ -1194,6 +1201,7 @@ export async function updatePiFamilyModelEffort(
       }
     } catch (err) {
       console.warn(`[model-switcher] 更新 ${engine.toUpperCase()} 配置文件推理强度失败:`, err);
+      throw err;
     }
   });
 }

@@ -479,8 +479,11 @@ export function upsertPiFamilyProviderText(
   if (format === "yaml") {
     const nl = text.includes("\r\n") ? "\r\n" : "\n";
     let lines = text.trim() ? text.split(/\r?\n/) : [];
-    if (lines.length === 0 || !lines.some((l) => /^providers\s*:/.test(l.trim()))) {
+    if (lines.length === 0) {
       lines = ["providers:"];
+    } else if (!lines.some((l) => /^providers\s*:/.test(l.trim()))) {
+      // 保留其他顶层 YAML 配置，仅在文件末尾追加 providers。
+      lines.push("providers:");
     }
     const existingProviders = parsePiFamilyProviders(text, "yaml");
     const existingModels = existingProviders[id]?.models || [];

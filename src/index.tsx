@@ -122,7 +122,7 @@ export default function activate(ctx: PluginContext): Disposer {
       void (async () => {
         try {
           if (providerId) {
-            await applyChannelSelectionToHost({ engine, providerId });
+            await applyChannelSelectionToHost({ engine, providerId, anchor: containerRef.current });
             if (cancelled || prevStableKey.current !== stableKey) return;
           }
           if (model || targetEffort) {

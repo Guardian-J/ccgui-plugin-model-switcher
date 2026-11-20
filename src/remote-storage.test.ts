@@ -188,5 +188,85 @@ describe('remote-storage', () => {
     await write;
     await expect(read).resolves.toEqual({ step: 1 });
   });
+
+  it('应该在远程读取 localStorage 抛 SecurityError 时回退 ctx.storage', async () => {
+    vi.mocked(isRemoteHost).mockReturnValue(true);
+
+    // 模拟浏览器跨域 iframe 中 localStorage 访问被禁用的场景。
+    vi.mocked(window.localStorage.getItem).mockImplementation(() => {
+      throw new DOMException('Access is denied for this document.', 'SecurityError');
+    });
+    vi.mocked(mockCtx.storage.get).mockResolvedValue({ value: 'remote' });
+
+    const wrapped = withRemoteStorage(mockCtx);
+    await expect(wrapped.storage.get('key1')).resolves.toEqual({ value: 'remote' });
+    expect(mockCtx.storage.get).toHaveBeenCalledWith('key1');
+  });
+
+  it('应该在本地缓存损坏时清理并回退远程', async () => {
+    vi.mocked(isRemoteHost).mockReturnValue(true);
+
+    mockLocalStorage.set('ccgui.plugin.remote:test-plugin:key1', '{broken json');
+    vi.mocked(mockCtx.storage.get).mockResolvedValue({ value: 'remote' });
+
+    const wrapped = withRemoteStorage(mockCtx);
+    await expect(wrapped.storage.get('key1')).resolves.toEqual({ value: 'remote' });
+
+    expect(mockLocalStorage.has('ccgui.plugin.remote:test-plugin:key1')).toBe(false);
+    expect(mockCtx.storage.get).toHaveBeenCalledWith('key1');
+  });
+
+  it('应该在远程写入成功但缓存清理异常时不失败', async () => {
+    vi.mocked(isRemoteHost).mockReturnValue(true);
+
+    vi.mocked(mockCtx.storage.set).mockResolvedValue(undefined);
+    vi.mocked(window.localStorage.removeItem).mockImplementation(() => {
+      throw new DOMException('Access is denied for this document.', 'SecurityError');
+    });
+
+    const wrapped = withRemoteStorage(mockCtx);
+    await expect(wrapped.storage.set('key1', { value: 'new' })).resolves.toBeUndefined();
+    expect(mockCtx.storage.set).toHaveBeenCalledWith('key1', { value: 'new' });
+  });
+
+  it('应该在远程删除成功但缓存清理异常时不失败', async () => {
+    vi.mocked(isRemoteHost).mockReturnValue(true);
+
+    vi.mocked(mockCtx.storage.delete).mockResolvedValue(undefined);
+    vi.mocked(window.localStorage.removeItem).mockImplementation(() => {
+      throw new DOMException('Access is denied for this document.', 'SecurityError');
+    });
+
+    const wrapped = withRemoteStorage(mockCtx);
+    await expect(wrapped.storage.delete('key1')).resolves.toBeUndefined();
+    expect(mockCtx.storage.delete).toHaveBeenCalledWith('key1');
+  });
+
+  it('应该在旧宿主不支持远程存储且本地写入失败时抛出', async () => {
+    vi.mocked(isRemoteHost).mockReturnValue(true);
+
+    const failure = new DOMException('Access is denied for this document.', 'SecurityError');
+    vi.mocked(mockCtx.storage.set).mockRejectedValue(new Error('unknown command: plugin_storage_set'));
+    vi.mocked(window.localStorage.setItem).mockImplementation(() => {
+      throw failure;
+    });
+
+    const wrapped = withRemoteStorage(mockCtx);
+    await expect(wrapped.storage.set('key1', { value: 'test' })).rejects.toBe(failure);
+    expect(mockLocalStorage.has('ccgui.plugin.remote:test-plugin:key1')).toBe(false);
+  });
+
+  it('应该在旧宿主不支持远程删除且本地写入失败时抛出', async () => {
+    vi.mocked(isRemoteHost).mockReturnValue(true);
+
+    const failure = new DOMException('Access is denied for this document.', 'SecurityError');
+    vi.mocked(mockCtx.storage.delete).mockRejectedValue(new Error('unknown command: plugin_storage_delete'));
+    vi.mocked(window.localStorage.setItem).mockImplementation(() => {
+      throw failure;
+    });
+
+    const wrapped = withRemoteStorage(mockCtx);
+    await expect(wrapped.storage.delete('key1')).rejects.toBe(failure);
+  });
 });
 
