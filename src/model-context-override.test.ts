@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearChannelContextOverrides,
   clearModelContextOverride,
+  explicitModelContextOverrideKey,
   modelContextOverrideKey,
   readModelContextOverride,
   writeModelContextOverride,
@@ -42,6 +43,15 @@ describe("model context overrides", () => {
     await expect(readModelContextOverride("dsh", "model")).resolves.toBeUndefined();
   });
 
+  it("keeps the plugin explicit override even if host overwrites ccgui.context-window", async () => {
+    await writeModelContextOverride("claude", "sonnet", 1_048_576);
+    localStorage.setItem(modelContextOverrideKey("claude", "sonnet"), "200000");
+    await expect(readModelContextOverride("claude", "sonnet")).resolves.toBe(1_048_576);
+
+    await clearModelContextOverride("claude", "sonnet");
+    expect(localStorage.getItem(explicitModelContextOverrideKey("claude", "sonnet"))).toBeNull();
+    await expect(readModelContextOverride("claude", "sonnet")).resolves.toBeUndefined();
+  });
   it("clears all context overrides belonging to a deleted channel", async () => {
     await writeModelContextOverride("omp", "plugin_model-switcher_c1/m1", 1_000_000);
     await writeModelContextOverride("omp", "c1/m2", 500_000);

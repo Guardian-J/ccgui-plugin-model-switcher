@@ -120,27 +120,25 @@ export function ModelMetadataEditor({
 
       const applyFetched = async (fetched: ModelMetadata): Promise<void> => {
         remoteHit = true;
-        // 查询结果直接展示，覆盖本地值；不主动标"已覆盖"——只有用户点「保存覆盖」才标记。
         if (supportsNativeConfig) {
           await updatePiFamilyModelMetadata(engine, channel, modelId, fetched, true);
-          // 写 models.yml 后清掉残留 override，让渠道配置生效、不再标"已覆盖"。
-          await clearModelContextOverride(engine, hostModelId);
-          setOverrideActive(false);
           const refreshed = await readPiFamilyModelMetadata(engine, channel, modelId);
           setConfigActive(Boolean(refreshed && (refreshed.contextWindow !== undefined || refreshed.maxTokens !== undefined)));
           next = mergeMetadata(fetched, refreshed, nativeMetadata);
         } else {
-          if (fetched.contextWindow !== undefined) {
-            await writeModelContextOverride(engine, hostModelId, fetched.contextWindow);
-          }
           next = mergeMetadata(fetched, next);
+        }
+        // 宿主仪表分母实时读记忆档（优先于不刷新的 models.yml catalog），
+        // 故 omp/pi 也写记忆档，使覆盖在上报窗口的引擎回写前立即生效。
+        if (next.contextWindow !== undefined) {
+          await writeModelContextOverride(engine, hostModelId, next.contextWindow);
+          setOverrideActive(true);
         }
       };
 
-      // 主动「输入查询」（force=true）总是执行远程查询，不受本地已有值限制：
+      // 主动「输入查询」（force=true）总是执行远程查询，不受本地已有值或覆盖限制：
       // 先问渠道模型接口（按当前 modelId），再兜底 OpenRouter（用指定模型名，未指定则用当前 modelId）。
-      // 仅在用户已手动覆盖（override）时尊重本地、不发起远程。
-      if (force && override === undefined) {
+      if (force) {
         attemptedRemote = true;
         if (channel?.baseUrl) {
           const viaApi = await queryProviderModelMetadata(ctx, {
@@ -175,6 +173,7 @@ export function ModelMetadataEditor({
             ? `查询成功：已按「${queriedName}」部分更新（仍缺字段，可手动补填）`
             : `查询成功：已按「${queriedName}」更新窗口参数`;
           setResult({ ok: true, text });
+          onSaved(next);
           onStatus(text);
         } else {
           const text = `查询失败：未找到「${queriedName}」的窗口参数，可修改模型名后重试`;
@@ -221,16 +220,15 @@ export function ModelMetadataEditor({
           { contextWindow, maxTokens },
           true,
         ) ?? saved;
-        // 直接写入渠道配置（models.yml），清掉任何残留 override：下次从配置读取，不再标"已覆盖"。
-        await clearModelContextOverride(engine, hostModelId);
-        setOverrideActive(false);
         setConfigActive(true);
       } else {
-        // 非 native CLI 没有 models.yml，只能走 override 通道。
+        // 非 native CLI 没有 models.yml，只更新展示用覆盖。
         saved = { contextWindow };
-        await writeModelContextOverride(engine, hostModelId, contextWindow);
-        setOverrideActive(true);
       }
+      // 覆盖值写记忆档：宿主仪表分母实时读它、优先级高于不刷新的 models.yml catalog，
+      // 这样 omp/pi 手动设置的窗口不必等宿主重探目录即可生效。
+      await writeModelContextOverride(engine, hostModelId, contextWindow);
+      setOverrideActive(true);
       setMetadata(saved);
       setContextInput(formatMetadataValue(saved.contextWindow));
       setMaxInput(formatMetadataValue(saved.maxTokens));
@@ -265,6 +263,7 @@ export function ModelMetadataEditor({
       } else {
         setOverrideActive(false);
         setEditing(false);
+        onSaved({});
         await autoFill(false);
         onStatus("已清除手动窗口覆盖");
       }

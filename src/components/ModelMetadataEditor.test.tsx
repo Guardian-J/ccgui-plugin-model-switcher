@@ -117,6 +117,7 @@ describe("ModelMetadataEditor", () => {
   });
 
   it("prefers a persisted override over native metadata for every CLI", async () => {
+    readOverride.mockResolvedValue(1_000_000);
     let host!: HTMLElement;
     await act(async () => {
       host = renderEditor({
@@ -131,9 +132,6 @@ describe("ModelMetadataEditor", () => {
         onSaved: vi.fn(),
       }).host;
     });
-    readOverride.mockResolvedValue(1_000_000);
-
-    await triggerQuery(host);
 
     expect(queryMetadata).not.toHaveBeenCalled();
     expect(host.textContent).toContain("已覆盖");
@@ -381,7 +379,7 @@ describe("ModelMetadataEditor", () => {
     expect(host.textContent).toContain("200k");
   });
 
-  it("OMP saves native config directly and clears any override", async () => {
+  it("OMP saves native config and mirrors the window into the host gauge memory", async () => {
     writePiMetadata.mockResolvedValue({ contextWindow: 1_048_576, maxTokens: 65_536 });
     let host!: HTMLElement;
     await act(async () => {
@@ -417,8 +415,8 @@ describe("ModelMetadataEditor", () => {
       { contextWindow: 1_048_576, maxTokens: 65_536 },
       true,
     );
-    expect(clearOverride).toHaveBeenCalledWith("omp", "provider-a/model-a");
-    expect(writeOverride).not.toHaveBeenCalled();
+    expect(clearOverride).not.toHaveBeenCalled();
+    expect(writeOverride).toHaveBeenCalledWith("omp", "provider-a/model-a", 1_048_576);
   });
 
   it("OMP clearing window config deletes metadata from models.yml and notifies parent", async () => {

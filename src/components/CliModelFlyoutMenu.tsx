@@ -32,6 +32,7 @@ import {
   withoutCustomModel,
   ensurePiFamilyModelConfigured,
   removePiFamilyModelFromConfig,
+  readPiFamilyModelMetadata,
   updatePiFamilyModelEffort,
   updatePiFamilyModelMetadata,
   peekNativeCatalog,
@@ -46,7 +47,7 @@ import {
 } from "../system-bridge";
 import { fetchModelsFromProvider, loadNativeChannelModels } from "../api";
 import { invokeHost } from "../host-transport";
-import { clearChannelContextOverrides, clearModelContextOverride } from "../model-context-override";
+import { clearChannelContextOverrides, clearModelContextOverride, writeModelContextOverride } from "../model-context-override";
 import {
   ProjectEngineIcon,
   RefreshIcon,
@@ -60,6 +61,7 @@ import {
   applyModelSelectionToHost,
   applyChannelSelectionToHost,
   captureHostSessionGuard,
+  patchHostSessionContextWindow,
   SESSION_CHANGED_MESSAGE,
   hostSessionSelectionError as sessionSelectionError,
 } from "../sync-host";
@@ -597,7 +599,14 @@ export function CliModelFlyoutMenu({
     activeChannel,
     state.selectedModel.replace(/\[1m\]$/i, ""),
   );
-  const hostSelectedModel = state.selectedModel.trim();
+  // 与宿主 ChatConversation 读记忆档的 displayModel 对齐：OMP/PI 带渠道前缀，Claude 1M 带 [1m]。
+  const hostSelectedModel = (() => {
+    const qualified = qualifyEngineModel(activeEngine, activeChannel, bareSelectedModel);
+    if (!qualified) return "";
+    return activeEngine === "claude" && state.enable1MContext
+      ? `${qualified}[1m]`
+      : qualified;
+  })();
   const nativeIds = nativeActive ? nativeModels.map((model) => model.id) : undefined;
   const compatibilityFor = (model: string) => {
     const cleanId = model.replace(/\[1m\]$/i, "");
@@ -719,7 +728,17 @@ export function CliModelFlyoutMenu({
         setStatusMsg(error instanceof Error ? error.message : "关闭 1M 上下文后恢复窗口参数失败");
       }
     }
-    await commitSelection({ ...state, enable1MContext: enabled }, { silent: true });
+    const applied = await commitSelection({ ...state, enable1MContext: enabled }, { silent: true });
+    // omp/pi：commitSelection 已把目标窗口写进 models.yml，再把记忆档同步为该真值，
+    // 使宿主仪表立即按开关切换显示，且不依赖慢速目录重探。
+    if (applied && activeChannel && state.selectedModel && (activeEngine === "omp" || activeEngine === "pi")) {
+      const hostModel = qualifyEngineModel(activeEngine, activeChannel, state.selectedModel);
+      const cfg = await readPiFamilyModelMetadata(activeEngine, activeChannel, state.selectedModel).catch(() => null);
+      if (hostModel && cfg?.contextWindow !== undefined) {
+        await writeModelContextOverride(activeEngine, hostModel, cfg.contextWindow);
+        patchHostSessionContextWindow(activeEngine, cfg.contextWindow, triggerRef?.current);
+      }
+    }
   };
 
   const handleFetchModels = async () => {
@@ -1543,7 +1562,8 @@ export function CliModelFlyoutMenu({
                     setStatusMsg(message);
                     setTimeout(() => setStatusMsg((current) => current === message ? null : current), 2000);
                   }}
-                  onSaved={() => {
+                  onSaved={(savedMetadata) => {
+                    patchHostSessionContextWindow(activeEngine, savedMetadata.contextWindow, triggerRef?.current);
                     invalidateNativeCatalogCache(activeEngine);
                     void loadChannels(activeEngine);
                   }}

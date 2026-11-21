@@ -1123,6 +1123,207 @@ export async function patchHostSessionEffort(
  * 记录覆盖内存）。选择本身仍通过 tab 模型生效到下一轮，持久化由
  * applyModelSelectionToHost 排到本轮结束（deferSessionSelectionUntilIdle）。
  */
+function readExplicitOverrideWindow(engine: string, model: string): number | undefined {
+  if (typeof localStorage === "undefined" || !engine || !model) return undefined;
+  try {
+    const value = Number(localStorage.getItem(`ccgui.model-switcher.context-window-override.${engine}.${model}`));
+    return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readPersistedContextWindow(engine: string, model: string): number | undefined {
+  const explicit = readExplicitOverrideWindow(engine, model);
+  if (explicit !== undefined) return explicit;
+  if (typeof localStorage === "undefined" || !engine || !model) return undefined;
+  try {
+    const value = Number(localStorage.getItem(`ccgui.context-window.${engine}.${model}`));
+    return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 同步更新当前活跃会话内存中 `bySession[key].usage.model_context_window`：
+ * 宿主仪表分母（resolveContextMax）优先读 sessionUsage，再读 localStorage；
+ * 只写 localStorage 无法覆盖已有会话的旧 usage，也不会触发仪表立刻重渲染。
+ */
+export function patchHostSessionContextWindow(
+  engine: string,
+  contextWindow: number | undefined,
+  anchor?: HTMLElement | null,
+): boolean {
+  const store = findHostChatStore(anchor);
+  if (!store) return false;
+  try {
+    const state = store.getState();
+    const callbacks = getHostCliMenuProps(anchor, { includeLastUsed: false });
+    const active = callbacks?.session !== undefined ? callbacks.session : (state.active ?? getHostSession());
+    if (!active || active.engine !== engine) return false;
+    const key = sessionStoreKey(engine, active.sessionId, active.workspacePath || "");
+    const rawBySession = state.bySession as Record<string, Record<string, unknown>> | undefined;
+    if (!rawBySession?.[key]) return false;
+    store.setState((prev) => {
+      const s = prev as Record<string, unknown>;
+      const bySession = s.bySession as Record<string, Record<string, unknown>> | undefined;
+      const cur = bySession?.[key];
+      if (!cur) return {};
+      const rawUsage = cur.usage && typeof cur.usage === "object"
+        ? { ...(cur.usage as Record<string, unknown>) }
+        : {};
+      const rawInfo = rawUsage.info && typeof rawUsage.info === "object"
+        ? { ...(rawUsage.info as Record<string, unknown>) }
+        : null;
+      if (contextWindow !== undefined && Number.isSafeInteger(contextWindow) && contextWindow > 0) {
+        rawUsage.model_context_window = contextWindow;
+        if (rawInfo) {
+          rawInfo.model_context_window = contextWindow;
+          rawUsage.info = rawInfo;
+        }
+      } else {
+        delete rawUsage.model_context_window;
+        delete rawUsage.context_window;
+        delete rawUsage.contextWindow;
+        if (rawInfo) {
+          delete rawInfo.model_context_window;
+          delete rawInfo.context_window;
+          delete rawInfo.contextWindow;
+          rawUsage.info = rawInfo;
+        }
+      }
+      return {
+        bySession: {
+          ...bySession,
+          [key]: { ...cur, usage: rawUsage },
+        },
+      };
+    });
+    return true;
+  } catch (err) {
+    console.warn("[model-switcher] 更新宿主会话上下文窗口失败:", err);
+    return false;
+  }
+}
+
+/**
+ * 把插件显式覆盖的上下文窗口重新强制对齐到宿主 store 与 `ccgui.context-window.*`：
+ * 宿主在每次收到引擎 usage / done 时会写入引擎上报窗口，并在 `ChatConversation`
+ * 的 `rememberContextWindow` effect 中回写 `ccgui.context-window.*`。
+ * 在 `usage://updated`、`usage://done`、`session://activated`、`session://selection-changed`
+ * 之后重新执行一次，即可纯插件侧压过引擎上报值，让仪表分母持续使用用户覆盖值。
+ */
+export function enforceContextWindowOverrideForPayload(payload: unknown): void {
+  if (typeof localStorage === "undefined") return;
+  const envelope = payload && typeof payload === "object"
+    ? (payload as Record<string, unknown>)
+    : {};
+  const data = envelope.data && typeof envelope.data === "object"
+    ? (envelope.data as Record<string, unknown>)
+    : {};
+  const rawEngine = envelope.engine ?? data.engine;
+  const rawSessionId = envelope.sessionId ?? data.sessionId;
+  const rawModel = envelope.model ?? data.model;
+  const targetEngine = typeof rawEngine === "string" && rawEngine ? rawEngine : null;
+  const targetSessionId = typeof rawSessionId === "string" && rawSessionId ? rawSessionId : null;
+  const targetModel = typeof rawModel === "string" && rawModel.trim() ? rawModel.trim() : null;
+
+  const applyOnce = () => {
+    const store = findHostChatStore();
+    const state = store?.getState();
+    const active = state?.active ?? getHostSession();
+    const engine = targetEngine ?? active?.engine ?? null;
+    if (!engine) return;
+    const sessionId = targetSessionId ?? (active?.engine === engine ? active.sessionId : null);
+    const key = sessionId
+      ? sessionStoreKey(engine, sessionId, active?.workspacePath || "")
+      : (active?.engine === engine ? sessionStoreKey(engine, null, active.workspacePath || "") : null);
+    const bySession = state?.bySession as Record<string, Record<string, unknown>> | undefined;
+    const record = key ? bySession?.[key] : undefined;
+    const activeModel = typeof record?.activeModel === "string" ? record.activeModel.trim() : "";
+    const tabModel = active?.engine === engine && typeof active.model === "string" ? active.model.trim() : "";
+    const defaultModel = typeof state?.models?.[engine] === "string" ? state.models[engine].trim() : "";
+    const candidateModels = Array.from(
+      new Set([targetModel, tabModel, activeModel, defaultModel].filter((m): m is string => Boolean(m))),
+    );
+    if (candidateModels.length === 0) return;
+
+    let override: number | undefined;
+    let matchedModel = "";
+    for (const model of candidateModels) {
+      const explicit = readExplicitOverrideWindow(engine, model);
+      if (explicit !== undefined) {
+        override = explicit;
+        matchedModel = model;
+        break;
+      }
+    }
+    if (override === undefined) return;
+
+    try {
+      localStorage.setItem(`ccgui.context-window.${engine}.${matchedModel}`, String(override));
+      if (tabModel && tabModel !== matchedModel) {
+        localStorage.setItem(`ccgui.context-window.${engine}.${tabModel}`, String(override));
+      }
+    } catch { /* ignore storage errors */ }
+
+    if (!store || !key || !record) return;
+    const currentUsage = record.usage && typeof record.usage === "object"
+      ? (record.usage as Record<string, unknown>)
+      : null;
+    const currentInfo = currentUsage?.info && typeof currentUsage.info === "object"
+      ? (currentUsage.info as Record<string, unknown>)
+      : null;
+    if (
+      currentUsage &&
+      currentUsage.model_context_window === override &&
+      (!currentInfo || currentInfo.model_context_window === override)
+    ) {
+      return;
+    }
+    try {
+      store.setState((prev) => {
+        const s = prev as Record<string, unknown>;
+        const map = s.bySession as Record<string, Record<string, unknown>> | undefined;
+        const cur = map?.[key];
+        if (!cur) return {};
+        const nextUsage = cur.usage && typeof cur.usage === "object"
+          ? { ...(cur.usage as Record<string, unknown>) }
+          : {};
+        const nextInfo = nextUsage.info && typeof nextUsage.info === "object"
+          ? { ...(nextUsage.info as Record<string, unknown>) }
+          : null;
+        if (
+          nextUsage.model_context_window === override &&
+          (!nextInfo || nextInfo.model_context_window === override)
+        ) {
+          return {};
+        }
+        nextUsage.model_context_window = override;
+        if (nextInfo) {
+          nextInfo.model_context_window = override;
+          nextUsage.info = nextInfo;
+        }
+        return {
+          bySession: {
+            ...map,
+            [key]: { ...cur, usage: nextUsage },
+          },
+        };
+      });
+    } catch (err) {
+      console.warn("[model-switcher] 维持会话上下文窗口覆盖失败:", err);
+    }
+  };
+
+  // 宿主收到 usage/done 时：先写 store.bySession[key].usage，下一帧 React commit 后
+  // `ChatConversation` 的 effect 再调 `rememberContextWindow` 回写 localStorage。
+  // 推到宏任务 + 短延迟补一次，保证两处都被插件显式覆盖值赢回来。
+  window.setTimeout(applyOnce, 0);
+  window.setTimeout(applyOnce, 60);
+}
+
 export async function patchHostSessionModel(
   store: HostChatStore | null,
   engine: string,
@@ -1197,8 +1398,13 @@ export async function patchHostSessionModel(
           if (!holdDisplay) cur.activeModel = model || null;
           if (enable1M !== undefined) {
             const rawUsage = cur.usage && typeof cur.usage === "object" ? (cur.usage as Record<string, unknown>) : {};
-            const windowSize = enable1M ? 1_000_000 : 200_000;
-            cur.usage = { ...rawUsage, model_context_window: windowSize };
+            const persisted = readPersistedContextWindow(engine, model);
+            if (enable1M) {
+              const windowSize = persisted && persisted >= 1_000_000 ? persisted : 1_000_000;
+              cur.usage = { ...rawUsage, model_context_window: windowSize };
+            } else if (persisted !== undefined) {
+              cur.usage = { ...rawUsage, model_context_window: persisted };
+            }
           }
           bySession[key] = cur;
           patch.bySession = bySession;
@@ -1324,13 +1530,18 @@ export async function applyModelSelectionToHost(params: {
     finalModel = finalModel.replace(/\[1m\]$/i, "");
     const effective1M = (engine === "claude" || engine === "codex" || engine === "omp" || engine === "pi") && enable1M;
     if (effective1M && engine === "claude") finalModel = `${finalModel}[1m]`;
-    if (typeof localStorage !== "undefined") {
+    // omp/pi 的窗口记忆档由模型编辑器（保存/查询）与 1M 开关维护为 models.yml 真值；
+    // 这里不能再写 200000/1000000 默认值，否则切模型会把用户/配置的精确覆盖抹平。
+    if (typeof localStorage !== "undefined" && engine !== "omp" && engine !== "pi") {
       try {
-        const windowSize = effective1M ? "1000000" : "200000";
-        const bare = finalModel.replace(/\[1m\]$/i, "");
-        localStorage.setItem(`ccgui.context-window.${engine}.${finalModel}`, windowSize);
-        if (bare) {
-          localStorage.setItem(`ccgui.context-window.${engine}.${bare}`, windowSize);
+        const existing = readPersistedContextWindow(engine, finalModel);
+        if (effective1M || existing === undefined) {
+          const windowSize = effective1M ? "1000000" : "200000";
+          const bare = finalModel.replace(/\[1m\]$/i, "");
+          localStorage.setItem(`ccgui.context-window.${engine}.${finalModel}`, windowSize);
+          if (bare && (effective1M || readPersistedContextWindow(engine, bare) === undefined)) {
+            localStorage.setItem(`ccgui.context-window.${engine}.${bare}`, windowSize);
+          }
         }
       } catch { /* ignore storage errors */ }
     }

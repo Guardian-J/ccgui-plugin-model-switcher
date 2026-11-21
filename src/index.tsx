@@ -8,7 +8,7 @@ import { ProjectEngineIcon, inferModelEngine } from "./icons";
 import { CLI_DISPLAY_NAMES, isPluginProviderId, pluginProviderId, prefetchSystemSnapshot, qualifyEngineModel, updatePiFamilyModelEffort } from "./system-bridge";
 import { DEFAULT_STATE } from "./constants";
 import { useSessionDisplay, withSessionDisplay } from "./session-display";
-import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost, disposeDeferredSelections, flushDeferredSelectionsFor, getDeferredSelectionFor, normalizeEffort, repairLegacyContextSelections, subscribeDeferredSelections } from "./sync-host";
+import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost, disposeDeferredSelections, enforceContextWindowOverrideForPayload, flushDeferredSelectionsFor, getDeferredSelectionFor, normalizeEffort, repairLegacyContextSelections, subscribeDeferredSelections } from "./sync-host";
 import { compactPluginModelLabel, installCompactModelLabels } from "./model-display";
 import { disposeHostTransport } from "./host-transport";
 import { withRemoteStorage } from "./remote-storage";
@@ -308,7 +308,13 @@ export default function activate(ctx: PluginContext): Disposer {
     disposeDeferredSelections,
     // 生成中切换的模型/档位延后到本轮结束落地。`usage://done`（SDK 0.3.8 起，
     // 引擎 done 事件透传）不依赖 Fiber 找 store，是权威的回合结束信号。
-    ctx.events.on("usage://done", flushDeferredSelectionsFor),
+    ctx.events.on("usage://done", (payload) => {
+      flushDeferredSelectionsFor(payload);
+      enforceContextWindowOverrideForPayload(payload);
+    }),
+    ctx.events.on("usage://updated", enforceContextWindowOverrideForPayload),
+    ctx.events.on("session://activated", enforceContextWindowOverrideForPayload),
+    ctx.events.on("session://selection-changed", enforceContextWindowOverrideForPayload),
     installCompactModelLabels(),
     (() => {
       try {
