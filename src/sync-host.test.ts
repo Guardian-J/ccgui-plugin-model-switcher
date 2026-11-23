@@ -178,12 +178,8 @@ describe("patchHostSessionModel", () => {
     } else {
       expect.unreachable("patchedState.active should be an object with model");
     }
-    const models = patchedState.models;
-    if (models && typeof models === "object" && "claude" in models) {
-      expect(models.claude).toBe("claude-opus-4-6");
-    } else {
-      expect.unreachable("patchedState.models should be an object with claude");
-    }
+    // 已有会话切模型不改写引擎默认模型：新建会话读 models[engine]，改了会和全局渠道错配
+    expect(patchedState.models).toBeUndefined();
     const bySession = patchedState.bySession;
     if (bySession && typeof bySession === "object" && "claude/s1" in bySession) {
       const s1 = bySession["claude/s1"];

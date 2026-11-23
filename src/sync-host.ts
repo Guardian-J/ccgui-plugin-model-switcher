@@ -1203,7 +1203,8 @@ export async function patchHostSessionModel(
             return tab;
           });
         }
-        if (s.models && typeof s.models === "object") {
+        // 已有会话的模型只属于该会话，不得改写引擎默认模型（新建会话读 models[engine]）。
+        if (!sessionId && s.models && typeof s.models === "object") {
           const rawModels = s.models as Record<string, string>;
           const nextModels: Record<string, string> = { ...rawModels };
           if (model) nextModels[engine] = model;
@@ -1498,8 +1499,9 @@ export async function applyModelSelectionToHost(params: {
 
   // 3. 同步写入系统后端 AppSettings（确保新会话与默认配置生效）
   //    IPC 期间用户可能切走页签，写入前确认还是发起时那个会话（引擎已合法改派到 engine 除外）
+  //    已有会话切模型不改写 defaultModels：否则新建会话会带出旧会话渠道的模型，与全局渠道错配。
   guardHostSession();
-  await syncAppSettings(engine, finalModel, effectiveHostEffort ?? "");
+  await syncAppSettings(engine, active?.sessionId ? undefined : finalModel, effectiveHostEffort ?? "");
   console.warn(`[model-switcher] 已写入 AppSettings: defaultEfforts[${engine}]=${effectiveHostEffort ?? ""}`);
 
   // 4. 已有会话切换档位后，同步更新宿主 store 的内存状态 efforts[engine]

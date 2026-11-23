@@ -146,6 +146,24 @@ export default function activate(ctx: PluginContext): Disposer {
       };
     }, [sessionDisplay?.stableKey, sessionDisplay?.sessionId, savedState, ctx]);
 
+    // 新建会话：模型带 plugin_ 前缀时渠道必须是这个插件渠道。宿主发送读的是
+    // providers[engine]（全局渠道），与模型不一致就会把渠道 A 的模型发给渠道 B。
+    const alignKey = sessionDisplay && !sessionDisplay.sessionId &&
+      state.activeChannelType === "plugin" && state.selectedProviderId &&
+      state.selectedProviderId !== sessionDisplay.selectedProviderId
+      ? `${sessionDisplay.stableKey}|${state.selectedProviderId}`
+      : null;
+    const alignedKey = useRef<string | null>(null);
+    useEffect(() => {
+      if (!alignKey || alignedKey.current === alignKey || !sessionDisplay) return;
+      alignedKey.current = alignKey;
+      void applyChannelSelectionToHost({
+        engine: sessionDisplay.selectedCli,
+        providerId: state.selectedProviderId,
+        anchor: containerRef.current,
+      }).catch((err) => console.warn("[model-switcher] 对齐新会话渠道失败:", err));
+    }, [alignKey]);
+
     const engineName = CLI_DISPLAY_NAMES[state.selectedCli] || state.selectedCli;
     const bareModel = view.selectedModel ? compactPluginModelLabel(view.selectedModel.replace(/\[1m\]$/i, "")) : "未选择模型";
     const is1M = (state.selectedCli === "claude" || state.selectedCli === "omp" || state.selectedCli === "pi") && state.enable1MContext;

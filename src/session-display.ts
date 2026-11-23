@@ -138,11 +138,18 @@ export function readSessionDisplay(
   );
   if (!selectedProviderId) {
     const localStorageSession = getHostSession();
+    // localStorage 的 activeSession 可能是别的页签延迟写入的记录：只认同一个会话的 provider
+    const sameStoredSession = Boolean(
+      localStorageSession &&
+      localStorageSession.engine === engine &&
+      (localStorageSession.sessionId ?? null) === (session?.sessionId ?? null) &&
+      (localStorageSession.workspacePath ?? "") === (session?.workspacePath ?? ""),
+    );
     // 新宿主（无 onChannelChange）自己管理渠道绑定，props 上的 session.provider
     // 可能是早已废弃的历史值；只有旧宿主才认这份会话级绑定
     const legacyBinding = host?.onChannelChange ? session?.provider : undefined;
     selectedProviderId = (
-      (localStorageSession?.engine === engine ? localStorageSession?.provider : undefined) ||
+      (sameStoredSession ? localStorageSession?.provider : undefined) ||
       legacyBinding ||
       matchingHost?.selectedChannels?.[engine] ||
       ""
@@ -192,7 +199,9 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
 
   // 只有插件渠道的前缀是无歧义标识；普通 provider/model 中的 provider 也可能
   // 是模型名本身（例如 OpenRouter），不能据此猜测系统渠道。
-  const modelPluginChannel = !display.sessionId && !selectedProviderId &&
+  // 新建会话里带 plugin_ 前缀的模型必须归属它自己的插件渠道，即使宿主全局渠道是另一个，
+  // 否则显示的是渠道 A 的模型、打开弹窗却是渠道 B（ComposerButton 会再把宿主渠道对齐到 A）。
+  const modelPluginChannel = !display.sessionId &&
     (display.selectedCli === "omp" || display.selectedCli === "pi")
     ? state.pluginChannels?.[display.selectedCli]?.find(item =>
       display.selectedModel.startsWith(`${pluginProviderId(item.id)}/`)

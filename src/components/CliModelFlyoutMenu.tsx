@@ -915,7 +915,9 @@ export function CliModelFlyoutMenu({
       }
       await applyChannelSelectionToHost({ engine: activeEngine, providerId: channel.id, anchor: triggerRef?.current });
       guardSession();
-      if (hostModel) {
+      // omp/pi 的模型名带渠道前缀：新渠道没有默认模型时必须清空旧模型，
+      // 否则宿主保留上一个渠道的模型，与新渠道错配导致发送报错。
+      if (hostModel || activeEngine === "omp" || activeEngine === "pi") {
         await applyModelSelectionToHost({
           engine: activeEngine,
           model: hostModel,
@@ -985,7 +987,8 @@ export function CliModelFlyoutMenu({
       await applyCustomPluginChannelToEngine(ctx, activeEngine, channel);
       await applyChannelSelectionToHost({ engine: activeEngine, providerId: pluginProviderId(channel.id), anchor: triggerRef?.current });
       guardSession();
-      if (hostModel) {
+      // omp/pi 的模型名带渠道前缀：新渠道没有默认模型时必须清空旧模型，避免渠道与模型错配。
+      if (hostModel || activeEngine === "omp" || activeEngine === "pi") {
         await applyModelSelectionToHost({
           engine: activeEngine,
           model: hostModel,
