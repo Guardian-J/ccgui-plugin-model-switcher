@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyModelSelectionToHost, disposeDeferredSelections, enforceContextWindowOverrideForPayload, findHostChatStoreFromFiber, findHostStoreActionsFromFiber, flushDeferredSelectionsFor, getDeferredSelectionFor, normalizeEffort, patchHostSessionContextWindow, patchHostSessionEffort, patchHostSessionModel, subscribeDeferredSelections, type HostChatStore } from "./sync-host";
+import { applyModelSelectionToHost, disposeDeferredSelections, findHostChatStoreFromFiber, findHostStoreActionsFromFiber, flushDeferredSelectionsFor, getDeferredSelectionFor, normalizeEffort, patchHostSessionEffort, patchHostSessionModel, subscribeDeferredSelections, type HostChatStore } from "./sync-host";
 import { invokeHost } from "./host-transport";
 
 vi.mock("./host-transport", async (importOriginal) => {
@@ -196,12 +196,17 @@ describe("patchHostSessionModel", () => {
       expect.unreachable("patchedState.bySession should contain claude/s1");
     }
   });
-  it("当 enable1M 为 true 时，同步更新 bySession 的 usage.model_context_window 为 1000000", async () => {
+  it("更新模型时不改写引擎上报的 usage.model_context_window（插件覆盖只影响显示兜底）", async () => {
     let patchedState: Record<string, unknown> = {
       active: { engine: "omp", sessionId: "s2", workspacePath: "/ws" },
       openTabs: [{ engine: "omp", sessionId: "s2", workspacePath: "/ws" }],
       models: {},
-      bySession: { "omp/s2": { activeModel: "gemini-3.8-flash", usage: { input_tokens: 100 } } },
+      bySession: {
+        "omp/s2": {
+          activeModel: "gemini-3.8-flash",
+          usage: { input_tokens: 8_700_000, model_context_window: 8_700_000 },
+        },
+      },
     };
     const store = {
       getState: () => patchedState,
@@ -216,116 +221,14 @@ describe("patchHostSessionModel", () => {
       "gemini-3.8-flash",
       { engine: "omp", sessionId: "s2", workspacePath: "/ws" },
       null,
-      true,
     );
 
     expect(success).toBe(true);
     const bySession = patchedState.bySession as Record<string, Record<string, unknown>>;
     const s2 = bySession["omp/s2"];
     expect(s2.activeModel).toBe("gemini-3.8-flash");
-    expect(s2.usage).toEqual({ input_tokens: 100, model_context_window: 1_000_000 });
-  });
-
-  it("enable1M 为 false 时保留已覆盖窗口，不强刷回 200000", async () => {
-    localStorage.setItem("ccgui.context-window.omp.provider-a/kimi-k3.1-pro", "1048576");
-    try {
-      let patchedState: Record<string, unknown> = {
-        active: { engine: "omp", sessionId: "s3", workspacePath: "/ws" },
-        openTabs: [{ engine: "omp", sessionId: "s3", workspacePath: "/ws" }],
-        models: {},
-        bySession: { "omp/s3": { activeModel: "provider-a/kimi-k3.1-pro", usage: { input_tokens: 100 } } },
-      };
-      const store = {
-        getState: () => patchedState,
-        setState: (fn: (prev: unknown) => Record<string, unknown>) => {
-          patchedState = { ...patchedState, ...fn(patchedState) };
-        },
-      } as unknown as Parameters<typeof patchHostSessionModel>[0];
-
-      await patchHostSessionModel(
-        store,
-        "omp",
-        "provider-a/kimi-k3.1-pro",
-        { engine: "omp", sessionId: "s3", workspacePath: "/ws" },
-        null,
-        false,
-      );
-
-      const bySession = patchedState.bySession as Record<string, Record<string, unknown>>;
-      expect(bySession["omp/s3"].usage).toEqual({ input_tokens: 100, model_context_window: 1_048_576 });
-    } finally {
-      localStorage.removeItem("ccgui.context-window.omp.provider-a/kimi-k3.1-pro");
-    }
-  });
-
-  it("patchHostSessionContextWindow 立即更新并可清除当前会话的 model_context_window", () => {
-    let patchedState: Record<string, unknown> = {
-      active: { engine: "omp", sessionId: "s4", workspacePath: "/ws" },
-      bySession: { "omp/s4": { activeModel: "provider-a/m1", usage: { input_tokens: 50, model_context_window: 200_000 } } },
-    };
-    const store: HostChatStore = {
-      getState: () => patchedState,
-      setState: (fn) => {
-        const update = typeof fn === "function" ? fn(patchedState) : fn;
-        patchedState = { ...patchedState, ...update };
-      },
-    };
-    const container = document.createElement("div") as HTMLElement & { __reactFiber$test?: unknown };
-    container.__reactFiber$test = { memoizedState: { memoizedState: { current: store } } };
-
-    expect(patchHostSessionContextWindow("omp", 1_048_576, container)).toBe(true);
-    const bySession = patchedState.bySession as Record<string, Record<string, unknown>>;
-    expect(bySession["omp/s4"].usage).toEqual({ input_tokens: 50, model_context_window: 1_048_576 });
-
-    expect(patchHostSessionContextWindow("omp", undefined, container)).toBe(true);
-    const afterClear = patchedState.bySession as Record<string, Record<string, unknown>>;
-    expect(afterClear["omp/s4"].usage).toEqual({ input_tokens: 50 });
-  });
-
-  it("enforceContextWindowOverrideForPayload 在引擎 usage/done 回写后重新把覆盖值压回 store 与 localStorage", () => {
-    vi.useFakeTimers();
-    const explicitKey = "ccgui.model-switcher.context-window-override.codex.gpt-5.1";
-    const hostKey = "ccgui.context-window.codex.gpt-5.1";
-    localStorage.setItem(explicitKey, "1048576");
-    localStorage.setItem(hostKey, "200000");
-    const hostEl = document.createElement("div") as HTMLElement & { __reactFiber$test?: unknown };
-    hostEl.setAttribute("data-ccgui-plugin-model-switcher", "true");
-    document.body.appendChild(hostEl);
-    let patchedState: Record<string, unknown> = {
-      active: { engine: "codex", sessionId: "s5", workspacePath: "/ws", model: "gpt-5.1" },
-      models: { codex: "gpt-5.1" },
-      bySession: {
-        "codex/s5": {
-          activeModel: "gpt-5.1",
-          usage: { input_tokens: 1000, model_context_window: 200_000, info: { model_context_window: 200_000 } },
-        },
-      },
-    };
-    const store: HostChatStore = {
-      getState: () => patchedState,
-      setState: (fn) => {
-        const update = typeof fn === "function" ? fn(patchedState) : fn;
-        patchedState = { ...patchedState, ...update };
-      },
-    };
-    hostEl.__reactFiber$test = { memoizedState: { memoizedState: { current: store } } };
-    try {
-      enforceContextWindowOverrideForPayload({ engine: "codex", sessionId: "s5" });
-      vi.advanceTimersByTime(70);
-
-      expect(localStorage.getItem(hostKey)).toBe("1048576");
-      const bySession = patchedState.bySession as Record<string, Record<string, unknown>>;
-      expect(bySession["codex/s5"].usage).toEqual({
-        input_tokens: 1000,
-        model_context_window: 1_048_576,
-        info: { model_context_window: 1_048_576 },
-      });
-    } finally {
-      hostEl.remove();
-      localStorage.removeItem(explicitKey);
-      localStorage.removeItem(hostKey);
-      vi.useRealTimers();
-    }
+    // 引擎真实上报的窗口必须原样保留，否则用量条会出现 826% 这类错误
+    expect(s2.usage).toEqual({ input_tokens: 8_700_000, model_context_window: 8_700_000 });
   });
 });
 
@@ -556,7 +459,6 @@ describe("本轮生成中的切换不改写当前回合的模型/档位", () => 
       "claude-opus-4-6",
       { engine: "claude", sessionId: "s1", workspacePath: "/ws" },
       live,
-      undefined,
       true,
     );
 
@@ -877,6 +779,53 @@ describe("本轮生成中的切换不改写当前回合的模型/档位", () => 
       } finally {
         off();
       }
+    } finally {
+      disposeDeferredSelections();
+      vi.useRealTimers();
+    }
+  });
+
+  it("仅更新档位（model: undefined）时绝不清空会话模型，也不会在生成中压入空模型暂存", async () => {
+    vi.useFakeTimers();
+    vi.mocked(invokeHost).mockClear();
+    const setModelSpy = vi.fn();
+    try {
+      const { store, read, flipStreaming } = makeStore({
+        active: { engine: "omp", sessionId: "s1", workspacePath: "/ws", model: "plugin_c1/kimi-k3.1-pro" },
+        openTabs: [{ engine: "omp", sessionId: "s1", workspacePath: "/ws", model: "plugin_c1/kimi-k3.1-pro" }],
+        models: { omp: "plugin_c1/kimi-k3.1-pro" },
+        efforts: { omp: "medium" },
+        bySession: {
+          "omp/s1": {
+            activeModel: "plugin_c1/kimi-k3.1-pro",
+            activeEffort: "medium",
+            messages: [],
+            streaming: true,
+          },
+        },
+        setModel: setModelSpy,
+        setEffort: vi.fn(),
+      });
+      const container = document.createElement("div");
+      attachStoreFiber(container, store);
+
+      await applyModelSelectionToHost({
+        engine: "omp",
+        effort: "max",
+        anchor: container,
+      });
+
+      expect(setModelSpy).not.toHaveBeenCalled();
+      expect(read().active?.model).toBe("plugin_c1/kimi-k3.1-pro");
+      expect(read().models?.omp).toBe("plugin_c1/kimi-k3.1-pro");
+      expect(getDeferredSelectionFor("omp", "s1", "/ws")).toEqual({ effort: "max" });
+
+      // 手动终止后 streaming 翻回 false：绝不把 activeModel 或 session_models 清空
+      flipStreaming("omp/s1", false);
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      expect(read().bySession?.["omp/s1"]?.activeModel).toBe("plugin_c1/kimi-k3.1-pro");
+      expect(vi.mocked(invokeHost)).not.toHaveBeenCalledWith("remember_session_model", expect.anything());
     } finally {
       disposeDeferredSelections();
       vi.useRealTimers();

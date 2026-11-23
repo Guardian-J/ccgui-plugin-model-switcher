@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { readSessionDisplay, withSessionDisplay } from "./session-display";
+import { readSessionDisplay, resolveSessionRecovery, withSessionDisplay } from "./session-display";
 import { DEFAULT_STATE } from "./constants";
 import type { CustomPluginChannel } from "./types";
 import { isModelRequiredBlocked } from "./send-guard";
@@ -162,5 +162,92 @@ describe("withSessionDisplay 按默认模型前缀恢复渠道", () => {
     expect(next.activeChannelType).toBe("system");
     expect(next.activePluginChannelId).toBeUndefined();
     expect(next.selectedProviderId).toBe("");
+  });
+});
+
+describe("resolveSessionRecovery 会话切换恢复边界", () => {
+  it("首次新会话刚拿到 sessionId 且尚无 sessionChannels 记录时不触发恢复（避免空 model 清空当前模型）", () => {
+    const display = {
+      sessionKey: '["omp","s1","/ws",true]',
+      stableKey: '["omp","s1","/ws"]',
+      workspacePath: "/ws",
+      sessionId: "s1",
+      selectedCli: "omp" as const,
+      selectedModel: "plugin_model-switcher_c1/kimi-k3.1-pro",
+      effort: "max" as const,
+      enable1MContext: true,
+      selectedProviderId: "plugin_model-switcher_c1",
+    };
+    const savedState = {
+      ...DEFAULT_STATE,
+      selectedCli: "omp" as const,
+      effort: "max" as const,
+      sessionChannels: {},
+    };
+    expect(resolveSessionRecovery(display, savedState)).toBeNull();
+  });
+
+  it("已有记录中 selectedModel 为空时不传空字符串覆盖模型，仅按需恢复渠道与档位", () => {
+    const display = {
+      sessionKey: '["omp","s2","/ws",false]',
+      stableKey: '["omp","s2","/ws"]',
+      workspacePath: "/ws",
+      sessionId: "s2",
+      selectedCli: "omp" as const,
+      selectedModel: "plugin_model-switcher_c1/kimi-k3.1-pro",
+      effort: "high" as const,
+      enable1MContext: false,
+      selectedProviderId: "plugin_model-switcher_c1",
+    };
+    const savedState = {
+      ...DEFAULT_STATE,
+      sessionChannels: {
+        '["omp","s2","/ws"]': {
+          selectedCli: "omp" as const,
+          selectedProviderId: "plugin_model-switcher_c1",
+          selectedModel: "",
+          effort: "max" as const,
+          enable1MContext: false,
+          activeChannelType: "plugin" as const,
+          activePluginChannelId: "c1",
+        },
+      },
+    };
+    const plan = resolveSessionRecovery(display, savedState);
+    expect(plan).not.toBeNull();
+    expect(plan?.hostModel).toBeUndefined();
+    expect(plan?.effort).toBe("max");
+  });
+
+  it("已有记录与当前会话完全一致时跳过冗余恢复", () => {
+    const display = {
+      sessionKey: '["omp","s3","/ws",false]',
+      stableKey: '["omp","s3","/ws"]',
+      workspacePath: "/ws",
+      sessionId: "s3",
+      selectedCli: "omp" as const,
+      selectedModel: "plugin_model-switcher_c1/kimi-k3.1-pro",
+      effort: "max" as const,
+      enable1MContext: true,
+      selectedProviderId: "plugin_model-switcher_c1",
+    };
+    const savedState = {
+      ...DEFAULT_STATE,
+      pluginChannels: {
+        omp: [{ id: "c1", name: "C1", baseUrl: "https://api.example", apiKey: "k" }],
+      },
+      sessionChannels: {
+        '["omp","s3","/ws"]': {
+          selectedCli: "omp" as const,
+          selectedProviderId: "plugin_model-switcher_c1",
+          selectedModel: "kimi-k3.1-pro",
+          effort: "max" as const,
+          enable1MContext: true,
+          activeChannelType: "plugin" as const,
+          activePluginChannelId: "c1",
+        },
+      },
+    };
+    expect(resolveSessionRecovery(display, savedState)).toBeNull();
   });
 });

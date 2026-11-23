@@ -11,7 +11,7 @@ import {
   type HostChatStore,
 } from "./sync-host";
 import type { CliEngineId, EffortLevel, PluginState } from "./types";
-import { isPluginProviderId, pluginProviderId } from "./system-bridge";
+import { isPluginProviderId, pluginProviderId, qualifyEngineModel } from "./system-bridge";
 
 export interface SessionDisplay {
   /** 含 streaming 标志，变化时阻止弹窗重挂载 */
@@ -293,12 +293,88 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
   };
 }
 
+export interface SessionRecoveryPlan {
+  engine: CliEngineId;
+  providerId?: string;
+  channelRef: { id: string; isPlugin: boolean } | null;
+  /** 仅当 record 存了具体模型且与当前会话不同时才有值；undefined 表示不改模型。 */
+  hostModel?: string;
+  /** 仅当 record 存了档位且与当前会话不同时才有值。 */
+  effort?: EffortLevel;
+  enable1M: boolean;
+}
+
+/**
+ * 切到已有会话时计算需要从对话级记录恢复的增量。
+ * 没有对话级记录（例如新开会话刚拿到 sessionId 的首轮对话）必须返回 null，
+ * 绝不能用全局 savedState.effort 配空 model:"" 调用宿主切换，否则会把正在跑或刚中止的模型清空。
+ */
+export function resolveSessionRecovery(
+  display: SessionDisplay | null,
+  savedState: PluginState,
+): SessionRecoveryPlan | null {
+  if (!display?.sessionId || !display.stableKey) return null;
+  const record = savedState.sessionChannels?.[display.stableKey];
+  if (!record) return null;
+
+  const engine = record.selectedCli || display.selectedCli;
+  const pluginCh = savedState.pluginChannels?.[engine]?.find((c) =>
+    c.id === record.activePluginChannelId
+    || c.id === record.selectedProviderId
+    || pluginProviderId(c.id) === record.selectedProviderId,
+  );
+  const isPluginRec = Boolean(
+    pluginCh
+    || record.activeChannelType === "plugin"
+    || (record.selectedProviderId && isPluginProviderId(record.selectedProviderId)),
+  );
+  const rawProviderId = record.selectedProviderId?.trim() || "";
+  const resolvedProviderId = isPluginRec
+    ? (pluginCh ? pluginProviderId(pluginCh.id) : (rawProviderId ? pluginProviderId(rawProviderId) : undefined))
+    : (rawProviderId || undefined);
+  const channelRef = pluginCh
+    ? { id: pluginCh.id, isPlugin: true }
+    : (resolvedProviderId ? { id: resolvedProviderId, isPlugin: isPluginRec } : null);
+
+  const rawModel = record.selectedModel?.trim() || "";
+  const qualifiedRecordModel = rawModel && isConcreteModel(rawModel)
+    ? qualifyEngineModel(engine, channelRef, rawModel)
+    : undefined;
+  const currentQualifiedModel = display.selectedModel
+    ? qualifyEngineModel(engine, channelRef, display.selectedModel)
+    : "";
+
+  const needProvider = resolvedProviderId && resolvedProviderId !== (display.selectedProviderId || "")
+    ? resolvedProviderId
+    : undefined;
+  const needModel = qualifiedRecordModel && qualifiedRecordModel !== currentQualifiedModel
+    ? qualifiedRecordModel
+    : undefined;
+  const needEffort = record.effort && record.effort !== display.effort
+    ? record.effort
+    : undefined;
+
+  if (!needProvider && !needModel && !needEffort) return null;
+
+  return {
+    engine,
+    providerId: needProvider,
+    channelRef,
+    hostModel: needModel,
+    effort: needEffort,
+    enable1M: (engine === "claude" || engine === "codex" || engine === "omp" || engine === "pi")
+      ? Boolean(record.enable1MContext)
+      : false,
+  };
+}
+
 function isSameSessionDisplay(a: SessionDisplay | null, b: SessionDisplay | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
   return (
     a.sessionKey === b.sessionKey &&
     a.stableKey === b.stableKey &&
+    a.workspacePath === b.workspacePath &&
     a.sessionId === b.sessionId &&
     a.selectedCli === b.selectedCli &&
     a.selectedModel === b.selectedModel &&

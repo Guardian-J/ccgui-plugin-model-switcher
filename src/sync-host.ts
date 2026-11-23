@@ -1145,192 +1145,12 @@ function readPersistedContextWindow(engine: string, model: string): number | und
   }
 }
 
-/**
- * 同步更新当前活跃会话内存中 `bySession[key].usage.model_context_window`：
- * 宿主仪表分母（resolveContextMax）优先读 sessionUsage，再读 localStorage；
- * 只写 localStorage 无法覆盖已有会话的旧 usage，也不会触发仪表立刻重渲染。
- */
-export function patchHostSessionContextWindow(
-  engine: string,
-  contextWindow: number | undefined,
-  anchor?: HTMLElement | null,
-): boolean {
-  const store = findHostChatStore(anchor);
-  if (!store) return false;
-  try {
-    const state = store.getState();
-    const callbacks = getHostCliMenuProps(anchor, { includeLastUsed: false });
-    const active = callbacks?.session !== undefined ? callbacks.session : (state.active ?? getHostSession());
-    if (!active || active.engine !== engine) return false;
-    const key = sessionStoreKey(engine, active.sessionId, active.workspacePath || "");
-    const rawBySession = state.bySession as Record<string, Record<string, unknown>> | undefined;
-    if (!rawBySession?.[key]) return false;
-    store.setState((prev) => {
-      const s = prev as Record<string, unknown>;
-      const bySession = s.bySession as Record<string, Record<string, unknown>> | undefined;
-      const cur = bySession?.[key];
-      if (!cur) return {};
-      const rawUsage = cur.usage && typeof cur.usage === "object"
-        ? { ...(cur.usage as Record<string, unknown>) }
-        : {};
-      const rawInfo = rawUsage.info && typeof rawUsage.info === "object"
-        ? { ...(rawUsage.info as Record<string, unknown>) }
-        : null;
-      if (contextWindow !== undefined && Number.isSafeInteger(contextWindow) && contextWindow > 0) {
-        rawUsage.model_context_window = contextWindow;
-        if (rawInfo) {
-          rawInfo.model_context_window = contextWindow;
-          rawUsage.info = rawInfo;
-        }
-      } else {
-        delete rawUsage.model_context_window;
-        delete rawUsage.context_window;
-        delete rawUsage.contextWindow;
-        if (rawInfo) {
-          delete rawInfo.model_context_window;
-          delete rawInfo.context_window;
-          delete rawInfo.contextWindow;
-          rawUsage.info = rawInfo;
-        }
-      }
-      return {
-        bySession: {
-          ...bySession,
-          [key]: { ...cur, usage: rawUsage },
-        },
-      };
-    });
-    return true;
-  } catch (err) {
-    console.warn("[model-switcher] 更新宿主会话上下文窗口失败:", err);
-    return false;
-  }
-}
-
-/**
- * 把插件显式覆盖的上下文窗口重新强制对齐到宿主 store 与 `ccgui.context-window.*`：
- * 宿主在每次收到引擎 usage / done 时会写入引擎上报窗口，并在 `ChatConversation`
- * 的 `rememberContextWindow` effect 中回写 `ccgui.context-window.*`。
- * 在 `usage://updated`、`usage://done`、`session://activated`、`session://selection-changed`
- * 之后重新执行一次，即可纯插件侧压过引擎上报值，让仪表分母持续使用用户覆盖值。
- */
-export function enforceContextWindowOverrideForPayload(payload: unknown): void {
-  if (typeof localStorage === "undefined") return;
-  const envelope = payload && typeof payload === "object"
-    ? (payload as Record<string, unknown>)
-    : {};
-  const data = envelope.data && typeof envelope.data === "object"
-    ? (envelope.data as Record<string, unknown>)
-    : {};
-  const rawEngine = envelope.engine ?? data.engine;
-  const rawSessionId = envelope.sessionId ?? data.sessionId;
-  const rawModel = envelope.model ?? data.model;
-  const targetEngine = typeof rawEngine === "string" && rawEngine ? rawEngine : null;
-  const targetSessionId = typeof rawSessionId === "string" && rawSessionId ? rawSessionId : null;
-  const targetModel = typeof rawModel === "string" && rawModel.trim() ? rawModel.trim() : null;
-
-  const applyOnce = () => {
-    const store = findHostChatStore();
-    const state = store?.getState();
-    const active = state?.active ?? getHostSession();
-    const engine = targetEngine ?? active?.engine ?? null;
-    if (!engine) return;
-    const sessionId = targetSessionId ?? (active?.engine === engine ? active.sessionId : null);
-    const key = sessionId
-      ? sessionStoreKey(engine, sessionId, active?.workspacePath || "")
-      : (active?.engine === engine ? sessionStoreKey(engine, null, active.workspacePath || "") : null);
-    const bySession = state?.bySession as Record<string, Record<string, unknown>> | undefined;
-    const record = key ? bySession?.[key] : undefined;
-    const activeModel = typeof record?.activeModel === "string" ? record.activeModel.trim() : "";
-    const tabModel = active?.engine === engine && typeof active.model === "string" ? active.model.trim() : "";
-    const defaultModel = typeof state?.models?.[engine] === "string" ? state.models[engine].trim() : "";
-    const candidateModels = Array.from(
-      new Set([targetModel, tabModel, activeModel, defaultModel].filter((m): m is string => Boolean(m))),
-    );
-    if (candidateModels.length === 0) return;
-
-    let override: number | undefined;
-    let matchedModel = "";
-    for (const model of candidateModels) {
-      const explicit = readExplicitOverrideWindow(engine, model);
-      if (explicit !== undefined) {
-        override = explicit;
-        matchedModel = model;
-        break;
-      }
-    }
-    if (override === undefined) return;
-
-    try {
-      localStorage.setItem(`ccgui.context-window.${engine}.${matchedModel}`, String(override));
-      if (tabModel && tabModel !== matchedModel) {
-        localStorage.setItem(`ccgui.context-window.${engine}.${tabModel}`, String(override));
-      }
-    } catch { /* ignore storage errors */ }
-
-    if (!store || !key || !record) return;
-    const currentUsage = record.usage && typeof record.usage === "object"
-      ? (record.usage as Record<string, unknown>)
-      : null;
-    const currentInfo = currentUsage?.info && typeof currentUsage.info === "object"
-      ? (currentUsage.info as Record<string, unknown>)
-      : null;
-    if (
-      currentUsage &&
-      currentUsage.model_context_window === override &&
-      (!currentInfo || currentInfo.model_context_window === override)
-    ) {
-      return;
-    }
-    try {
-      store.setState((prev) => {
-        const s = prev as Record<string, unknown>;
-        const map = s.bySession as Record<string, Record<string, unknown>> | undefined;
-        const cur = map?.[key];
-        if (!cur) return {};
-        const nextUsage = cur.usage && typeof cur.usage === "object"
-          ? { ...(cur.usage as Record<string, unknown>) }
-          : {};
-        const nextInfo = nextUsage.info && typeof nextUsage.info === "object"
-          ? { ...(nextUsage.info as Record<string, unknown>) }
-          : null;
-        if (
-          nextUsage.model_context_window === override &&
-          (!nextInfo || nextInfo.model_context_window === override)
-        ) {
-          return {};
-        }
-        nextUsage.model_context_window = override;
-        if (nextInfo) {
-          nextInfo.model_context_window = override;
-          nextUsage.info = nextInfo;
-        }
-        return {
-          bySession: {
-            ...map,
-            [key]: { ...cur, usage: nextUsage },
-          },
-        };
-      });
-    } catch (err) {
-      console.warn("[model-switcher] 维持会话上下文窗口覆盖失败:", err);
-    }
-  };
-
-  // 宿主收到 usage/done 时：先写 store.bySession[key].usage，下一帧 React commit 后
-  // `ChatConversation` 的 effect 再调 `rememberContextWindow` 回写 localStorage。
-  // 推到宏任务 + 短延迟补一次，保证两处都被插件显式覆盖值赢回来。
-  window.setTimeout(applyOnce, 0);
-  window.setTimeout(applyOnce, 60);
-}
-
 export async function patchHostSessionModel(
   store: HostChatStore | null,
   engine: string,
   model: string,
   session: HostSession | null,
   live?: HostSessionState | null,
-  enable1M?: boolean,
   streaming = false,
 ): Promise<boolean> {
   const sessionId = session?.sessionId ?? null;
@@ -1396,16 +1216,7 @@ export async function patchHostSessionModel(
           const bySession: Record<string, Record<string, unknown>> = { ...(rawBySession || {}) };
           const cur = bySession[key] ? { ...bySession[key] } : {};
           if (!holdDisplay) cur.activeModel = model || null;
-          if (enable1M !== undefined) {
-            const rawUsage = cur.usage && typeof cur.usage === "object" ? (cur.usage as Record<string, unknown>) : {};
-            const persisted = readPersistedContextWindow(engine, model);
-            if (enable1M) {
-              const windowSize = persisted && persisted >= 1_000_000 ? persisted : 1_000_000;
-              cur.usage = { ...rawUsage, model_context_window: windowSize };
-            } else if (persisted !== undefined) {
-              cur.usage = { ...rawUsage, model_context_window: persisted };
-            }
-          }
+          // 绝不改写 cur.usage.model_context_window：那是引擎真实上报值，插件覆盖只写显示兜底档。
           bySession[key] = cur;
           patch.bySession = bySession;
         }
@@ -1422,7 +1233,7 @@ export async function patchHostSessionModel(
 /**
  * 同步更新本地存储中的 activeSession 与 openTabs 中的模型/推理强度
  */
-function syncLocalStorage(engine: string, model: string, effort: string) {
+function syncLocalStorage(engine: string, model: string | undefined, effort: string) {
   if (typeof localStorage === "undefined") return;
 
   const ACTIVE_KEY = "ccgui-next.activeSession:v1";
@@ -1437,7 +1248,7 @@ function syncLocalStorage(engine: string, model: string, effort: string) {
       const active = JSON.parse(activeRaw);
       if (active && typeof active === "object") {
         if (active.engine !== engine) return;
-        active.model = model || undefined;
+        if (model !== undefined) active.model = model || undefined;
         active.effort = effort || undefined;
         localStorage.setItem(ACTIVE_KEY, JSON.stringify(active));
       }
@@ -1451,7 +1262,7 @@ function syncLocalStorage(engine: string, model: string, effort: string) {
           const active = getHostSession();
           if (active && tab && tab.engine === engine &&
               tab.sessionId === active.sessionId && tab.workspacePath === active.workspacePath) {
-            tab.model = model || undefined;
+            if (model !== undefined) tab.model = model || undefined;
             tab.effort = effort || undefined;
           }
         }
@@ -1466,7 +1277,7 @@ function syncLocalStorage(engine: string, model: string, effort: string) {
 /**
  * 同步到系统底层 AppSettings（defaultModels、defaultEfforts）
  */
-async function syncAppSettings(engine: string, model: string, effort: string) {
+async function syncAppSettings(engine: string, model: string | undefined, effort: string) {
   return enqueueSerial("app_settings:read_modify_write", async () => {
     try {
       // 获取当前设置
@@ -1480,10 +1291,12 @@ async function syncAppSettings(engine: string, model: string, effort: string) {
         const defaultModels = { ...(settings.defaultModels || {}) };
         const defaultEfforts = { ...(settings.defaultEfforts || {}) };
 
-        if (model) {
-          defaultModels[engine] = model;
-        } else {
-          delete defaultModels[engine];
+        if (model !== undefined) {
+          if (model) {
+            defaultModels[engine] = model;
+          } else {
+            delete defaultModels[engine];
+          }
         }
         if (effort) {
           defaultEfforts[engine] = effort;
@@ -1508,7 +1321,8 @@ async function syncAppSettings(engine: string, model: string, effort: string) {
  */
 export async function applyModelSelectionToHost(params: {
   engine: CliEngineId;
-  model: string;
+  /** 省略表示本次只更新档位，不改动模型（绝不把模型清空为 ""）。 */
+  model?: string;
   effort?: EffortLevel;
   enable1M?: boolean;
   compatibility?: ModelCompatibility;
@@ -1522,7 +1336,7 @@ export async function applyModelSelectionToHost(params: {
     (params.model ? modelSelectionError(params.engine, params.model, params.compatibility) : null);
   if (error) throw new Error(error);
   const { engine, effort, enable1M = false } = params;
-  let finalModel = params.model.trim();
+  let finalModel: string | undefined = params.model !== undefined ? params.model.trim() : undefined;
   if (finalModel === "default") {
     finalModel = "";
   }
@@ -1606,32 +1420,34 @@ export async function applyModelSelectionToHost(params: {
     // 放在切换之前会让跨 CLI 切换的 model/effort 被整段跳过。
     if (effectiveHostEffort) syncLocalStorage(engine, finalModel, effectiveHostEffort);
     else syncLocalStorage(engine, finalModel, active?.effort || "");
-    // 模型切换：调用 setModel 并打补丁同步到 store / SQLite
-    const storeSetModel = store?.getState().setModel;
-    if (typeof storeSetModel === "function") {
-      try {
-        await Promise.resolve(storeSetModel(engine, finalModel));
-      } catch (e) {
-        console.warn("[model-switcher] store.setModel 失败:", e);
+    // 模型切换：仅当调用方显式传入 model 时才更新模型（undefined 代表只改档位，不动当前模型）
+    if (finalModel !== undefined) {
+      const storeSetModel = store?.getState().setModel;
+      if (typeof storeSetModel === "function") {
+        try {
+          await Promise.resolve(storeSetModel(engine, finalModel));
+        } catch (e) {
+          console.warn("[model-switcher] store.setModel 失败:", e);
+        }
       }
-    }
-    if (actions?.setModel) {
-      await Promise.resolve(actions.setModel(engine, finalModel));
-    } else if (callbacks?.onModelChange) {
-      callbacks.onModelChange(engine, finalModel);
-    }
-    await patchHostSessionModel(store, engine, finalModel, active, liveSession, enable1M, sessionStreaming);
-    // 生成中的选择统一压到本轮结束：这一轮跑的是旧值，宿主 done 盖戳与
-    // refreshSessions 都读会话内存/session_models/session_efforts，
-    // 提前写内存或数据库都会把显示和这一轮的历史元信息改错。
-    if (sessionStreaming && active?.sessionId) {
-      deferSessionSelectionUntilIdle({
-        store: store ?? undefined,
-        ctx: params.ctx,
-        engine,
-        session: active,
-        model: finalModel,
-      });
+      if (actions?.setModel) {
+        await Promise.resolve(actions.setModel(engine, finalModel));
+      } else if (callbacks?.onModelChange) {
+        callbacks.onModelChange(engine, finalModel);
+      }
+      await patchHostSessionModel(store, engine, finalModel, active, liveSession, sessionStreaming);
+      // 生成中的选择统一压到本轮结束：这一轮跑的是旧值，宿主 done 盖戳与
+      // refreshSessions 都读会话内存/session_models/session_efforts，
+      // 提前写内存或数据库都会把显示和这一轮的历史元信息改错。
+      if (sessionStreaming && active?.sessionId) {
+        deferSessionSelectionUntilIdle({
+          store: store ?? undefined,
+          ctx: params.ctx,
+          engine,
+          session: active,
+          model: finalModel,
+        });
+      }
     }
     // 档位处理：新会话与已有会话全链路对齐与持久化
     if (effectiveHostEffort) {
@@ -1709,7 +1525,7 @@ export async function applyModelSelectionToHost(params: {
 
   // 5. 派发通知事件
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("ccgui:model-changed", { detail: { engine, model: finalModel, effort } }));
+    window.dispatchEvent(new CustomEvent("ccgui:model-changed", { detail: { engine, model: finalModel ?? "", effort } }));
   }
 }
 /**

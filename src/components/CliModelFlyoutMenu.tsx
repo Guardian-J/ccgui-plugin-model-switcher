@@ -61,7 +61,6 @@ import {
   applyModelSelectionToHost,
   applyChannelSelectionToHost,
   captureHostSessionGuard,
-  patchHostSessionContextWindow,
   SESSION_CHANGED_MESSAGE,
   hostSessionSelectionError as sessionSelectionError,
 } from "../sync-host";
@@ -736,7 +735,6 @@ export function CliModelFlyoutMenu({
       const cfg = await readPiFamilyModelMetadata(activeEngine, activeChannel, state.selectedModel).catch(() => null);
       if (hostModel && cfg?.contextWindow !== undefined) {
         await writeModelContextOverride(activeEngine, hostModel, cfg.contextWindow);
-        patchHostSessionContextWindow(activeEngine, cfg.contextWindow, triggerRef?.current);
       }
     }
   };
@@ -1562,8 +1560,7 @@ export function CliModelFlyoutMenu({
                     setStatusMsg(message);
                     setTimeout(() => setStatusMsg((current) => current === message ? null : current), 2000);
                   }}
-                  onSaved={(savedMetadata) => {
-                    patchHostSessionContextWindow(activeEngine, savedMetadata.contextWindow, triggerRef?.current);
+                  onSaved={() => {
                     invalidateNativeCatalogCache(activeEngine);
                     void loadChannels(activeEngine);
                   }}

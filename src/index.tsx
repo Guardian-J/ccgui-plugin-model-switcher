@@ -5,10 +5,10 @@ import type { PluginState } from "./types";
 import { CliModelFlyoutMenu } from "./components/CliModelFlyoutMenu";
 import { GuiThemeManager } from "./theme-manager";
 import { ProjectEngineIcon, inferModelEngine } from "./icons";
-import { CLI_DISPLAY_NAMES, isPluginProviderId, pluginProviderId, prefetchSystemSnapshot, qualifyEngineModel, updatePiFamilyModelEffort } from "./system-bridge";
+import { CLI_DISPLAY_NAMES, prefetchSystemSnapshot, updatePiFamilyModelEffort } from "./system-bridge";
 import { DEFAULT_STATE } from "./constants";
-import { useSessionDisplay, withSessionDisplay } from "./session-display";
-import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost, disposeDeferredSelections, enforceContextWindowOverrideForPayload, flushDeferredSelectionsFor, getDeferredSelectionFor, normalizeEffort, repairLegacyContextSelections, subscribeDeferredSelections } from "./sync-host";
+import { resolveSessionRecovery, useSessionDisplay, withSessionDisplay } from "./session-display";
+import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost, disposeDeferredSelections, flushDeferredSelectionsFor, getDeferredSelectionFor, normalizeEffort, repairLegacyContextSelections, subscribeDeferredSelections } from "./sync-host";
 import { compactPluginModelLabel, installCompactModelLabels } from "./model-display";
 import { disposeHostTransport } from "./host-transport";
 import { withRemoteStorage } from "./remote-storage";
@@ -82,13 +82,14 @@ export default function activate(ctx: PluginContext): Disposer {
       sessionDisplay?.sessionId,
       sessionDisplay?.workspacePath,
     );
-    const view: PluginState = pending?.effort
-      ? { ...state, effort: normalizeEffort(pending.effort) ?? state.effort }
-      : state;
+    const view: PluginState = {
+      ...state,
+      ...(pending?.model !== undefined ? { selectedModel: pending.model } : {}),
+      ...(pending?.effort ? { effort: normalizeEffort(pending.effort) ?? state.effort } : {}),
+    };
     const modelRequiredBlocked = isModelRequiredBlocked(
       sessionDisplay,
-      state.selectedModel,
-      pending?.model,
+      view.selectedModel,
     );
 
     useEffect(() => {
@@ -103,45 +104,28 @@ export default function activate(ctx: PluginContext): Disposer {
       if (!stableKey || stableKey === prevStableKey.current) return;
       prevStableKey.current = stableKey;
 
-      // 新开会话首次对话（sessionId 为空）不自动恢复之前会话遗留的模型
-      if (!sessionDisplay?.sessionId) return;
-      const record = savedState.sessionChannels?.[stableKey];
-      const targetEffort = record?.effort || savedState.effort;
-      const engine = record?.selectedCli || sessionDisplay.selectedCli;
-      const pluginCh = savedState.pluginChannels?.[engine]?.find(c =>
-        c.id === record?.activePluginChannelId
-        || c.id === record?.selectedProviderId
-        || pluginProviderId(c.id) === record?.selectedProviderId
-      );
-      const isPluginRec = Boolean(pluginCh || record?.activeChannelType === "plugin" || (record?.selectedProviderId && isPluginProviderId(record.selectedProviderId)));
-      const rawProviderId = record?.selectedProviderId;
-      const providerId = isPluginRec
-        ? (pluginCh ? pluginProviderId(pluginCh.id) : (rawProviderId ? pluginProviderId(rawProviderId) : undefined))
-        : rawProviderId;
-      const model = record?.selectedModel;
-
-      if (!model && !providerId && !targetEffort) return;
+      // 只恢复本会话已保存的对话级记录；新开会话首次拿到 sessionId 时无记录，
+      // 绝不用全局 savedState.effort + 空 model 覆盖当前正在运行的模型。
+      const plan = resolveSessionRecovery(sessionDisplay, savedState);
+      if (!plan) return;
 
       // 后台静默恢复，不阻塞 UI；失败仅记录警告
       void (async () => {
         try {
-          if (providerId) {
-            await applyChannelSelectionToHost({ engine, providerId, anchor: containerRef.current });
+          if (plan.providerId) {
+            await applyChannelSelectionToHost({ engine: plan.engine, providerId: plan.providerId, anchor: containerRef.current });
             if (cancelled || prevStableKey.current !== stableKey) return;
           }
-          if (model || targetEffort) {
-            // 找到该渠道对象用于 qualify（插件渠道需要加前缀）
-            const channelRef = pluginCh ? { id: pluginCh.id, isPlugin: true } : (providerId ? { id: providerId, isPlugin: isPluginRec } : null);
-            const hostModel = model ? qualifyEngineModel(engine, channelRef, model) : "";
+          if (plan.hostModel !== undefined || plan.effort) {
             if (cancelled || prevStableKey.current !== stableKey) return;
-            if ((engine === "omp" || engine === "pi") && hostModel && targetEffort) {
-              await updatePiFamilyModelEffort(engine, channelRef, hostModel, targetEffort, record?.enable1MContext).catch(() => {});
+            if ((plan.engine === "omp" || plan.engine === "pi") && plan.hostModel && plan.effort) {
+              await updatePiFamilyModelEffort(plan.engine, plan.channelRef, plan.hostModel, plan.effort, plan.enable1M).catch(() => {});
             }
             await applyModelSelectionToHost({
-              engine,
-              model: hostModel,
-              effort: targetEffort,
-              enable1M: (engine === "claude" || engine === "codex" || engine === "omp" || engine === "pi") ? Boolean(record?.enable1MContext) : false,
+              engine: plan.engine,
+              model: plan.hostModel,
+              effort: plan.effort,
+              enable1M: plan.enable1M,
               ctx,
               anchor: containerRef.current,
             });
@@ -151,25 +135,24 @@ export default function activate(ctx: PluginContext): Disposer {
           // 静默处理渠道不存在等错误，避免干扰用户
           const errMsg = err instanceof Error ? err.message : String(err);
           if (errMsg.includes("not found")) {
-            console.warn(`[model-switcher] 会话渠道 ${providerId} 在 ${engine} 中不存在，已跳过恢复`);
+            console.warn(`[model-switcher] 会话渠道 ${plan.providerId} 在 ${plan.engine} 中不存在，已跳过恢复`);
           } else {
             console.warn("[model-switcher] 恢复会话渠道失败:", err);
           }
         }
       })();
-
       return () => {
         cancelled = true;
       };
     }, [sessionDisplay?.stableKey, sessionDisplay?.sessionId, savedState, ctx]);
 
     const engineName = CLI_DISPLAY_NAMES[state.selectedCli] || state.selectedCli;
-    const bareModel = state.selectedModel ? compactPluginModelLabel(state.selectedModel.replace(/\[1m\]$/i, "")) : "未选择模型";
+    const bareModel = view.selectedModel ? compactPluginModelLabel(view.selectedModel.replace(/\[1m\]$/i, "")) : "未选择模型";
     const is1M = (state.selectedCli === "claude" || state.selectedCli === "omp" || state.selectedCli === "pi") && state.enable1MContext;
     const displayModel = is1M ? `${bareModel} [1m]` : bareModel;
     const effortText = view.effort || "high";
     const modelIconEngine =
-      inferModelEngine(state.selectedModel) || state.selectedCli;
+      inferModelEngine(view.selectedModel) || state.selectedCli;
     // 渠道显示名：插件渠道显示名称，系统渠道固定显示"系统渠道"
     const channelName = state.activeChannelType === "plugin"
       ? (state.activeChannelName ||
@@ -268,7 +251,7 @@ export default function activate(ctx: PluginContext): Disposer {
             setSendBlockedNotice(false);
             setOpen((prev) => !prev);
           }}
-          title={`引擎: ${state.selectedCli}\n渠道: ${channelName}\n模型: ${state.selectedModel || '未选择'}\n推理强度: ${effortText}`}
+          title={`引擎: ${state.selectedCli}\n渠道: ${channelName}\n模型: ${view.selectedModel || '未选择'}\n推理强度: ${effortText}`}
           className={`group flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 outline-none transition-colors hover:bg-background-primary-hover focus-visible:ring-2 focus-visible:ring-border-focus-ring${sendBlockedNotice ? " ms-model-btn-attention" : ""}`}
         >
           {/* 1. CLI 引擎 Logo */}
@@ -308,13 +291,7 @@ export default function activate(ctx: PluginContext): Disposer {
     disposeDeferredSelections,
     // 生成中切换的模型/档位延后到本轮结束落地。`usage://done`（SDK 0.3.8 起，
     // 引擎 done 事件透传）不依赖 Fiber 找 store，是权威的回合结束信号。
-    ctx.events.on("usage://done", (payload) => {
-      flushDeferredSelectionsFor(payload);
-      enforceContextWindowOverrideForPayload(payload);
-    }),
-    ctx.events.on("usage://updated", enforceContextWindowOverrideForPayload),
-    ctx.events.on("session://activated", enforceContextWindowOverrideForPayload),
-    ctx.events.on("session://selection-changed", enforceContextWindowOverrideForPayload),
+    ctx.events.on("usage://done", flushDeferredSelectionsFor),
     installCompactModelLabels(),
     (() => {
       try {
