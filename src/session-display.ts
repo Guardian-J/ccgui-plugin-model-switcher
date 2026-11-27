@@ -11,7 +11,7 @@ import {
   type HostChatStore,
 } from "./sync-host";
 import type { CliEngineId, EffortLevel, PluginState } from "./types";
-import { isPluginProviderId, pluginProviderId, qualifyEngineModel } from "./system-bridge";
+import { independentChannelError, isPluginProviderId, pluginProviderId, qualifyEngineModel, stripPluginProviderPrefix } from "./system-bridge";
 
 export interface SessionDisplay {
   /** 含 streaming 标志，变化时阻止弹窗重挂载 */
@@ -186,24 +186,35 @@ export function readSessionDisplay(
 }
 export function withSessionDisplay(state: PluginState, display: SessionDisplay | null): PluginState {
   if (!display) return state;
-  const { sessionKey: _key, selectedProviderId, effort: displayEffort, ...selection } = display;
+  const {
+    sessionKey: _key,
+    stableKey,
+    sessionId,
+    workspacePath: _workspacePath,
+    selectedProviderId,
+    effort: displayEffort,
+    ...selection
+  } = display;
+  const unsupportedChannels = independentChannelError(display.selectedCli) !== null;
+  const pluginChannels = state.pluginChannels?.[display.selectedCli] || [];
 
-  // 查找插件渠道：尝试完整 providerId 或去掉前缀后的原始 ID
-  const channel = state.pluginChannels?.[display.selectedCli]?.find(item => {
+  // 查找插件渠道：尝试完整 providerId 或去掉前缀后的原始 ID。
+  // 不支持独立渠道的引擎一律不认插件渠道（旧版本误建的历史数据也要失效）。
+  const channel = unsupportedChannels ? undefined : pluginChannels.find(item => {
     const withPrefix = pluginProviderId(item.id);
     return withPrefix === selectedProviderId || item.id === selectedProviderId;
   });
 
   // 引擎切换时必须重置渠道选择
   const engineChanged = state.selectedCli !== display.selectedCli;
+  const piFamily = display.selectedCli === "omp" || display.selectedCli === "pi";
 
   // 只有插件渠道的前缀是无歧义标识；普通 provider/model 中的 provider 也可能
   // 是模型名本身（例如 OpenRouter），不能据此猜测系统渠道。
   // 新建会话里带 plugin_ 前缀的模型必须归属它自己的插件渠道，即使宿主全局渠道是另一个，
   // 否则显示的是渠道 A 的模型、打开弹窗却是渠道 B（ComposerButton 会再把宿主渠道对齐到 A）。
-  const modelPluginChannel = !display.sessionId &&
-    (display.selectedCli === "omp" || display.selectedCli === "pi")
-    ? state.pluginChannels?.[display.selectedCli]?.find(item =>
+  const modelPluginChannel = !unsupportedChannels && !sessionId && piFamily
+    ? pluginChannels.find(item =>
       display.selectedModel.startsWith(`${pluginProviderId(item.id)}/`)
     )
     : undefined;
@@ -225,10 +236,19 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
       activePluginChannelId = channel.id;
       finalProviderId = pluginProviderId(channel.id);
     } else if (isPluginProviderId(selectedProviderId)) {
-      // 宿主 providerId 是插件格式但未找到对应渠道
-      activeChannelType = "plugin";
-      activePluginChannelId = undefined;
-      finalProviderId = selectedProviderId;
+      // providerId 是插件格式但本引擎查不到（跨 CLI 残留/不支持独立渠道）。
+      // omp/pi 的 YAML 渠道可能不在 state.pluginChannels 里，按其 id 保留，
+      // 由弹窗合并 YAML 后解析；其余引擎退回系统渠道。留着查不到的 id 会让
+      // activeChannel 永远为空，加自选/切模型被静默拦截。
+      if (!unsupportedChannels && piFamily) {
+        activeChannelType = "plugin";
+        activePluginChannelId = stripPluginProviderPrefix(selectedProviderId);
+        finalProviderId = selectedProviderId;
+      } else {
+        activeChannelType = "system";
+        activePluginChannelId = undefined;
+        finalProviderId = "";
+      }
     } else {
       // 系统渠道
       activeChannelType = "system";
@@ -242,34 +262,43 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
     activePluginChannelId = undefined;
   } else {
     // 宿主未提供 providerId 且未切换引擎，优先从对话级记录恢复，兜底插件当前选择（兼容旧版宿主）
-    const sessionRecord = display.stableKey ? state.sessionChannels?.[display.stableKey] : undefined;
-    // 已经在用对话级记录时，"本页签没有记录"就是真的没有：不能拿全局/别的页签的渠道顶上，
-    // 否则 flyout 的首次记录写入会把这个错误值固化成本会话的渠道
+    const sessionRecord = stableKey ? state.sessionChannels?.[stableKey] : undefined;
+    // 已经在用对话级记录时，"本页签没有记录"就是真的没有：不能拿别的页签的插件渠道顶上，
+    // 否则 flyout 的首次记录写入会把这个错误值固化成本会话的渠道。系统渠道是引擎级
+    // 全局选择，新会话可以沿用（宿主也按它发送）。
     const hasSessionRecords = !!state.sessionChannels && Object.keys(state.sessionChannels).length > 0;
     if (sessionRecord) {
-      const recordPluginCh = state.pluginChannels?.[display.selectedCli]?.find(item => {
+      const recordProvider = sessionRecord.selectedProviderId || "";
+      const recordPluginCh = unsupportedChannels ? undefined : pluginChannels.find(item => {
         const withPrefix = pluginProviderId(item.id);
         return item.id === sessionRecord.activePluginChannelId
-          || withPrefix === sessionRecord.selectedProviderId
-          || item.id === sessionRecord.selectedProviderId;
+          || withPrefix === recordProvider
+          || item.id === recordProvider;
       });
+      const recordPlugin = isPluginProviderId(recordProvider);
       if (recordPluginCh) {
         activeChannelType = "plugin";
         activePluginChannelId = recordPluginCh.id;
         finalProviderId = pluginProviderId(recordPluginCh.id);
+      } else if (recordPlugin && !unsupportedChannels && piFamily) {
+        activeChannelType = "plugin";
+        activePluginChannelId = sessionRecord.activePluginChannelId || stripPluginProviderPrefix(recordProvider);
+        finalProviderId = recordProvider;
       } else {
-        finalProviderId = sessionRecord.selectedProviderId || "";
-        activeChannelType = sessionRecord.activeChannelType || (finalProviderId && isPluginProviderId(finalProviderId) ? "plugin" : "system");
-        activePluginChannelId = sessionRecord.activePluginChannelId;
+        activeChannelType = "system";
+        activePluginChannelId = undefined;
+        finalProviderId = recordPlugin || unsupportedChannels ? "" : recordProvider;
       }
     } else if (hasSessionRecords) {
-      // 清空后交由宿主重新确定（useSessionDisplay 每秒回读）
-      finalProviderId = "";
+      // 系统渠道是引擎级全局选择，新会话可以沿用；插件渠道不能跨页签顶替。
+      finalProviderId = state.selectedProviderId && !isPluginProviderId(state.selectedProviderId)
+        ? state.selectedProviderId
+        : "";
       activeChannelType = "system";
       activePluginChannelId = undefined;
     } else {
       // 无对话级记录，保留当前状态（loadChannels 可能已回填或用户已选择）
-      const fallbackPluginCh = state.pluginChannels?.[display.selectedCli]?.find(item => {
+      const fallbackPluginCh = unsupportedChannels ? undefined : pluginChannels.find(item => {
         const withPrefix = pluginProviderId(item.id);
         return item.id === state.activePluginChannelId
           || withPrefix === state.selectedProviderId
@@ -282,8 +311,14 @@ export function withSessionDisplay(state: PluginState, display: SessionDisplay |
       } else {
         finalProviderId = state.selectedProviderId || "";
         if (finalProviderId && isPluginProviderId(finalProviderId)) {
-          activeChannelType = "plugin";
-          activePluginChannelId = state.activePluginChannelId;
+          if (!unsupportedChannels && piFamily) {
+            activeChannelType = "plugin";
+            activePluginChannelId = state.activePluginChannelId || stripPluginProviderPrefix(finalProviderId);
+          } else {
+            activeChannelType = "system";
+            activePluginChannelId = undefined;
+            finalProviderId = "";
+          }
         } else {
           activeChannelType = "system";
           activePluginChannelId = undefined;

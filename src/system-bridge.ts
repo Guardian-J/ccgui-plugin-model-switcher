@@ -51,8 +51,39 @@ export const NATIVE_PROVIDER_ID = "__local_settings_json__";
  * 读到时要接受，写回宿主时统一归一成 NATIVE_PROVIDER_ID。
  */
 export const LEGACY_NATIVE_PROVIDER_ID = "__local_config_toml__";
+/**
+ * 宿主能把渠道配置真正喂给 CLI 的引擎。其余引擎（qoder/qoder-cn/dsh/agy/opencode/
+ * minimax）只把供应商当展示数据，spawn 时不注入任何 baseUrl/apiKey——为它们建独立
+ * 渠道只会让用户以为反代已生效，实际 CLI 仍走自身账号（qoder 会直接报
+ * session/new Authentication required）。新增支持前先确认宿主 channel_env /
+ * provider_files 真的消费该引擎的渠道字段。
+ */
+const INDEPENDENT_CHANNEL_ENGINES: Record<string, true> = {
+  claude: true,
+  codex: true,
+  kimi: true,
+  grok: true,
+  pi: true,
+  omp: true,
+  codebuddy: true,
+};
+
 export function independentChannelError(engine: string): string | null {
-  return null;
+  if (INDEPENDENT_CHANNEL_ENGINES[engine]) return null;
+  return `${CLI_DISPLAY_NAMES[engine] || engine} 使用自身的账号或服务配置，暂不支持独立渠道，请在对应 CLI 中配置`;
+}
+
+/** 把宿主/原生模型目录的探测错误翻译成用户可执行的提示。 */
+export function formatEngineModelError(engine: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    (engine === "qoder" || engine === "qoder-cn") &&
+    /authentication required|not logged in|auth_required|auth required|qodercli.*login/i.test(message)
+  ) {
+    const bin = engine === "qoder-cn" ? "qoderclicn" : "qodercli";
+    return `Qoder ${engine === "qoder-cn" ? "CN " : ""}CLI 未登录：请先在终端运行 ${bin} login，再回到这里重试`;
+  }
+  return `读取 CLI 模型失败: ${message}`;
 }
 
 const PLUGIN_PROVIDER_PREFIX = "plugin_model-switcher_";
@@ -560,8 +591,11 @@ export async function getSystemProviderChannels(
 
     const section = config?.[engine];
     const configuredId = section?.current;
+    // 不支持独立渠道的引擎：历史版本可能把 current 写成 plugin_<id>，
+    // 宿主并不会应用它。这里一律按原生配置展示，避免 UI 卡在一个查不到的渠道上。
     const currentId =
-      !configuredId || configuredId === LEGACY_NATIVE_PROVIDER_ID
+      !configuredId || configuredId === LEGACY_NATIVE_PROVIDER_ID ||
+      (independentChannelError(engine) && isPluginProviderId(configuredId))
         ? NATIVE_PROVIDER_ID
         : configuredId;
     const channels: SystemProviderChannel[] = Object.entries(
@@ -772,6 +806,105 @@ export function notifyCliConfigChanged(): void {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(CLI_CONFIG_CHANGED_EVENT));
   }
+}
+
+export interface HostChannelSelection {
+  selectedProviderId: string;
+  activeChannelType?: "system" | "plugin";
+  activePluginChannelId?: string;
+  activeChannelName?: string;
+}
+
+/**
+ * loadChannels 回填时决定当前渠道。核心约束：不能保留一个在本引擎里查不到的
+ * plugin_<id>（典型来源：切 CLI 后沿用上一个 CLI 的插件渠道、或旧版本给
+ * qoder 等不支持的引擎建过独立渠道）。这种状态会让 activeChannel 永远为
+ * null，加自选/切模型全部被静默拦截。
+ */
+export function resolveHostChannelSelection(
+  engine: CliEngineId,
+  hostCurrent: string | null,
+  prev: HostChannelSelection,
+  pluginChannels: CustomPluginChannel[],
+  systemChannelIds?: readonly string[],
+): HostChannelSelection {
+  const unsupported = independentChannelError(engine) !== null;
+  const piFamily = engine === "omp" || engine === "pi";
+  const systemIds = systemChannelIds ? new Set(systemChannelIds) : null;
+  const systemValid = (id: string) =>
+    !!id && (id === NATIVE_PROVIDER_ID || !systemIds || systemIds.has(id));
+  const asSystem = (id: string): HostChannelSelection =>
+    systemValid(id) || !systemIds
+      ? { selectedProviderId: id, activeChannelType: "system", activePluginChannelId: undefined, activeChannelName: undefined }
+      : { selectedProviderId: "", activeChannelType: "system", activePluginChannelId: undefined, activeChannelName: undefined };
+
+  // 已经生效的选择仍可用时不覆盖（用户刚点过渠道，loadChannels 只是重读宿主）。
+  if (!unsupported) {
+    if (prev.activeChannelType === "plugin" && prev.activePluginChannelId) {
+      const ch = pluginChannels.find((item) =>
+        item.id === prev.activePluginChannelId || pluginProviderId(item.id) === prev.activePluginChannelId
+      );
+      if (ch) return { ...prev, selectedProviderId: pluginProviderId(ch.id), activeChannelName: ch.name };
+      if (piFamily && prev.selectedProviderId && isPluginProviderId(prev.selectedProviderId)) return prev;
+    } else if (prev.selectedProviderId && !isPluginProviderId(prev.selectedProviderId)) {
+      if (systemValid(prev.selectedProviderId)) return asSystem(prev.selectedProviderId);
+    }
+  }
+
+  const current = hostCurrent?.trim() || "";
+  if (current && !isPluginProviderId(current)) {
+    if (systemValid(current)) return asSystem(current);
+  } else if (current) {
+    if (!unsupported) {
+      const ch = pluginChannels.find((item) =>
+        item.id === current || pluginProviderId(item.id) === current
+      );
+      if (ch) {
+        return {
+          selectedProviderId: pluginProviderId(ch.id),
+          activeChannelType: "plugin",
+          activePluginChannelId: ch.id,
+          activeChannelName: ch.name,
+        };
+      }
+      // omp/pi 的 YAML 渠道可能不在插件存储里，保留宿主 provider id 交给弹窗合并。
+      if (piFamily) {
+        return {
+          selectedProviderId: current,
+          activeChannelType: "plugin",
+          activePluginChannelId: stripPluginProviderPrefix(current),
+          activeChannelName: prev.activeChannelName,
+        };
+      }
+    }
+    // 不支持的引擎 / 查不到的插件渠道：回到原生配置。
+    return asSystem(NATIVE_PROVIDER_ID);
+  }
+
+  return asSystem(
+    unsupported || prev.activeChannelType === "plugin" ? NATIVE_PROVIDER_ID : (prev.selectedProviderId || ""),
+  );
+}
+
+/** 清掉旧版本误建的、宿主不会应用的独立渠道，并把 current 退回原生配置。 */
+export async function repairUnsupportedIndependentChannels(): Promise<void> {
+  const config = await getCliConfig().catch(() => null);
+  if (!config) return;
+  let changed = false;
+  for (const engine of Object.keys(config) as CliEngineId[]) {
+    if (!independentChannelError(engine)) continue;
+    const section = config[engine];
+    const pluginIds = Object.keys(section?.providers || {}).filter(isPluginProviderId);
+    if (section?.current && isPluginProviderId(section.current)) {
+      await invokeTauri("set_current_provider", { engine, id: NATIVE_PROVIDER_ID }).catch(() => {});
+      changed = true;
+    }
+    for (const id of pluginIds) {
+      await invokeTauri("delete_provider", { engine, id }).catch(() => {});
+      changed = true;
+    }
+  }
+  if (changed) notifyCliConfigChanged();
 }
 
 /**

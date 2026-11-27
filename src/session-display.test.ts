@@ -165,6 +165,68 @@ describe("withSessionDisplay 按默认模型前缀恢复渠道", () => {
   });
 });
 
+describe("withSessionDisplay 新会话渠道残留", () => {
+  const baseDisplay = {
+    sessionKey: '["qoder-cn",null,"/ws",false]',
+    stableKey: '["qoder-cn",null,"/ws"]',
+    workspacePath: "/ws",
+    sessionId: null,
+    selectedCli: "qoder-cn" as const,
+    selectedModel: "",
+    effort: "high" as const,
+    enable1MContext: false,
+    selectedProviderId: "",
+  };
+  const otherRecord = {
+    selectedCli: "claude" as const,
+    selectedProviderId: "custom_1",
+    selectedModel: "claude-opus-5",
+    effort: "high" as const,
+    enable1MContext: false,
+    activeChannelType: "plugin" as const,
+    activePluginChannelId: "custom_1",
+  };
+
+  it("不支持独立渠道的引擎丢弃查不到的 plugin_ provider，避免 activeChannel 永远为空", () => {
+    const next = withSessionDisplay(
+      {
+        ...DEFAULT_STATE,
+        selectedCli: "qoder-cn",
+        selectedProviderId: "plugin_model-switcher_custom_1792409744136",
+        activeChannelType: "plugin",
+        activePluginChannelId: "custom_1792409744136",
+        sessionChannels: { other: otherRecord },
+      },
+      { ...baseDisplay, selectedProviderId: "plugin_model-switcher_custom_1792409744136" },
+    );
+    expect(next.selectedProviderId).toBe("");
+    expect(next.activeChannelType).toBe("system");
+    expect(next.activePluginChannelId).toBeUndefined();
+  });
+
+  it("新会话没有本页签记录时仍沿用全局系统渠道", () => {
+    const next = withSessionDisplay(
+      {
+        ...DEFAULT_STATE,
+        selectedCli: "qoder-cn",
+        selectedProviderId: "__local_settings_json__",
+        activeChannelType: "system",
+        sessionChannels: { other: otherRecord },
+      },
+      baseDisplay,
+    );
+    expect(next.selectedProviderId).toBe("__local_settings_json__");
+    expect(next.activeChannelType).toBe("system");
+  });
+
+  it("不把 SessionDisplay 的 stableKey/sessionId/workspacePath 泄漏进持久化状态", () => {
+    const next = withSessionDisplay({ ...DEFAULT_STATE }, baseDisplay);
+    expect(next).not.toHaveProperty("stableKey");
+    expect(next).not.toHaveProperty("sessionId");
+    expect(next).not.toHaveProperty("workspacePath");
+  });
+});
+
 describe("resolveSessionRecovery 会话切换恢复边界", () => {
   it("首次新会话刚拿到 sessionId 且尚无 sessionChannels 记录时不触发恢复（避免空 model 清空当前模型）", () => {
     const display = {

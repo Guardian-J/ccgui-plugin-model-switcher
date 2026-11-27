@@ -5,7 +5,7 @@ import type { PluginState } from "./types";
 import { CliModelFlyoutMenu } from "./components/CliModelFlyoutMenu";
 import { GuiThemeManager } from "./theme-manager";
 import { ProjectEngineIcon, inferModelEngine } from "./icons";
-import { CLI_DISPLAY_NAMES, prefetchSystemSnapshot, updatePiFamilyModelEffort } from "./system-bridge";
+import { CLI_DISPLAY_NAMES, prefetchSystemSnapshot, repairUnsupportedIndependentChannels, updatePiFamilyModelEffort } from "./system-bridge";
 import { DEFAULT_STATE } from "./constants";
 import { resolveSessionRecovery, useSessionDisplay, withSessionDisplay } from "./session-display";
 import { findBuiltinTriggerButton, applyChannelSelectionToHost, applyModelSelectionToHost, disposeDeferredSelections, flushDeferredSelectionsFor, getDeferredSelectionFor, normalizeEffort, repairLegacyContextSelections, subscribeDeferredSelections } from "./sync-host";
@@ -23,6 +23,9 @@ export default function activate(ctx: PluginContext): Disposer {
   void repairLegacyContextSelections().catch(() => {});
   // 尽早启动 list_engines PATH 探测，避免用户点开弹窗才开始扫盘。
   prefetchSystemSnapshot();
+  // 旧版本误给 qoder 等不支持渠道的引擎建过 plugin_ 渠道并把 current 指过去；
+  // 宿主不会应用这些渠道，先清掉让 CLI 回到自身账号/服务配置。
+  void repairUnsupportedIndependentChannels().catch(() => {});
 
   // 窗口聚焦时静默后台探测，感知外部 CLI 升级/安装
   let lastFocusProbe = Date.now();

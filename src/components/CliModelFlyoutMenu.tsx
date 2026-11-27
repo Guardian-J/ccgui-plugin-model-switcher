@@ -44,6 +44,8 @@ import {
   CLI_ENGINES_CHANGED_EVENT,
   CLI_CONFIG_CHANGED_EVENT,
   readEnableEffortLevel,
+  formatEngineModelError,
+  resolveHostChannelSelection,
 } from "../system-bridge";
 import { fetchModelsFromProvider, loadNativeChannelModels } from "../api";
 import { invokeHost } from "../host-transport";
@@ -282,25 +284,19 @@ export function CliModelFlyoutMenu({
       if (request !== channelRequest.current) return;
       setChannels(res.channels);
       setCurrentChannelId(res.current);
-      // 仅在完全无渠道选择时，用 res.current 作为兜底（让用户有个起点）
-      setState((prev) => {
-        if (prev.selectedProviderId || prev.activeChannelType === "plugin") return prev;
-        if (!res.current) return prev;
-        if (isPluginProviderId(res.current)) {
-          const pluginList = prev.pluginChannels?.[engine] || [];
-          const matched = pluginList.find(
-            (ch) => pluginProviderId(ch.id) === res.current || ch.id === res.current,
-          );
-          return {
-            ...prev,
-            selectedProviderId: res.current,
-            activeChannelType: "plugin",
-            activePluginChannelId: matched?.id ?? res.current.replace(/^plugin_model-switcher_/, ""),
-            activeChannelName: matched?.name ?? prev.activeChannelName,
-          };
-        }
-        return { ...prev, selectedProviderId: res.current, activeChannelType: "system" };
-      });
+      // 回填宿主当前渠道。切 CLI 后沿用上一个 CLI 的 plugin_<id>、或旧版本给
+      // qoder 等引擎建的独立渠道都必须在这里失效，否则 activeChannel 永远为空，
+      // 加自选/切模型会被 handleAddCustomModel 静默拦截（首次、再次都失败）。
+      setState((prev) => ({
+        ...prev,
+        ...resolveHostChannelSelection(
+          engine,
+          res.current,
+          prev,
+          prev.pluginChannels?.[engine] || [],
+          res.channels.map((ch) => ch.id),
+        ),
+      }));
     } catch (e) {
       console.warn("加载系统供应商失败:", e);
     } finally {
@@ -466,7 +462,7 @@ export function CliModelFlyoutMenu({
       setNativeModels(catalog.models);
       setNativeAuthoritative(catalog.authoritative);
     }).catch(error => {
-      if (!cancelled) setStatusMsg(`读取 CLI 模型失败: ${error instanceof Error ? error.message : String(error)}`);
+      if (!cancelled) setStatusMsg(formatEngineModelError(activeEngine, error));
     });
     return () => { cancelled = true; };
   }, [activeEngine, useNativeModels, loadingChannels]);
@@ -752,7 +748,7 @@ export function CliModelFlyoutMenu({
         setNativeAuthoritative(catalog.authoritative);
         setStatusMsg(`已读取 ${catalog.models.length} 个 CLI 模型`);
       } catch (error) {
-        if (request === modelRequest.current) setStatusMsg(error instanceof Error ? error.message : String(error));
+        if (request === modelRequest.current) setStatusMsg(formatEngineModelError(activeEngine, error));
       } finally {
         if (request === modelRequest.current) setFetchingModels(false);
       }
@@ -823,6 +819,7 @@ export function CliModelFlyoutMenu({
     const nextCustom = [id, ...currentCustom];
     const nextState: PluginState = {
       ...state,
+      selectedCli: activeEngine,
       customModels: { ...state.customModels, [pId]: nextCustom },
     };
     selectionPending.current = true;
@@ -962,6 +959,8 @@ export function CliModelFlyoutMenu({
 
   const handleSelectPluginChannel = async (channel: CustomPluginChannel) => {
     if (busy || fetchingModels || selectionPending.current) return;
+    const supportError = independentChannelError(activeEngine);
+    if (supportError) { setStatusMsg(supportError); return; }
     const pluginChannel = { ...channel, isPlugin: true as const };
     const hostModel = qualifyEngineModel(activeEngine, pluginChannel, channel.model || "");
     const error = sessionSelectionError(activeEngine, triggerRef?.current) || (hostModel ? modelSelectionError(activeEngine, hostModel) : null);
@@ -1033,6 +1032,8 @@ export function CliModelFlyoutMenu({
 
   const handleSaveNewChannel = async () => {
     if (viewingChannelId || busy || fetchingModels || selectionPending.current) return;
+    const supportError = independentChannelError(activeEngine);
+    if (supportError) { setStatusMsg(supportError); return; }
     const formModel = channelForm.model.trim();
     const error = sessionSelectionError(activeEngine) || (formModel ? modelSelectionError(activeEngine, formModel) : null);
     if (error) { setStatusMsg(error); return; }
@@ -1361,7 +1362,7 @@ export function CliModelFlyoutMenu({
     setSearchQuery("");
     setCustomInput("");
     closeChannelForm();
-    setState((prev) => ({ ...prev, selectedCli: item.id, selectedModel: "", selectedProviderId: "", activeChannelType: "system", activePluginChannelId: undefined }));
+    setState((prev) => ({ ...prev, selectedCli: item.id, selectedModel: "", selectedProviderId: "", activeChannelType: "system", activePluginChannelId: undefined, activeChannelName: undefined }));
   };
 
   const visibleEngines = useMemo(
@@ -1527,7 +1528,9 @@ export function CliModelFlyoutMenu({
               favoriteModelOptions={favoriteModelOptions}
               catalogModelOptions={catalogModelOptions}
               onAddFavorite={(id) => {
-                if (catalogModelOptions.some(model => model.id === id)) void handleAddCustomModel(id);
+                // 搜索框里手输的 ID 也允许加入自选；目录未加载/未登录（qoder-cn）
+                // 时不能把“加入自选”变成必然失败的死按钮。
+                void handleAddCustomModel(id);
               }}
               bareSelectedModel={bareSelectedModel}
               fetchingModels={fetchingModels}

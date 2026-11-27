@@ -4,6 +4,8 @@ import {
   displayEngineModel,
   CLI_DISPLAY_NAMES,
   independentChannelError,
+  formatEngineModelError,
+  resolveHostChannelSelection,
   NATIVE_PROVIDER_ID,
   peekNativeCatalog,
   getNativeCatalog,
@@ -37,7 +39,7 @@ vi.mock('./host-transport', async (importOriginal) => {
     isRemoteHost: vi.fn(() => false),
   };
 });
-import type { SystemProviderChannel } from './types';
+import type { CustomPluginChannel, SystemProviderChannel } from './types';
 
 function ch(partial: Partial<SystemProviderChannel> & Pick<SystemProviderChannel, 'id' | 'name'>): SystemProviderChannel {
   return {
@@ -83,19 +85,90 @@ describe('system-bridge', () => {
   });
 
   describe('independentChannelError', () => {
-    it('应该对支持的引擎返回 null', () => {
+    it('宿主真正消费渠道配置的引擎返回 null', () => {
       expect(independentChannelError('claude')).toBe(null);
       expect(independentChannelError('codex')).toBe(null);
+      expect(independentChannelError('kimi')).toBe(null);
+      expect(independentChannelError('grok')).toBe(null);
       expect(independentChannelError('pi')).toBe(null);
       expect(independentChannelError('omp')).toBe(null);
-      expect(independentChannelError('opencode')).toBe(null);
-      expect(independentChannelError('qoder')).toBe(null);
-      expect(independentChannelError('qoder-cn')).toBe(null);
+      expect(independentChannelError('codebuddy')).toBe(null);
     });
 
-    it('应该对所有引擎返回 null（4196fd3 起独立渠道限制已移除）', () => {
-      expect(independentChannelError('dsh')).toBe(null);
-      expect(independentChannelError('agy')).toBe(null);
+    it('只把供应商当展示数据的引擎拒绝独立渠道', () => {
+      for (const engine of ['dsh', 'agy', 'opencode', 'qoder', 'qoder-cn', 'minimax']) {
+        expect(independentChannelError(engine)).toContain('暂不支持独立渠道');
+      }
+    });
+  });
+
+  describe('formatEngineModelError', () => {
+    it('qoder 未登录时给出 login 命令，不把 session/new 原样抛给用户', () => {
+      const msg = formatEngineModelError('qoder-cn', new Error('rpc:-32000:session/new: Authentication required: Authentication is required.'));
+      expect(msg).toContain('qoderclicn login');
+      expect(msg).not.toContain('rpc:');
+    });
+
+    it('其他错误保留原始信息', () => {
+      expect(formatEngineModelError('claude', new Error('boom'))).toBe('读取 CLI 模型失败: boom');
+    });
+  });
+
+  describe('resolveHostChannelSelection', () => {
+    const qoderChannel: CustomPluginChannel = {
+      id: 'custom_1',
+      name: 'relay',
+      baseUrl: 'http://127.0.0.1:3065/v1',
+      apiKey: 'sk',
+    };
+
+    it('qoder-cn 的 plugin_ 残留渠道回落到原生配置', () => {
+      const next = resolveHostChannelSelection(
+        'qoder-cn',
+        'plugin_model-switcher_custom_1',
+        {
+          selectedProviderId: 'plugin_model-switcher_custom_1',
+          activeChannelType: 'plugin',
+          activePluginChannelId: 'custom_1',
+        },
+        [qoderChannel],
+        [NATIVE_PROVIDER_ID, 'other'],
+      );
+      expect(next).toEqual({
+        selectedProviderId: NATIVE_PROVIDER_ID,
+        activeChannelType: 'system',
+        activePluginChannelId: undefined,
+        activeChannelName: undefined,
+      });
+    });
+
+    it('omp 的 plugin_ 渠道继续保留，避免误伤 YAML 渠道', () => {
+      const next = resolveHostChannelSelection(
+        'omp',
+        'plugin_model-switcher_custom_1',
+        { selectedProviderId: '', activeChannelType: 'system' },
+        [qoderChannel],
+        ['real-host'],
+      );
+      expect(next.activeChannelType).toBe('plugin');
+      expect(next.activePluginChannelId).toBe('custom_1');
+      expect(next.selectedProviderId).toBe('plugin_model-switcher_custom_1');
+    });
+
+    it('本引擎查不到的插件渠道清空，回到原生配置', () => {
+      const next = resolveHostChannelSelection(
+        'claude',
+        null,
+        {
+          selectedProviderId: 'plugin_model-switcher_custom_other',
+          activeChannelType: 'plugin',
+          activePluginChannelId: 'custom_other',
+        },
+        [qoderChannel],
+        [NATIVE_PROVIDER_ID],
+      );
+      expect(next.selectedProviderId).toBe(NATIVE_PROVIDER_ID);
+      expect(next.activeChannelType).toBe('system');
     });
   });
 
@@ -374,6 +447,32 @@ describe('system-bridge', () => {
       expect(ids).toContain('real-host-provider');
       expect(ids).toContain('google');
       expect(ids).toContain('plugin_model-switcher_custom_1792114533998');
+    });
+
+    it('qoder-cn 的 plugin_ current 归一为原生配置，不把查不到的渠道当选中', async () => {
+      vi.mocked(invokeHost).mockImplementation(async (cmd) => {
+        if (cmd === 'get_cli_config') {
+          return {
+            'qoder-cn': {
+              providers: {
+                'plugin_model-switcher_custom_1795766655294': {
+                  name: 'relay',
+                  baseUrl: 'http://127.0.0.1:3065/v1',
+                  apiKey: 'sk',
+                },
+              },
+              current: 'plugin_model-switcher_custom_1795766655294',
+            },
+          };
+        }
+        return {};
+      });
+
+      const res = await getSystemProviderChannels('qoder-cn');
+      expect(res.current).toBe(NATIVE_PROVIDER_ID);
+      expect(res.channels[0].id).toBe(NATIVE_PROVIDER_ID);
+      expect(res.channels[0].isCurrent).toBe(true);
+      expect(res.channels.some((c) => c.id.startsWith('plugin_model-switcher_'))).toBe(false);
     });
   });
 });

@@ -1,5 +1,6 @@
 import { React } from "../react-context";
 import { SearchIcon } from "../icons";
+import { isConcreteModel } from "../selection-policy";
 import type { ModelOptionItem } from "./ModelListSection";
 
 interface ModelSearchInputProps {
@@ -27,7 +28,10 @@ export function ModelSearchInput({
   onInputFocus,
   onAddFavorite,
 }: ModelSearchInputProps) {
-  const candidate = catalogModelOptions.find(model => model.id === searchQuery.trim());
+  const typed = searchQuery.trim();
+  const catalogCandidate = catalogModelOptions.find(model => model.id === typed);
+  // 目录可能因未登录/接口失败为空：手输的具体模型 ID 仍应能加入自选。
+  const candidate = catalogCandidate ?? (isConcreteModel(typed) ? { id: typed, label: typed } : undefined);
   const alreadyAdded = candidate && favoriteModelOptions.some(model => model.id === candidate.id);
 
   return (
